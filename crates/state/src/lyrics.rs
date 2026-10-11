@@ -166,20 +166,17 @@ impl Lyrics {
     }
 
     fn follow(&mut self, cx: &mut Context<Self>) {
-        let playback = self.playback.read(cx);
-        let track = match playback.steered(cx) {
-            Some(steered) => steered.track,
-            None => playback.track().cloned(),
-        };
-        let Some(track) = track else {
+        let shown = self.playback.read(cx).shown_track(cx);
+        let Some(track) = shown.as_ref() else {
             return self.forget(cx);
         };
-        let Some(id) = track.id.clone() else {
+        let Some(id) = track.id.as_deref() else {
             return self.forget(cx);
         };
-        if self.following.as_deref() == Some(id.as_str()) {
+        if self.following.as_deref() == Some(id) {
             return;
         }
+        let (track, id) = (track.clone(), id.to_owned());
         self.following = Some(id.clone());
         self.chosen = 0;
         self.picked = false;
@@ -319,13 +316,16 @@ impl Lyrics {
         if self.task.is_some() {
             return;
         }
-        let next = self.queue.read(cx).upcoming().next().cloned();
-        let Some((track, id)) = next.and_then(|track| Some((track.clone(), track.id?))) else {
+        let Some(track) = self.queue.read(cx).upcoming().next() else {
             return;
         };
-        if self.ahead_of.as_deref() == Some(id.as_str()) || self.recalls(&id) {
+        let Some(id) = track.id.as_deref() else {
+            return;
+        };
+        if self.ahead_of.as_deref() == Some(id) || self.recalls(id) {
             return;
         }
+        let (track, id) = (track.clone(), id.to_owned());
         self.ahead_of = Some(id.clone());
         self.ahead = Some(self.fetch(id, track, cx));
     }
@@ -704,13 +704,16 @@ async fn gather(
     for provider in providers {
         let query = query.clone();
         tasks.spawn(async move {
-            provider
+            let mut found = provider
                 .search(&query)
                 .await
                 .inspect_err(|error| {
                     log::warn!("lyrics: {} did not answer: {error:#}", provider.name())
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // Hits for another track are dropped here, before the lookup holds and copies them.
+            found.retain(|hit| music::lyrics::matched(&query, hit));
+            found
         });
     }
     while !tasks.is_empty() {
