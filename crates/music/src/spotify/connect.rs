@@ -30,6 +30,7 @@ use librespot_protocol::media::AudioQuality;
 use librespot_protocol::player::{
     ContextIndex, ContextPlayerOptions, PlayOrigin, PlayerState, ProvidedTrack, Suppressions,
 };
+use librespot_protocol::social_connect_v2::Session as SocialSession;
 use librespot_protocol::transfer_state::TransferState;
 use protobuf::rt::WireType;
 use protobuf::{CodedInputStream, EnumOrUnknown, Message as _, MessageField};
@@ -73,6 +74,7 @@ const ITEM_REMOVED: u32 = 6 << 3;
 /// The dealer topic that reports changes to the group session the listener is in.
 const JAM_TOPIC: &str = "social-connect/v2/session_update";
 const JAM_JOIN: &str = "/social-connect/v2/sessions/join";
+const JAM_CURRENT: &str = "/social-connect/v2/sessions/current";
 const JAM_LEAVE: &str = "/social-connect/v2/sessions/leave";
 
 enum Input {
@@ -372,6 +374,30 @@ impl Worker {
         }
     }
 
+    /// The group session the account is in now, if any. Spotify answers 404 when there is none.
+    async fn current_jam(session: Session) -> Option<Jam> {
+        let body = session
+            .spclient()
+            .request(&Method::GET, JAM_CURRENT, None, None)
+            .await
+            .ok()?;
+        let jam = match serde_json::from_slice(&body) {
+            Ok(json) => session_of(&json),
+            Err(_) => SocialSession::parse_from_bytes(&body)
+                .ok()
+                .map(|session| Jam {
+                    members: session
+                        .session_members
+                        .iter()
+                        .map(|member| member.display_name.clone())
+                        .filter(|name| !name.is_empty())
+                        .collect(),
+                }),
+        };
+        log::info!("connect: current jam: {jam:?}");
+        jam
+    }
+
     async fn leave(&mut self) {
         let answer = self
             .session
@@ -486,6 +512,9 @@ impl Worker {
         };
         self.active_device = cluster.active_device_id.clone();
         self.out.send(Event::Roster(self.roster(&cluster))).ok();
+        // the listener may have joined a jam from another app before this one was listed
+        let jam = Self::current_jam(self.session.clone()).await;
+        self.out.send(Event::Jam(jam)).ok();
         // something may have been playing before the device was listed
         if self.now.is_some() {
             self.sync(None).await;

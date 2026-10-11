@@ -26,6 +26,9 @@ const VOLUME_WIDTH: f32 = 110.;
 const VOLUME_TIGHT: f32 = 72.;
 const CLOCK_SHORT: f32 = 3.4;
 const CLOCK_LONG: f32 = 5.4;
+/// The height of the strip above the bar that names the Jam being listened to.
+const BANNER: f32 = 28.;
+const BANNER_ICON: f32 = 14.;
 
 pub(crate) struct PlayerBar {
     playback: Entity<Playback>,
@@ -526,6 +529,38 @@ impl Render for PlayerBar {
                 ),
         };
 
-        content.when_some(context_menu, |this, menu| this.child(menu))
+        let devices = Sonora::global(cx).devices.read(cx);
+        let banner = devices.jam().map(|jam| {
+            let device = match devices.steered() {
+                Some(steered) => steered.device.name,
+                None => t!("devices-this-computer").to_string(),
+            };
+            let members = jam.members.join(", ");
+            div()
+                .absolute()
+                .left_0()
+                .bottom(height)
+                .w_full()
+                .h(px(BANNER))
+                .px_5()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(theme.text(ui::Text::Small))
+                .text_color(theme.foreground)
+                .bg(theme.muted)
+                .child(
+                    gpui::svg()
+                        .path(icons::path("icons/user.svg"))
+                        .size(px(BANNER_ICON))
+                        .text_color(theme.foreground),
+                )
+                .child(div().child(t!("devices-jam-banner", members = members, device = device)))
+        });
+
+        content
+            .relative()
+            .when_some(banner, |this, banner| this.child(banner))
+            .when_some(context_menu, |this, menu| this.child(menu))
     }
 }

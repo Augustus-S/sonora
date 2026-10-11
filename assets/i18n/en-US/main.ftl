@@ -246,6 +246,7 @@ devices-pause = Pause
 devices-resume = Resume
 devices-jam-join = Join a Jam from the clipboard
 devices-jam-leave = Leave the Jam
+devices-jam-banner = Jam with { $members }, playing on { $device }
 fullscreen-artwork = Artwork
 
 # filters
