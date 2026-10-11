@@ -281,7 +281,16 @@ impl Worker {
             Input::Publish(now) => self.publish(now).await,
             Input::Transfer(to) => self.transfer(to).await,
             Input::Control(device, command) => {
-                control(self.session.clone(), &device, command).await
+                let start = match &command {
+                    Command::Start(start) => Some(start.clone()),
+                    _ => None,
+                };
+                let sent = control(self.session.clone(), &device, command).await;
+                // a pick the other device refused plays here rather than going nowhere
+                if let Some(start) = start.filter(|_| !sent) {
+                    log::info!("connect: {device} did not take the pick, so it plays here");
+                    self.out.send(Event::Command(Command::Start(start))).ok();
+                }
             }
         }
     }
@@ -757,8 +766,10 @@ impl Worker {
     }
 }
 
-/// Sends a command to another device of the account through the session.
-async fn control(session: Session, device: &str, command: Command) {
+/// Sends a command to another device of the account through the session. Returns `false` only
+/// when the request went out and Spotify refused it, so a caller can play the pick here instead;
+/// `true` when it was sent or there was nothing to send.
+async fn control(session: Session, device: &str, command: Command) -> bool {
     let mine = session.device_id();
     let what = format!("{command:?}");
     let (method, endpoint, body) = match command {
@@ -769,7 +780,7 @@ async fn control(session: Session, device: &str, command: Command) {
         ),
         Command::Start(start) => {
             let Some(command) = play_command(&start, &session.username()) else {
-                return;
+                return true;
             };
             (
                 Method::POST,
@@ -779,7 +790,7 @@ async fn control(session: Session, device: &str, command: Command) {
         }
         command => {
             let Some(command) = wire_command(&command) else {
-                return;
+                return true;
             };
             (
                 Method::POST,
@@ -796,8 +807,12 @@ async fn control(session: Session, device: &str, command: Command) {
         .spclient()
         .request(&method, &endpoint, Some(headers), Some(body.as_bytes()))
         .await;
-    if let Err(error) = answer {
-        log::warn!("connect: cannot send {what} to {device}: {error}");
+    match answer {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("connect: cannot send {what} to {device}: {error}");
+            false
+        }
     }
 }
 
