@@ -6,8 +6,8 @@ use anyhow::Result;
 use futures::future::join_all;
 use gpui::{App, Context, Entity, Task};
 use music::connect::{
-    Collection, Command, Connect, Device, Elsewhere, Event, Naming, NowPlaying, RepeatMode, Roster,
-    Start,
+    Collection, Command, Connect, Device, Elsewhere, Event, Jam, Naming, NowPlaying, RepeatMode,
+    Roster, Start,
 };
 use music::{MusicApi, Track};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -63,6 +63,8 @@ pub struct Devices {
     /// The name last handed to the link.
     named: Option<Naming>,
     roster: Roster,
+    /// The group session the listener joined, if any.
+    jam: Option<Jam>,
     /// The track playing on another device, once it is read in.
     remote: Option<Track>,
     /// Whether this app took playback, which only the listener pressing play does. A track
@@ -114,6 +116,7 @@ impl Devices {
             shown: false,
             named: None,
             roster: Roster::default(),
+            jam: None,
             remote: None,
             claimed: false,
             sent: None,
@@ -152,6 +155,25 @@ impl Devices {
     /// The other device that has playback, if one does.
     pub fn elsewhere(&self) -> Option<&Elsewhere> {
         self.roster.elsewhere.as_ref()
+    }
+
+    /// The group session the listener is in, if any.
+    pub fn jam(&self) -> Option<&Jam> {
+        self.jam.as_ref()
+    }
+
+    /// Joins the group session a shared link names.
+    pub fn join(&self, link: &str) {
+        if let Some(link_to) = &self.link {
+            link_to.join(link);
+        }
+    }
+
+    /// Leaves the group session.
+    pub fn leave(&self) {
+        if let Some(link) = &self.link {
+            link.leave();
+        }
     }
 
     /// The track playing on that device, once it is read in.
@@ -238,6 +260,7 @@ impl Devices {
         self.queuing.clear();
         self.liking.clear();
         self.roster = Roster::default();
+        self.jam = None;
         self.remote = None;
         self.claimed = false;
         self.sent = None;
@@ -282,6 +305,7 @@ impl Devices {
             self.claimed = false;
             self.sent = None;
             self.roster = Roster::default();
+            self.jam = None;
             self.remote = None;
         }
         cx.notify();
@@ -305,6 +329,10 @@ impl Devices {
             Event::Roster(roster) => self.set_roster(roster, cx),
             Event::Command(command) => self.run(command, cx),
             Event::Liked { track, liked } => self.liked(track, liked, cx),
+            Event::Jam(jam) => {
+                self.jam = jam;
+                cx.notify();
+            }
         }
     }
 

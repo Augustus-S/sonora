@@ -37,7 +37,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::Instant;
 
 use crate::connect::{
-    Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Naming, NowPlaying,
+    Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Jam, Naming, NowPlaying,
     RepeatMode, Roster, Start,
 };
 
@@ -70,6 +70,10 @@ const ITEM: u32 = 1 << 3 | 2;
 const ITEM_KIND: u32 = 1 << 3;
 const ITEM_ID: u32 = 2 << 3 | 2;
 const ITEM_REMOVED: u32 = 6 << 3;
+/// The dealer topic that reports changes to the group session the listener is in.
+const JAM_TOPIC: &str = "social-connect/v2/session_update";
+const JAM_JOIN: &str = "/social-connect/v2/sessions/join";
+const JAM_LEAVE: &str = "/social-connect/v2/sessions/leave";
 
 enum Input {
     Enable(bool),
@@ -77,6 +81,8 @@ enum Input {
     Publish(Option<NowPlaying>),
     Transfer(String),
     Control(String, Command),
+    Join(String),
+    Leave,
 }
 
 /// The handle the app holds. The work happens on a task of the session's runtime, which ends
@@ -133,6 +139,14 @@ impl Connect for Connection {
             .send(Input::Control(device.to_owned(), command))
             .ok();
     }
+
+    fn join(&self, link: &str) {
+        self.inputs.send(Input::Join(link.to_owned())).ok();
+    }
+
+    fn leave(&self) {
+        self.inputs.send(Input::Leave).ok();
+    }
 }
 
 /// What the dealer hands the worker: the connection id Spotify gave this session, changes to the
@@ -143,6 +157,7 @@ struct Streams {
     volumes: BoxedStreamResult<SetVolumeCommand>,
     commands: BoxedStream<RequestReply>,
     likes: BoxedStreamResult<Vec<(String, bool)>>,
+    jams: BoxedStreamResult<Message>,
 }
 
 impl Streams {
@@ -154,6 +169,7 @@ impl Streams {
             volumes: Box::pin(futures::stream::pending()),
             commands: Box::pin(futures::stream::pending()),
             likes: Box::pin(futures::stream::pending()),
+            jams: Box::pin(futures::stream::pending()),
         }
     }
 
@@ -180,6 +196,7 @@ impl Streams {
                     _ => Ok(Vec::new()),
                 }
             })?,
+            jams: dealer.listen_for(JAM_TOPIC, Ok)?,
         })
     }
 }
@@ -272,6 +289,11 @@ impl Worker {
                     Some(Err(error)) => log::warn!("connect: bad volume request: {error}"),
                     None => self.streams.volumes = Box::pin(futures::stream::pending()),
                 },
+                update = self.streams.jams.next() => match update {
+                    Some(Ok(update)) => self.jam_update(update),
+                    Some(Err(error)) => log::warn!("connect: bad jam update: {error}"),
+                    None => self.streams.jams = Box::pin(futures::stream::pending()),
+                },
                 request = self.streams.commands.next() => match request {
                     Some(request) => self.request(request),
                     None => self.streams.commands = Box::pin(futures::stream::pending()),
@@ -307,10 +329,78 @@ impl Worker {
             }
             Input::Publish(now) => self.publish(now).await,
             Input::Transfer(to) => self.transfer(to).await,
+            Input::Join(link) => self.join(&link).await,
+            Input::Leave => self.leave().await,
             Input::Control(device, command) => {
                 control(self.session.clone(), &device, command).await
             }
         }
+    }
+
+    /// Joins the group session a shared link names, as a listener on this device. Spotify then
+    /// moves the host's playback here the way it does for any transfer.
+    async fn join(&mut self, link: &str) {
+        if !self.enabled || !self.connected {
+            return log::warn!("connect: cannot join a jam while not listed as a device");
+        }
+        let Some(token) = jam_token(link).await else {
+            return log::warn!("connect: no jam token in the link");
+        };
+        let endpoint = format!(
+            "{JAM_JOIN}/{token}?playback_control=listen_and_control&join_type=deeplinking&local_device_id={}",
+            self.session.device_id()
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+        let answer = self
+            .session
+            .spclient()
+            .request(&Method::POST, &endpoint, Some(headers), None)
+            .await;
+        match answer {
+            Ok(body) => {
+                log::info!("connect: joined a jam");
+                // the update that follows has the members, and this has them too when it is JSON
+                let jam = serde_json::from_slice(&body)
+                    .ok()
+                    .and_then(|json| session_of(&json));
+                self.out
+                    .send(Event::Jam(Some(jam.unwrap_or_default())))
+                    .ok();
+            }
+            Err(error) => log::warn!("connect: cannot join the jam: {error}"),
+        }
+    }
+
+    async fn leave(&mut self) {
+        let answer = self
+            .session
+            .spclient()
+            .request(&Method::POST, JAM_LEAVE, None, None)
+            .await;
+        if let Err(error) = answer {
+            log::warn!("connect: cannot leave the jam: {error}");
+        }
+        self.out.send(Event::Jam(None)).ok();
+    }
+
+    /// Reads a change to the group session. The payload is read as loose JSON, since a value
+    /// Spotify added since the proto was cut would fail a typed parse and lose the update.
+    fn jam_update(&self, message: Message) {
+        let PayloadValue::Json(json) = message.payload else {
+            return;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&json) else {
+            return log::warn!("connect: unreadable jam update");
+        };
+        let reason = json.get("reason").and_then(|reason| reason.as_str());
+        log::info!("connect: jam update {reason:?}");
+        let ended = matches!(
+            reason,
+            Some("SESSION_DELETED" | "YOU_LEFT" | "YOU_WERE_KICKED")
+        );
+        let jam = session_of(&json).filter(|_| !ended);
+        self.out.send(Event::Jam(jam)).ok();
     }
 
     /// Moves playback to `to`. This app takes it the way librespot does, by naming itself on both
@@ -808,6 +898,39 @@ async fn control(session: Session, device: &str, command: Command) {
     if let Err(error) = answer {
         log::warn!("connect: cannot send {what} to {device}: {error}");
     }
+}
+
+/// The token of a group session in a shared link, following a `spotify.link` short link to the
+/// page it leads to first.
+async fn jam_token(link: &str) -> Option<String> {
+    let mut link = link.trim().to_owned();
+    if link.contains("spotify.link") {
+        let response = reqwest::get(&link).await.ok()?;
+        link = response.url().to_string();
+    }
+    let rest = link.split("socialsession/").nth(1)?;
+    let token = rest.split(['?', '/', '#']).next()?;
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
+/// The members of the group session in a JSON `Session`, or in a `SessionUpdate` holding one,
+/// whichever case its keys are in.
+fn session_of(json: &serde_json::Value) -> Option<Jam> {
+    let session = json.get("session").unwrap_or(json);
+    let members = ["session_members", "sessionMembers"]
+        .into_iter()
+        .find_map(|key| session.get(key))?
+        .as_array()?;
+    let members = members
+        .iter()
+        .filter_map(|member| {
+            ["display_name", "displayName", "username"]
+                .into_iter()
+                .find_map(|key| member.get(key)?.as_str().filter(|name| !name.is_empty()))
+        })
+        .map(str::to_owned)
+        .collect();
+    Some(Jam { members })
 }
 
 /// How much a put matters when two are due at once: the stronger one goes out.

@@ -244,6 +244,8 @@ player-devices = Devices
 devices-this-computer = This computer
 devices-pause = Pause
 devices-resume = Resume
+devices-jam-join = Join a Jam from the clipboard
+devices-jam-leave = Leave the Jam
 fullscreen-artwork = Artwork
 
 # filters

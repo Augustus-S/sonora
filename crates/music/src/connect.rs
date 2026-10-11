@@ -144,6 +144,14 @@ pub struct Roster {
     pub elsewhere: Option<Elsewhere>,
 }
 
+/// A group listening session the listener has joined, in which the host's playback plays here
+/// too.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Jam {
+    /// The display names of the people in it, the host first when known.
+    pub members: Vec<String>,
+}
+
 pub enum Event {
     Command(Command),
     Roster(Roster),
@@ -153,6 +161,8 @@ pub enum Event {
         track: String,
         liked: bool,
     },
+    /// The group session changed: joined, updated, or `None` once it ended or was left.
+    Jam(Option<Jam>),
 }
 
 /// The connection to a provider's device network. Every call is fire-and-forget: what comes
@@ -181,4 +191,11 @@ pub trait Connect: Send + Sync {
 
     /// Sends a command to another device of the account.
     fn control(&self, device: &str, command: Command);
+
+    /// Joins a friend's group session from the link they shared. The outcome arrives as an
+    /// `Event::Jam`.
+    fn join(&self, link: &str);
+
+    /// Leaves the group session joined.
+    fn leave(&self);
 }

@@ -99,6 +99,34 @@ impl Render for DevicePicker {
             );
         }
 
+        items.push(MenuItem::separator("jam-separator"));
+        match state.jam() {
+            Some(jam) => {
+                items.push(
+                    MenuItem::new("jam-leave", t!("devices-jam-leave"))
+                        .icon("icons/user.svg")
+                        .detail(jam.members.join(", "))
+                        .on_click({
+                            let devices = devices.clone();
+                            move |_, _, cx| devices.read(cx).leave()
+                        }),
+                );
+            }
+            None => items.push(
+                MenuItem::new("jam-join", t!("devices-jam-join"))
+                    .icon("icons/user.svg")
+                    .on_click({
+                        let devices = devices.clone();
+                        move |_, _, cx| {
+                            let link = cx.read_from_clipboard().and_then(|item| item.text());
+                            if let Some(link) = link {
+                                devices.read(cx).join(&link);
+                            }
+                        }
+                    }),
+            ),
+        }
+
         Picker::icon("devices", &self.popovers, "icons/monitor-speaker.svg")
             .tooltip_above("player-devices")
             .selected(elsewhere.is_some())
