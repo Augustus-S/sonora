@@ -61,6 +61,9 @@ pub struct Start {
     pub collection: Option<Collection>,
     /// The track to open on, or the collection's first when there is none.
     pub track: Option<String>,
+    /// Where the track to open on sits in `collection`, counted from 0, for when the remote end
+    /// names it only by its place.
+    pub index: Option<usize>,
     /// What follows `track` when there is no collection to read it from.
     pub upcoming: Vec<String>,
     pub position: Duration,

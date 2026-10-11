@@ -608,7 +608,13 @@ async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
     };
     let (tracks, origin, index) = match at(&tracks) {
         Some(index) => (tracks, origin, index),
-        None if start.collection.is_some() && start.track.is_none() => (tracks, origin, 0),
+        None if start.collection.is_some() && start.track.is_none() => {
+            let index = start
+                .index
+                .filter(|index| *index < tracks.len())
+                .unwrap_or(0);
+            (tracks, origin, index)
+        }
         None => {
             let ids = start.track.iter().chain(&start.upcoming);
             let found = join_all(ids.map(|id| client.track(id))).await;

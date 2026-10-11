@@ -368,7 +368,16 @@ impl Worker {
             return;
         };
         self.active_device = cluster.active_device_id.clone();
-        self.out.send(Event::Roster(self.roster(&cluster))).ok();
+        let roster = self.roster(&cluster);
+        let elsewhere = match roster.elsewhere.is_some() {
+            true => "playback on another device",
+            false => "no playback elsewhere",
+        };
+        log::info!(
+            "connect: listed, other devices: {}, {elsewhere}",
+            roster.devices.len()
+        );
+        self.out.send(Event::Roster(roster)).ok();
         // something may have been playing before the device was listed
         if self.now.is_some() {
             self.sync(None).await;
@@ -1014,6 +1023,7 @@ fn started_by_transfer(state: TransferState) -> Start {
         collection: context.uri.as_deref().and_then(collection),
         upcoming: queued.chain(following).take(CARRIED).collect(),
         track,
+        index: None,
         position: Duration::from_millis(position),
         paused,
     }
@@ -1029,14 +1039,27 @@ fn started_by_play(play: &PlayCommand) -> Start {
         .filter_map(listed_id)
         .collect::<Vec<_>>();
 
+    // the same order librespot resolves a skip in: uri, then uid, then place
     let skip = play.options.skip_to.as_ref();
     let track = skip
         .and_then(|skip| skip.track_uri.as_deref())
         .and_then(track_id)
         .or_else(|| {
+            let uid = skip?.track_uid.as_deref()?;
+            play.context
+                .pages
+                .iter()
+                .flat_map(|page| page.tracks.iter())
+                .find(|track| track.uid.as_deref() == Some(uid))
+                .and_then(listed_id)
+        })
+        .or_else(|| {
             let index = skip.and_then(|skip| skip.track_index)? as usize;
             listed.get(index).cloned()
         });
+    let index = skip
+        .and_then(|skip| skip.track_index)
+        .map(|index| index as usize);
     let upcoming = listed
         .into_iter()
         .skip_while(|id| Some(id) != track.as_ref())
@@ -1047,6 +1070,7 @@ fn started_by_play(play: &PlayCommand) -> Start {
     Start {
         collection: play.context.uri.as_deref().and_then(collection),
         track,
+        index,
         upcoming,
         position: Duration::from_millis(play.options.seek_to.unwrap_or_default().into()),
         paused: play.options.initially_paused.unwrap_or_default(),
