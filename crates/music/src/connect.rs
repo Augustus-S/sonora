@@ -123,6 +123,18 @@ pub struct Elsewhere {
     pub duration: Duration,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    /// The first tracks the device lists after the one it plays, in order.
+    pub upcoming: Vec<Listed>,
+}
+
+/// A track on the queue of a device other than this app.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub id: String,
+    /// Whether someone queued it by hand rather than it following from the album or playlist.
+    pub queued: bool,
+    /// What the provider goes by to name who queued it, when it says.
+    pub added_by: Option<String>,
 }
 
 impl Elsewhere {

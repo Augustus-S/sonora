@@ -42,7 +42,7 @@ use tokio::time::Instant;
 
 use crate::connect::{
     Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Invite, Jam, JamMember,
-    Naming, NowPlaying, RepeatMode, Roster, Start,
+    Listed, Naming, NowPlaying, RepeatMode, Roster, Start,
 };
 
 const DEVICE_NAME: &str = "Sonora";
@@ -58,6 +58,10 @@ const ACK_DELAY: Duration = Duration::from_millis(600);
 const CLAIM_GRACE: Duration = Duration::from_secs(3);
 /// The most upcoming tracks a start carries over from the device that sent it.
 const CARRIED: usize = 40;
+/// The most tracks of another device's queue that are read.
+const LISTED: usize = 25;
+/// The metadata keys a queued track may name the person who queued it under.
+const ADDERS: [&str; 4] = ["added_by", "added_by_username", "adder", "queued_by"];
 /// How long a new name settles before it is put, so a name typed in is put once.
 const RENAME_DELAY: Duration = Duration::from_millis(800);
 /// The least time between two puts of the state. A change that comes sooner waits for the next
@@ -1006,6 +1010,7 @@ impl Worker {
                         (false, true) => RepeatMode::Context,
                         (false, false) => RepeatMode::Off,
                     },
+                    upcoming: listed(&state.next_tracks),
                 }
             });
         Roster { devices, elsewhere }
@@ -1502,6 +1507,35 @@ fn track_id(uri: &str) -> Option<String> {
     uri.strip_prefix(TRACK_PREFIX)
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
+}
+
+/// The first tracks of a player state's queue, with who queued each when the state says.
+fn listed(tracks: &[ProvidedTrack]) -> Vec<Listed> {
+    let listed = tracks
+        .iter()
+        .filter_map(|track| {
+            Some(Listed {
+                id: track_id(&track.uri)?,
+                queued: track.provider == "queue"
+                    || track
+                        .metadata
+                        .get("is_queued")
+                        .is_some_and(|queued| queued == "true"),
+                added_by: ADDERS
+                    .iter()
+                    .find_map(|key| track.metadata.get(*key))
+                    .filter(|name| !name.is_empty())
+                    .cloned(),
+            })
+        })
+        .take(LISTED)
+        .collect::<Vec<_>>();
+    if let Some(track) = tracks.iter().find(|track| track.provider == "queue") {
+        let mut keys = track.metadata.keys().collect::<Vec<_>>();
+        keys.sort();
+        log::debug!("connect: a queued track carries {keys:?}");
+    }
+    listed
 }
 
 /// The id of a track another device lists, read from its uri or, since Spotify's apps often send

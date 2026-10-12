@@ -222,6 +222,7 @@ queue-next-in-queue = Next in queue
 queue-up-next = Up next
 queue-reset = Reset
 queue-clear = Clear
+queue-added-by = Added by { $name }
 queue-empty = Your queue is empty
 queue-similar = Similar tracks
 queue-radio = Autoplay similar tracks

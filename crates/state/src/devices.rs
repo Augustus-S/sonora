@@ -9,7 +9,7 @@ use music::connect::{
     Collection, Command, Connect, Device, Elsewhere, Event, Invite, Jam, Naming, NowPlaying,
     RepeatMode, Roster, Start,
 };
-use music::{MusicApi, Track};
+use music::{Contributor, MusicApi, Track};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
@@ -47,6 +47,16 @@ pub struct Steered {
     pub duration: Duration,
     pub shuffle: bool,
     pub repeat: Repeat,
+    /// What it lists after that track, as far as it is read in.
+    pub upcoming: Vec<Upcoming>,
+}
+
+/// A track on the queue of the device that has playback.
+#[derive(Clone, Debug)]
+pub struct Upcoming {
+    pub track: Track,
+    /// Whether someone queued it by hand.
+    pub queued: bool,
 }
 
 /// The provider's device network as the app sees it: this app listed as a device, playback
@@ -75,6 +85,9 @@ pub struct Devices {
     code: bool,
     /// The track playing on another device, once it is read in.
     remote: Option<Track>,
+    /// The tracks on that device's queue that are read in, by id.
+    listed: HashMap<String, Track>,
+    listing: Option<Task<()>>,
     /// Whether this app took playback, which only the listener pressing play does. A track
     /// restored paused at launch must not pull playback off another device.
     claimed: bool,
@@ -129,6 +142,8 @@ impl Devices {
             awaiting_code: false,
             code: false,
             remote: None,
+            listed: HashMap::new(),
+            listing: None,
             claimed: false,
             sent: None,
             stamp: Instant::now(),
@@ -262,7 +277,39 @@ impl Devices {
             duration,
             shuffle: elsewhere.shuffle,
             repeat: repeat_of(elsewhere.repeat),
+            upcoming: self.upcoming(elsewhere),
         })
+    }
+
+    /// What the other device lists after its track, as far as it is read in, with who queued each
+    /// track named by the Jam's members when it is one.
+    fn upcoming(&self, elsewhere: &Elsewhere) -> Vec<Upcoming> {
+        elsewhere
+            .upcoming
+            .iter()
+            .filter_map(|listed| {
+                let mut track = self.listed.get(&listed.id)?.clone();
+                track.added_by = listed.added_by.as_deref().map(|id| {
+                    let member = self
+                        .jam
+                        .iter()
+                        .flat_map(|jam| &jam.members)
+                        .find(|member| member.id == id);
+                    Arc::new(match member {
+                        Some(member) => Contributor {
+                            id: member.id.clone(),
+                            name: member.name.clone(),
+                            avatar: member.image.clone(),
+                        },
+                        None => Contributor::unnamed(id),
+                    })
+                });
+                Some(Upcoming {
+                    track,
+                    queued: listed.queued,
+                })
+            })
+            .collect()
     }
 
     /// Moves playback onto this app from whichever device has it.
@@ -325,6 +372,8 @@ impl Devices {
         self.awaiting_code = false;
         self.code = false;
         self.remote = None;
+        self.listed.clear();
+        self.listing = None;
         self.claimed = false;
         self.sent = None;
         self.shown = false;
@@ -373,6 +422,8 @@ impl Devices {
             self.awaiting_code = false;
             self.code = false;
             self.remote = None;
+            self.listed.clear();
+            self.listing = None;
         }
         cx.notify();
     }
@@ -429,8 +480,55 @@ impl Devices {
                 self.fetching = Some(self.read_remote(client, id, cx));
             }
         }
+        if self.elsewhere().is_none() {
+            self.listed.clear();
+        }
+        self.list(cx);
         self.tick(cx);
         self.redraw(cx);
+    }
+
+    /// Reads in the tracks on the other device's queue that are not yet, one request after the
+    /// other so a long queue does not flood the provider. A change that comes meanwhile is taken
+    /// up when this one is done.
+    fn list(&mut self, cx: &mut Context<Self>) {
+        if self.listing.is_some() {
+            return;
+        }
+        let Some(client) = self.session.read(cx).client() else {
+            return;
+        };
+        let missing = self
+            .elsewhere()
+            .into_iter()
+            .flat_map(|elsewhere| &elsewhere.upcoming)
+            .filter(|listed| !self.listed.contains_key(&listed.id))
+            .map(|listed| listed.id.clone())
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return;
+        }
+        let io = self.io.clone();
+        self.listing = Some(cx.spawn(async move |this, cx| {
+            let read = join(io.spawn(async move {
+                let mut read = Vec::new();
+                for id in missing {
+                    match client.track(&id).await {
+                        Ok(track) => read.push((id, track)),
+                        Err(error) => log::warn!("connect: cannot read a queued track: {error:#}"),
+                    }
+                }
+                Ok(read)
+            }))
+            .await;
+            this.update(cx, |this, cx| {
+                this.listing = None;
+                this.listed.extend(read.unwrap_or_default());
+                this.list(cx);
+                this.redraw(cx);
+            })
+            .ok();
+        }));
     }
 
     /// Tells the views, and everything that follows playback such as the lyrics, that what the
