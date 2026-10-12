@@ -4,10 +4,10 @@ use ui::ActiveTheme as _;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Render, ScrollWheelEvent, SharedString,
+    AnyElement, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString,
 };
-use gpui::{Window, div, px};
+use gpui::{Window, div, point, px};
 use i18n::t;
 use input::{ToggleFullscreen, ToggleLyrics, ToggleQueue};
 use state::{AppSettings, Playback, Queue, SideTab, Sonora};
@@ -18,6 +18,7 @@ use ui::{
 
 use crate::chrome::SidebarRight;
 use crate::chrome::devices::DevicePicker;
+use crate::chrome::jam::{self, JamPeople};
 use crate::shared::menus::ItemMenu;
 use crate::shared::transport::{NOTCH, fraction, like, moved, percent, transport, volume_icon};
 
@@ -29,6 +30,10 @@ const CLOCK_LONG: f32 = 5.4;
 /// The height of the strip above the bar that names the Jam being listened to.
 const BANNER: f32 = 28.;
 const BANNER_ICON: f32 = 14.;
+/// The width of a member's picture on the strip, and how many of them it shows before it counts
+/// the rest.
+const BANNER_FACE: f32 = 20.;
+const BANNER_FACES: usize = 4;
 
 pub(crate) struct PlayerBar {
     playback: Entity<Playback>,
@@ -36,6 +41,7 @@ pub(crate) struct PlayerBar {
     settings: Entity<AppSettings>,
     track_menu: ItemMenu,
     devices: Entity<DevicePicker>,
+    people: Entity<JamPeople>,
     context_menu: Option<(music::Track, Point<Pixels>)>,
     seek: ScrubberState,
     volume: ScrubberState,
@@ -59,13 +65,16 @@ impl PlayerBar {
 
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(me));
+        let people = cx.new(JamPeople::new);
+        let picker = cx.new(|cx| DevicePicker::new(people.clone(), cx));
 
         Self {
             playback,
             queue,
             settings,
             track_menu: ItemMenu::new(playlist_scrollbar, cx),
-            devices: cx.new(DevicePicker::new),
+            devices: picker,
+            people,
             context_menu: None,
             seek: ScrubberState::new("seek"),
             volume: ScrubberState::new("volume"),
@@ -525,8 +534,14 @@ impl Render for PlayerBar {
                 Some(steered) => steered.device.name,
                 None => t!("devices-this-computer").to_string(),
             };
-            let members = jam.members.join(", ");
+            let text = match jam::host_name(jam) {
+                Some(host) => t!("devices-jam-banner", host = host, device = device),
+                None => t!("devices-jam-banner-anonymous", device = device),
+            };
+            // The people list ends where the strip starts, so it rises from the strip's top edge.
+            let top = window.viewport_size().height - height - px(BANNER);
             div()
+                .id("jam-banner")
                 .absolute()
                 .left_0()
                 .bottom(height)
@@ -539,23 +554,32 @@ impl Render for PlayerBar {
                 .text_size(theme.text(ui::Text::Small))
                 .text_color(theme.foreground)
                 .bg(theme.muted)
+                .occlude()
+                .cursor_pointer()
+                .hover(|this| this.bg(theme.secondary_hover))
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    let at = point(event.position().x, top);
+                    this.people.update(cx, |people, cx| people.show(at, cx));
+                }))
                 .child(
                     gpui::svg()
                         .path(icons::path("icons/user.svg"))
                         .size(px(BANNER_ICON))
                         .text_color(theme.foreground),
                 )
-                .child(div().child(t!(
-                    "devices-jam-banner",
-                    count = jam.members.len(),
-                    members = members,
-                    device = device
-                )))
+                .child(div().flex_1().min_w_0().truncate().child(text))
+                .child(jam::faces(
+                    &jam.members,
+                    BANNER_FACES,
+                    px(BANNER_FACE),
+                    theme,
+                ))
         });
 
         content
             .relative()
             .when_some(banner, |this, banner| this.child(banner))
             .when_some(context_menu, |this, menu| this.child(menu))
+            .child(self.people.clone())
     }
 }

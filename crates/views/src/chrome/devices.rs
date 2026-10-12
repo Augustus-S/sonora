@@ -5,21 +5,26 @@ use music::connect::{Command, DeviceKind};
 use state::{Devices, Sonora};
 use ui::{ActiveTheme as _, MenuItem, Picker, Popovers};
 
+use crate::chrome::jam::JamPeople;
+
 /// The player bar's button for the account's other devices: where playback is, and the list to
 /// move it between this app and the rest. It draws nothing unless the signed-in provider has a
 /// device network and the listener has it on.
 pub(crate) struct DevicePicker {
     devices: Entity<Devices>,
+    /// The list of people in the Jam, which the menu can open while the listener is in one.
+    people: Entity<JamPeople>,
     popovers: Popovers,
 }
 
 impl DevicePicker {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(people: Entity<JamPeople>, cx: &mut Context<Self>) -> Self {
         let devices = Sonora::global(cx).devices.clone();
         cx.observe(&devices, |_, _, cx| cx.notify()).detach();
 
         Self {
             devices,
+            people,
             popovers: Popovers::default(),
         }
     }
@@ -112,6 +117,17 @@ impl Render for DevicePicker {
                     );
                 }
                 items.push(
+                    MenuItem::new("jam-people", t!("devices-jam-people"))
+                        .icon("icons/user-round.svg")
+                        .on_click({
+                            let people = self.people.clone();
+                            move |event, _, cx| {
+                                let at = event.position();
+                                people.update(cx, |people, cx| people.show(at, cx))
+                            }
+                        }),
+                );
+                items.push(
                     MenuItem::new(
                         "jam-leave",
                         match jam.owner {
@@ -120,9 +136,6 @@ impl Render for DevicePicker {
                         },
                     )
                     .icon("icons/user.svg")
-                    .when(!jam.members.is_empty(), |item| {
-                        item.detail(jam.members.join(", "))
-                    })
                     .on_click({
                         let devices = devices.clone();
                         move |_, _, cx| devices.read(cx).leave()
@@ -146,7 +159,7 @@ impl Render for DevicePicker {
                             move |_, _, cx| {
                                 let link = cx.read_from_clipboard().and_then(|item| item.text());
                                 if let Some(link) = link {
-                                    devices.read(cx).join(&link);
+                                    devices.read(cx).peek(&link);
                                 }
                             }
                         }),

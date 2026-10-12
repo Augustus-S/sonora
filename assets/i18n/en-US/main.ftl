@@ -249,10 +249,20 @@ devices-jam-start = Start a Jam
 devices-jam-copy = Copy the Jam link
 devices-jam-leave = Leave the Jam
 devices-jam-end = End the Jam
-devices-jam-banner = { $count ->
-    [0] In a Jam, playing on { $device }
-   *[other] Jam with { $members }, playing on { $device }
+devices-jam-people = Show people in the Jam
+devices-jam-banner = In { $host }'s Jam, playing on { $device }
+devices-jam-banner-anonymous = In a Jam, playing on { $device }
+devices-jam-more = +{ $count }
+devices-jam-host = Host
+devices-jam-you = You
+devices-jam-remove = Remove
+devices-jam-invite-title = Join { $host }'s Jam?
+devices-jam-invite-title-anonymous = Join this Jam?
+devices-jam-invite-detail = { $count ->
+    [one] { $count } person is already in this Jam.
+   *[other] { $count } people are already in this Jam.
 }
+devices-jam-invite-join = Join
 fullscreen-artwork = Artwork
 
 # filters
@@ -903,6 +913,7 @@ toast-tags-failed = The tags could not be saved
 
 nav-pin = Pin
 toast-library-pin-failed = Could not update the pin.
+toast-jam-unreadable = That link does not lead to a Jam you can join.
 nav-nothing-pinned = Nothing here
 nav-pins-alphabetical = Alphabetical
 nav-pins-kind = By type
