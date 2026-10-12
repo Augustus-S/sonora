@@ -394,7 +394,10 @@ impl Worker {
                         .collect(),
                 }),
         };
-        log::info!("connect: current jam: {jam:?}");
+        match &jam {
+            Some(jam) => log::info!("connect: in a jam of {}", jam.members.len()),
+            None => log::info!("connect: not in a jam"),
+        }
         jam
     }
 
