@@ -26,6 +26,9 @@ const VOLUME_WIDTH: f32 = 110.;
 const VOLUME_TIGHT: f32 = 72.;
 const CLOCK_SHORT: f32 = 3.4;
 const CLOCK_LONG: f32 = 5.4;
+/// The height of the strip above the bar that names the other device playback is on.
+const ELSEWHERE: f32 = 28.;
+const ELSEWHERE_ICON: f32 = 14.;
 
 pub(crate) struct PlayerBar {
     playback: Entity<Playback>,
@@ -516,6 +519,47 @@ impl Render for PlayerBar {
                 ),
         };
 
-        content.when_some(context_menu, |this, menu| this.child(menu))
+        let elsewhere = self.playback.read(cx).steered(cx).map(|steered| {
+            let devices = Sonora::global(cx).devices.clone();
+            div()
+                .absolute()
+                .left_0()
+                .bottom(height)
+                .w_full()
+                .h(px(ELSEWHERE))
+                .px_5()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(theme.text(ui::Text::Small))
+                .text_color(theme.foreground)
+                .bg(theme.muted)
+                .child(
+                    gpui::svg()
+                        .path(icons::path("icons/monitor-speaker.svg"))
+                        .size(px(ELSEWHERE_ICON))
+                        .flex_none()
+                        .text_color(theme.foreground),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(t!("devices-elsewhere-banner", device = steered.device.name)),
+                )
+                .child(
+                    Button::new("elsewhere-here")
+                        .ghost()
+                        .small()
+                        .label(t!("devices-elsewhere-here"))
+                        .on_click(move |_, _, cx| devices.read(cx).transfer_here()),
+                )
+        });
+
+        content
+            .relative()
+            .when_some(elsewhere, |this, banner| this.child(banner))
+            .when_some(context_menu, |this, menu| this.child(menu))
     }
 }
