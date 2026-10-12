@@ -654,6 +654,10 @@ impl Devices {
                 .library
                 .update(cx, |library, cx| library.liked_elsewhere(&id, None, cx));
         }
+        // a like this app made comes back the same way, with nothing left to show
+        if self.library.read(cx).saved(&id) {
+            return;
+        }
         let Some(client) = self.session.read(cx).client() else {
             return;
         };
@@ -681,6 +685,7 @@ impl Devices {
     /// Plays what another device handed over, from where it left off.
     fn start(&mut self, start: Start, cx: &mut Context<Self>) {
         let Some(client) = self.session.read(cx).client() else {
+            log::warn!("connect: cannot start what was handed over, no client");
             return;
         };
         self.claimed = true;
@@ -846,6 +851,17 @@ async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
             Some(Origin::playlist(id)),
         ),
         Some(Collection::Saved) => (client.saved_tracks().await?, Some(Origin::saved())),
+        // a radio that was refused elsewhere plays here: its seed, then what the station brings
+        Some(Collection::Radio(id)) => {
+            let mut tracks = client
+                .track_radio(id, None)
+                .await
+                .map(|(tracks, _)| tracks)
+                .unwrap_or_default();
+            tracks.retain(|track| track.playable && track.id.as_deref() != Some(id));
+            tracks.insert(0, client.track(id).await?);
+            (tracks, Some(Origin::radio(id)))
+        }
         None => (Vec::new(), None),
     };
 
@@ -856,7 +872,13 @@ async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
     };
     let (tracks, origin, index) = match at(&tracks) {
         Some(index) => (tracks, origin, index),
-        None if start.collection.is_some() && start.track.is_none() => (tracks, origin, 0),
+        None if start.collection.is_some() && start.track.is_none() => {
+            let index = start
+                .index
+                .filter(|index| *index < tracks.len())
+                .unwrap_or(0);
+            (tracks, origin, index)
+        }
         None => {
             let ids = start.track.iter().chain(&start.upcoming);
             let found = join_all(ids.map(|id| client.track(id))).await;

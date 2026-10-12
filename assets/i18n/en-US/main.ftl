@@ -269,6 +269,8 @@ devices-jam-invite-detail = { $count ->
    *[other] { $count } people are already in this Jam.
 }
 devices-jam-invite-join = Join
+devices-elsewhere-banner = Playing on { $device }
+devices-elsewhere-here = Play here
 fullscreen-artwork = Artwork
 
 # filters

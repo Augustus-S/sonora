@@ -15,6 +15,8 @@ pub(crate) use jam::{JamCode, JamInvite};
 pub(crate) use player_bar::PlayerBar;
 pub(crate) use sidebar_left::SidebarLeft;
 pub(crate) use sidebar_right::SidebarRight;
+#[cfg(target_os = "macos")]
+pub use title_bar::traffic_lights;
 pub(crate) use title_bar::{TitleBar, TitleBarEvent, TitleBarOptions};
 pub(crate) use toasts::ToastStack;
 pub(crate) use toolbar::{Searchable, Toolbar, Tooled};

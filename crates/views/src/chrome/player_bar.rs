@@ -1,6 +1,7 @@
 use router::{Destination, Link, navigate};
 use std::time::Duration;
 use ui::ActiveTheme as _;
+use ui::Tails as _;
 
 use gpui::prelude::*;
 use gpui::{
@@ -27,7 +28,8 @@ const VOLUME_WIDTH: f32 = 110.;
 const VOLUME_TIGHT: f32 = 72.;
 const CLOCK_SHORT: f32 = 3.4;
 const CLOCK_LONG: f32 = 5.4;
-/// The height of the strip above the bar that names the Jam being listened to.
+/// The height of the strip above the bar that names the Jam being listened to, or the other
+/// device playback is on.
 const BANNER: f32 = 28.;
 const BANNER_ICON: f32 = 14.;
 /// The width of a member's picture on the strip, and how many of them it shows before it counts
@@ -334,7 +336,8 @@ impl PlayerBar {
                                         )
                                         .child(SharedString::from(track.name.clone()))
                                         .min_w_0()
-                                        .truncate(),
+                                        .truncate()
+                                        .tails(),
                                     None => div()
                                         .id("now-playing-album")
                                         .child(t!("player-nothing-playing"))
@@ -373,6 +376,16 @@ impl PlayerBar {
 }
 
 impl PlayerBar {
+    /// How much of the content's bottom edge the strip above the bar covers right now, which
+    /// is nothing while no Jam or other device is being shown.
+    pub(crate) fn strip(playback: &Playback, cx: &gpui::App) -> Pixels {
+        let devices = Sonora::global(cx).devices.read(cx);
+        match (devices.jam().is_some() && devices.available()) || playback.steered(cx).is_some() {
+            true => px(BANNER),
+            false => Pixels::ZERO,
+        }
+    }
+
     pub(crate) fn height(window: &Window, cx: &gpui::App) -> Pixels {
         let theme = *cx.theme();
         match !Room::of(window.viewport_size().width).fits(Room::Roomy) {
@@ -523,8 +536,8 @@ impl Render for PlayerBar {
                         .items_center()
                         .justify_end()
                         .gap_2()
+                        // never narrower than its buttons, or they spill over the seek bar's clock
                         .flex_1()
-                        .min_w_0()
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
                         .child(self.fullscreen_button()),
@@ -537,20 +550,9 @@ impl Render for PlayerBar {
             false => theme.popover,
         };
         let devices = Sonora::global(cx).devices.read(cx);
-        let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
-            let device = match devices.steered() {
-                Some(steered) => steered.device.name,
-                None => t!("devices-this-computer").to_string(),
-            };
-            let text = match jam::host_name(jam) {
-                Some(host) => t!("devices-jam-banner", host = host, device = device),
-                None => t!("devices-jam-banner-anonymous", device = device),
-            };
-            // The people list ends where the strip starts, so it rises from the strip's top edge.
-            let top = window.viewport_size().height - height - px(BANNER);
-            let controls = Sonora::global(cx).devices.clone();
+        let strip = |id: &'static str| {
             div()
-                .id("jam-banner")
+                .id(id)
                 .absolute()
                 .left_0()
                 .bottom(height)
@@ -564,6 +566,20 @@ impl Render for PlayerBar {
                 .text_color(theme.foreground)
                 .bg(fill)
                 .when(frosting, ui::frost)
+        };
+        let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
+            let device = match devices.steered() {
+                Some(steered) => steered.device.name,
+                None => t!("devices-this-computer").to_string(),
+            };
+            let text = match jam::host_name(jam) {
+                Some(host) => t!("devices-jam-banner", host = host, device = device),
+                None => t!("devices-jam-banner-anonymous", device = device),
+            };
+            // The people list ends where the strip starts, so it rises from the strip's top edge.
+            let top = window.viewport_size().height - height - px(BANNER);
+            let controls = Sonora::global(cx).devices.clone();
+            strip("jam-banner")
                 .occlude()
                 // the name and faces open the people list, and the buttons beside them act on the Jam
                 .child(
@@ -629,6 +645,34 @@ impl Render for PlayerBar {
                         })
                         .on_click(move |_, _, cx| controls.read(cx).leave()),
                 )
+        });
+        // a Jam's strip names the device already, so the plain one is for when there is no Jam
+        let banner = banner.or_else(|| {
+            self.playback.read(cx).steered(cx).map(|steered| {
+                let devices = Sonora::global(cx).devices.clone();
+                strip("elsewhere-banner")
+                    .child(
+                        gpui::svg()
+                            .path(icons::path("icons/monitor-speaker.svg"))
+                            .size(px(BANNER_ICON))
+                            .flex_none()
+                            .text_color(theme.foreground),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(t!("devices-elsewhere-banner", device = steered.device.name)),
+                    )
+                    .child(
+                        Button::new("elsewhere-here")
+                            .ghost()
+                            .small()
+                            .label(t!("devices-elsewhere-here"))
+                            .on_click(move |_, _, cx| devices.read(cx).transfer_here()),
+                    )
+            })
         });
 
         content

@@ -22,6 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Jam, and the same menu leaves it.
 - The devices menu can start a Jam, copy its link to share, and end it. Starting one shows a
   code others can scan to join. As host you can remove people from the list.
+- On macOS, you can pick how rounded the window's corners are in Settings, using the corner
+  sizes macOS gives its own windows. You can also hide the close, minimize and zoom buttons.
+- Songs in your history show a heart when you hover them, so you can save one to your library
+  straight from there.
 
 ### Changed
 
