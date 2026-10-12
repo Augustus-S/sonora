@@ -153,6 +153,8 @@ pub struct Jam {
     /// The display names of the other people in it, the host first when known. The listener is
     /// not among them.
     pub members: Vec<String>,
+    /// The link that invites others, when the listener owns the session.
+    pub link: Option<String>,
 }
 
 pub enum Event {
@@ -199,6 +201,10 @@ pub trait Connect: Send + Sync {
     /// `Event::Jam`.
     fn join(&self, link: &str);
 
-    /// Leaves the group session joined.
+    /// Starts a group session on this app, or reports the one already running. The outcome
+    /// arrives as an `Event::Jam`.
+    fn start(&self);
+
+    /// Leaves the group session joined, or ends the one the listener started.
     fn leave(&self);
 }

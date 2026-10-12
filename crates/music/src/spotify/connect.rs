@@ -79,6 +79,8 @@ const JAM_TOPIC: &str = "social-connect/v2/session_update";
 const JAM_JOIN: &str = "/social-connect/v2/sessions/join";
 const JAM_CURRENT: &str = "/social-connect/v2/sessions/current";
 const JAM_LEAVE: &str = "/social-connect/v2/sessions/leave";
+const JAM_START: &str = "/social-connect/v2/sessions/current_or_new";
+const JAM_END: &str = "/social-connect/v3/sessions";
 
 enum Input {
     Enable(bool),
@@ -87,6 +89,7 @@ enum Input {
     Transfer(String),
     Control(String, Command),
     Join(String),
+    Start,
     Leave,
 }
 
@@ -147,6 +150,10 @@ impl Connect for Connection {
 
     fn join(&self, link: &str) {
         self.inputs.send(Input::Join(link.to_owned())).ok();
+    }
+
+    fn start(&self) {
+        self.inputs.send(Input::Start).ok();
     }
 
     fn leave(&self) {
@@ -335,6 +342,7 @@ impl Worker {
             Input::Publish(now) => self.publish(now).await,
             Input::Transfer(to) => self.transfer(to).await,
             Input::Join(link) => self.join(&link).await,
+            Input::Start => self.start_jam().await,
             Input::Leave => self.leave().await,
             Input::Control(device, command) => {
                 control(self.session.clone(), &device, command).await
@@ -377,26 +385,7 @@ impl Worker {
 
     /// The group session the account is in now, if any. Spotify answers 404 when there is none.
     async fn current_jam(session: Session) -> Option<Jam> {
-        let body = session
-            .spclient()
-            .request(&Method::GET, JAM_CURRENT, None, None)
-            .await
-            .ok()?;
-        let own = session.username();
-        let jam = match serde_json::from_slice(&body) {
-            Ok(json) => session_of(&json, &own),
-            Err(_) => SocialSession::parse_from_bytes(&body)
-                .ok()
-                .map(|session| Jam {
-                    members: session
-                        .session_members
-                        .iter()
-                        .filter(|member| member.username != own && member.id != own)
-                        .map(|member| member.display_name.clone())
-                        .filter(|name| !name.is_empty())
-                        .collect(),
-                }),
-        };
+        let jam = Self::current_session(&session).await.map(|read| read.jam);
         match &jam {
             Some(jam) => log::info!("connect: in a jam of {}", jam.members.len()),
             None => log::info!("connect: not in a jam"),
@@ -404,12 +393,68 @@ impl Worker {
         jam
     }
 
-    async fn leave(&mut self) {
+    /// The group session the account is in.
+    async fn current_session(session: &Session) -> Option<Read> {
+        let body = session
+            .spclient()
+            .request(&Method::GET, JAM_CURRENT, None, None)
+            .await
+            .ok()?;
+        read_session(&body, &session.username())
+    }
+
+    /// Starts a group session with this device as the one playing, or finds the one that runs.
+    /// The link to invite others with comes back in the `Event::Jam`.
+    async fn start_jam(&mut self) {
+        if !self.enabled || !self.connected {
+            return log::warn!("connect: cannot start a jam while not listed as a device");
+        }
+        let endpoint = format!(
+            "{JAM_START}?local_device_id={}&type=REMOTE",
+            self.session.device_id()
+        );
         let answer = self
             .session
             .spclient()
-            .request(&Method::POST, JAM_LEAVE, Some(empty_body()), None)
+            .request(&Method::GET, &endpoint, None, None)
             .await;
+        match answer {
+            Ok(body) => match read_session(&body, &self.session.username()) {
+                Some(read) => {
+                    log::info!("connect: started a jam, link {}", read.jam.link.is_some());
+                    self.out.send(Event::Jam(Some(read.jam))).ok();
+                }
+                None => log::warn!("connect: the jam that started cannot be read"),
+            },
+            Err(error) => log::warn!("connect: cannot start a jam: {error}"),
+        }
+    }
+
+    /// Leaves the group session. The owner ends it for everyone instead, since leaving would
+    /// only hand it on.
+    async fn leave(&mut self) {
+        let owned = match Self::current_session(&self.session).await {
+            Some(read) if read.owner => Some(read.id),
+            _ => None,
+        };
+        let answer = match owned {
+            Some(id) => {
+                let endpoint = format!(
+                    "{JAM_END}/{id}?local_device_id={}",
+                    self.session.device_id()
+                );
+                self.session
+                    .spclient()
+                    .request(&Method::DELETE, &endpoint, None, None)
+                    .await
+            }
+            None => {
+                self.session
+                    .spclient()
+                    .request(&Method::POST, JAM_LEAVE, Some(empty_body()), None)
+                    .await
+            }
+        };
         if let Err(error) = answer {
             log::warn!("connect: cannot leave the jam: {error}");
         }
@@ -983,14 +1028,66 @@ fn token_in(text: &str) -> Option<String> {
     (!token.is_empty()).then(|| token.to_owned())
 }
 
+/// A group session as Spotify answers for it: what the app shows, the id to end it by, and
+/// whether the account owns it.
+struct Read {
+    jam: Jam,
+    id: String,
+    owner: bool,
+}
+
+/// Reads a group session from an answer, which is JSON or a protobuf `Session`.
+fn read_session(body: &[u8], own: &str) -> Option<Read> {
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) {
+        let session = json.get("session").unwrap_or(&json);
+        return Some(Read {
+            jam: session_of(&json, own)?,
+            id: key_of(session, ["session_id", "sessionId"])?
+                .as_str()?
+                .to_owned(),
+            owner: is_owner(session),
+        });
+    }
+    let session = SocialSession::parse_from_bytes(body).ok()?;
+    let link = Some(session.join_session_url.clone())
+        .filter(|url| session.is_session_owner && !url.is_empty());
+    Some(Read {
+        jam: Jam {
+            members: session
+                .session_members
+                .iter()
+                .filter(|member| member.username != own && member.id != own)
+                .map(|member| member.display_name.clone())
+                .filter(|name| !name.is_empty())
+                .collect(),
+            link,
+        },
+        id: session.session_id,
+        owner: session.is_session_owner,
+    })
+}
+
+/// The value under the first of `keys` a JSON object has, since the case of the keys varies.
+fn key_of<'a>(object: &'a serde_json::Value, keys: [&str; 2]) -> Option<&'a serde_json::Value> {
+    keys.into_iter().find_map(|key| object.get(key))
+}
+
+fn is_owner(session: &serde_json::Value) -> bool {
+    key_of(session, ["is_session_owner", "isSessionOwner"])
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// The members of the group session in a JSON `Session`, or in a `SessionUpdate` holding one,
-/// whichever case its keys are in, without the account `own`.
+/// whichever case its keys are in, without the account `own`. The link to invite others is
+/// there only when `own` owns the session.
 fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
     let session = json.get("session").unwrap_or(json);
-    let members = ["session_members", "sessionMembers"]
-        .into_iter()
-        .find_map(|key| session.get(key))?
-        .as_array()?;
+    let members = key_of(session, ["session_members", "sessionMembers"])?.as_array()?;
+    let link = key_of(session, ["join_session_url", "joinSessionUrl"])
+        .and_then(serde_json::Value::as_str)
+        .filter(|url| is_owner(session) && !url.is_empty())
+        .map(str::to_owned);
     let members = members
         .iter()
         .filter(|member| {
@@ -1005,7 +1102,7 @@ fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
         })
         .map(str::to_owned)
         .collect();
-    Some(Jam { members })
+    Some(Jam { members, link })
 }
 
 /// How much a put matters when two are due at once: the stronger one goes out.

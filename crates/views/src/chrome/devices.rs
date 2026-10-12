@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, Context, Entity, SharedString, Window, div};
+use gpui::{App, ClickEvent, ClipboardItem, Context, Entity, SharedString, Window, div};
 use i18n::t;
 use music::connect::{Command, DeviceKind};
 use state::{Devices, Sonora};
@@ -102,31 +102,56 @@ impl Render for DevicePicker {
         items.push(MenuItem::separator("jam-separator"));
         match state.jam() {
             Some(jam) => {
+                if let Some(link) = jam.link.clone() {
+                    items.push(
+                        MenuItem::new("jam-copy", t!("devices-jam-copy"))
+                            .icon("icons/copy.svg")
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
+                            }),
+                    );
+                }
                 items.push(
-                    MenuItem::new("jam-leave", t!("devices-jam-leave"))
+                    MenuItem::new(
+                        "jam-leave",
+                        match jam.link.is_some() {
+                            true => t!("devices-jam-end"),
+                            false => t!("devices-jam-leave"),
+                        },
+                    )
+                    .icon("icons/user.svg")
+                    .when(!jam.members.is_empty(), |item| {
+                        item.detail(jam.members.join(", "))
+                    })
+                    .on_click({
+                        let devices = devices.clone();
+                        move |_, _, cx| devices.read(cx).leave()
+                    }),
+                );
+            }
+            None => {
+                items.push(
+                    MenuItem::new("jam-start", t!("devices-jam-start"))
                         .icon("icons/user.svg")
-                        .when(!jam.members.is_empty(), |item| {
-                            item.detail(jam.members.join(", "))
-                        })
                         .on_click({
                             let devices = devices.clone();
-                            move |_, _, cx| devices.read(cx).leave()
+                            move |_, _, cx| devices.read(cx).start_jam()
+                        }),
+                );
+                items.push(
+                    MenuItem::new("jam-join", t!("devices-jam-join"))
+                        .icon("icons/user.svg")
+                        .on_click({
+                            let devices = devices.clone();
+                            move |_, _, cx| {
+                                let link = cx.read_from_clipboard().and_then(|item| item.text());
+                                if let Some(link) = link {
+                                    devices.read(cx).join(&link);
+                                }
+                            }
                         }),
                 );
             }
-            None => items.push(
-                MenuItem::new("jam-join", t!("devices-jam-join"))
-                    .icon("icons/user.svg")
-                    .on_click({
-                        let devices = devices.clone();
-                        move |_, _, cx| {
-                            let link = cx.read_from_clipboard().and_then(|item| item.text());
-                            if let Some(link) = link {
-                                devices.read(cx).join(&link);
-                            }
-                        }
-                    }),
-            ),
         }
 
         Picker::icon("devices", &self.popovers, "icons/monitor-speaker.svg")

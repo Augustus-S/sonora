@@ -171,7 +171,14 @@ impl Devices {
         }
     }
 
-    /// Leaves the group session.
+    /// Starts a group session on this app. Its link to share is on `jam()` once it is up.
+    pub fn start_jam(&self) {
+        if let Some(link) = &self.link {
+            link.start();
+        }
+    }
+
+    /// Leaves the group session, or ends it when the listener started it.
     pub fn leave(&self) {
         if let Some(link) = &self.link {
             link.leave();

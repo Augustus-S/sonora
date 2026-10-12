@@ -245,7 +245,10 @@ devices-this-computer = This computer
 devices-pause = Pause
 devices-resume = Resume
 devices-jam-join = Join a Jam from the clipboard
+devices-jam-start = Start a Jam
+devices-jam-copy = Copy the Jam link
 devices-jam-leave = Leave the Jam
+devices-jam-end = End the Jam
 devices-jam-banner = { $count ->
     [0] In a Jam, playing on { $device }
    *[other] Jam with { $members }, playing on { $device }
