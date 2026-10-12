@@ -570,6 +570,7 @@ pub(crate) fn collection_of(origin: &Origin) -> Option<Collection> {
         Whence::Album => Some(Collection::Album(origin.id.clone())),
         Whence::Playlist => Some(Collection::Playlist(origin.id.clone())),
         Whence::Saved => Some(Collection::Saved),
+        Whence::Radio => Some(Collection::Radio(origin.id.clone())),
         _ => None,
     }
 }
@@ -598,7 +599,8 @@ async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
             Some(Origin::playlist(id)),
         ),
         Some(Collection::Saved) => (client.saved_tracks().await?, Some(Origin::saved())),
-        None => (Vec::new(), None),
+        // a radio is not read back; the track it names plays and the radio follows it
+        Some(Collection::Radio(_)) | None => (Vec::new(), None),
     };
 
     let at = |tracks: &[Track]| {

@@ -13,6 +13,8 @@ pub enum Collection {
     Playlist(String),
     /// The listener's saved tracks.
     Saved,
+    /// The radio of a track, which goes on with similar songs once the track ends.
+    Radio(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

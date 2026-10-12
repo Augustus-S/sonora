@@ -949,6 +949,7 @@ fn collection_uri(collection: &Collection, username: &str) -> String {
         Collection::Album(id) => format!("spotify:album:{id}"),
         Collection::Playlist(id) => format!("spotify:playlist:{id}"),
         Collection::Saved => format!("spotify:user:{username}:collection"),
+        Collection::Radio(id) => format!("spotify:station:track:{id}"),
     }
 }
 
