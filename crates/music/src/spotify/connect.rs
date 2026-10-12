@@ -1133,7 +1133,10 @@ impl Worker {
             }
             // the app keeps its own queue, which it reports back with the next state
             Wire::SetQueue(_) | Wire::UpdateContext(_) => Vec::new(),
-            Wire::Unknown(_) => return None,
+            Wire::Unknown(value) => {
+                describe_unknown(&value);
+                return None;
+            }
         })
     }
 
@@ -1638,6 +1641,52 @@ fn keys(track: &ProvidedTrack) -> Vec<&String> {
     let mut keys = track.metadata.keys().collect::<Vec<_>>();
     keys.sort();
     keys
+}
+
+/// Logs a command this device cannot read, with the shape of its payload and, for a transfer,
+/// what the state it carries holds. Jams send some of their changes this way, so it shows what
+/// they carry.
+fn describe_unknown(value: &serde_json::Value) {
+    use base64::Engine as _;
+    use protobuf::Message as _;
+
+    let Some(object) = value.as_object() else {
+        return log::debug!("connect: an unknown command is not an object");
+    };
+    let shape = object
+        .iter()
+        .map(|(key, value)| match value {
+            serde_json::Value::String(text) if text.len() <= 60 => format!("{key}={text}"),
+            serde_json::Value::String(text) => format!("{key}=<{} chars>", text.len()),
+            other => format!("{key}={other}").chars().take(160).collect(),
+        })
+        .collect::<Vec<_>>();
+    log::debug!("connect: an unknown command carries {shape:?}");
+
+    let state = object
+        .get("data")
+        .and_then(|data| data.as_str())
+        .and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok())
+        .and_then(|bytes| TransferState::parse_from_bytes(&bytes).ok());
+    let Some(state) = state else {
+        return log::debug!("connect: the unknown command holds no readable state");
+    };
+    let queue = state
+        .queue
+        .tracks
+        .iter()
+        .take(LISTED)
+        .map(|track| {
+            let mut keys = track.metadata.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            (track.uri.clone().unwrap_or_default(), keys)
+        })
+        .collect::<Vec<_>>();
+    log::debug!(
+        "connect: the unknown command holds a state, playing queue {:?}, {} queued: {queue:?}",
+        state.queue.is_playing_queue,
+        state.queue.tracks.len(),
+    );
 }
 
 /// The id of a track another device lists, read from its uri or, since Spotify's apps often send
