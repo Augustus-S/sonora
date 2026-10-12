@@ -310,9 +310,18 @@ impl Worker {
         let blocked = self
             .blocked_until
             .is_some_and(|until| until > Instant::now());
-        if from == mine && to != mine && self.now.is_some() && !blocked {
+        let put = from == mine && to != mine && self.now.is_some() && !blocked;
+        if put {
             self.put(PutStateReason::PLAYER_STATE_CHANGED).await;
         }
+        log::info!(
+            "connect: moving playback, from here {}, state put {put}, held back {blocked}, at {:?}s, playing {:?}",
+            from == mine,
+            self.now
+                .as_ref()
+                .map(|now| self.live_position(now).as_secs()),
+            self.now.as_ref().map(|now| now.playing),
+        );
         // without this the device that takes over may start paused
         let request = TransferRequest {
             transfer_options: TransferOptions {
@@ -342,13 +351,13 @@ impl Worker {
             .await;
         match answer {
             Ok(_) => {
-                log::info!("connect: moved playback from {from} to {to}");
+                log::info!("connect: moved playback");
                 // the cluster naming the new device is no longer older than the claim
                 if from == mine && to != mine {
                     self.claimed_at = None;
                 }
             }
-            Err(error) => log::warn!("connect: cannot move playback from {from} to {to}: {error}"),
+            Err(error) => log::warn!("connect: cannot move playback: {error}"),
         }
     }
 
