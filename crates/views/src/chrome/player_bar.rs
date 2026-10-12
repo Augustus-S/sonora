@@ -4,8 +4,8 @@ use ui::ActiveTheme as _;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString,
+    AnyElement, ClickEvent, ClipboardItem, Context, Entity, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString,
 };
 use gpui::{Window, div, point, px};
 use i18n::t;
@@ -33,6 +33,9 @@ const BANNER_ICON: f32 = 14.;
 /// The width of a member's picture on the strip, and how many of them it shows before it counts
 /// the rest.
 const BANNER_FACE: f32 = 20.;
+/// How much of the popover colour the strip keeps over its blur, as a menu does, so what it
+/// covers does not read through the text.
+const BANNER_FILL: f32 = 0.75;
 const BANNER_FACES: usize = 4;
 
 pub(crate) struct PlayerBar {
@@ -528,6 +531,11 @@ impl Render for PlayerBar {
                 ),
         };
 
+        let frosting = ui::blurring(cx);
+        let fill = match frosting {
+            true => theme.popover.opacity(BANNER_FILL),
+            false => theme.popover,
+        };
         let devices = Sonora::global(cx).devices.read(cx);
         let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
             let device = match devices.steered() {
@@ -540,6 +548,7 @@ impl Render for PlayerBar {
             };
             // The people list ends where the strip starts, so it rises from the strip's top edge.
             let top = window.viewport_size().height - height - px(BANNER);
+            let controls = Sonora::global(cx).devices.clone();
             div()
                 .id("jam-banner")
                 .absolute()
@@ -553,27 +562,61 @@ impl Render for PlayerBar {
                 .gap_2()
                 .text_size(theme.text(ui::Text::Small))
                 .text_color(theme.foreground)
-                .bg(theme.muted)
+                .bg(fill)
+                .when(frosting, ui::frost)
                 .occlude()
-                .cursor_pointer()
-                .hover(|this| this.bg(theme.secondary_hover))
-                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                    let at = point(event.position().x, top);
-                    this.people.update(cx, |people, cx| people.show(at, cx));
-                }))
+                // the name and faces open the people list, and the buttons beside them act on the Jam
                 .child(
-                    gpui::svg()
-                        .path(icons::path("icons/user.svg"))
-                        .size(px(BANNER_ICON))
-                        .text_color(theme.foreground),
+                    div()
+                        .id("jam-people-open")
+                        .flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .items_center()
+                        .gap_2()
+                        .cursor_pointer()
+                        .hover(|this| this.bg(theme.secondary_hover))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            let at = point(event.position().x, top);
+                            this.people.update(cx, |people, cx| people.show(at, cx));
+                        }))
+                        .child(
+                            gpui::svg()
+                                .path(icons::path("icons/user.svg"))
+                                .size(px(BANNER_ICON))
+                                .flex_none()
+                                .text_color(theme.foreground),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(text))
+                        .child(jam::faces(
+                            &jam.members,
+                            BANNER_FACES,
+                            px(BANNER_FACE),
+                            theme,
+                        )),
                 )
-                .child(div().flex_1().min_w_0().truncate().child(text))
-                .child(jam::faces(
-                    &jam.members,
-                    BANNER_FACES,
-                    px(BANNER_FACE),
-                    theme,
-                ))
+                .when_some(jam.link.clone(), |this, link| {
+                    this.child(
+                        Button::new("jam-copy")
+                            .ghost()
+                            .small()
+                            .label(t!("devices-jam-copy"))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
+                            }),
+                    )
+                })
+                .child(
+                    Button::new("jam-leave")
+                        .ghost()
+                        .small()
+                        .label(match jam.owner {
+                            true => t!("devices-jam-end"),
+                            false => t!("devices-jam-leave"),
+                        })
+                        .on_click(move |_, _, cx| controls.read(cx).leave()),
+                )
         });
 
         content
