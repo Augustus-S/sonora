@@ -781,9 +781,9 @@ impl Worker {
     }
 }
 
-/// Sends a command to another device of the account through the session. Returns `false` only
-/// when the request went out and Spotify refused it, so a caller can play the pick here instead;
-/// `true` when it was sent or there was nothing to send.
+/// Sends a command to another device of the account through the session. Returns `false` when
+/// the request failed, so a caller can play the pick here instead; `true` when it was sent or
+/// there was nothing to send.
 async fn control(session: Session, device: &str, command: Command) -> bool {
     let mine = session.device_id();
     let what = format!("{command:?}");
@@ -1076,7 +1076,7 @@ fn started_by_play(play: &PlayCommand) -> Start {
         .and_then(|skip| skip.track_uri.as_deref())
         .and_then(track_id)
         .or_else(|| {
-            let uid = skip?.track_uid.as_deref()?;
+            let uid = skip?.track_uid.as_deref().filter(|uid| !uid.is_empty())?;
             play.context
                 .pages
                 .iter()
@@ -1086,7 +1086,13 @@ fn started_by_play(play: &PlayCommand) -> Start {
         })
         .or_else(|| {
             let index = skip.and_then(|skip| skip.track_index)? as usize;
-            listed.get(index).cloned()
+            // the place counts every entry of the page, including ones that name no track
+            play.context
+                .pages
+                .iter()
+                .flat_map(|page| page.tracks.iter())
+                .nth(index)
+                .and_then(listed_id)
         });
     let index = skip
         .and_then(|skip| skip.track_index)

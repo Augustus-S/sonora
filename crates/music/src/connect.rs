@@ -180,6 +180,7 @@ pub trait Connect: Send + Sync {
     /// Moves playback to another device of the account.
     fn transfer(&self, to: &str);
 
-    /// Sends a command to another device of the account.
+    /// Sends a command to another device of the account. A `Start` it does not take comes back as
+    /// `Event::Command(Command::Start)`, so it plays here instead.
     fn control(&self, device: &str, command: Command);
 }
