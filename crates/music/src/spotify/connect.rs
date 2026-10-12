@@ -11,7 +11,10 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt as _;
-use http::{HeaderMap, HeaderValue, Method, header::CONTENT_TYPE};
+use http::{
+    HeaderMap, HeaderValue, Method,
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+};
 use librespot_core::dealer::manager::{BoxedStream, BoxedStreamResult, Reply, RequestReply};
 use librespot_core::dealer::protocol::{
     Command as Wire, Message, PayloadValue, PlayCommand, TransferOptions,
@@ -352,12 +355,10 @@ impl Worker {
             "{JAM_JOIN}/{token}?playback_control=listen_and_control&join_type=deeplinking&local_device_id={}",
             self.session.device_id()
         );
-        let mut headers = HeaderMap::new();
-        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
         let answer = self
             .session
             .spclient()
-            .request(&Method::POST, &endpoint, Some(headers), None)
+            .request(&Method::POST, &endpoint, Some(empty_body()), None)
             .await;
         match answer {
             Ok(body) => {
@@ -407,7 +408,7 @@ impl Worker {
         let answer = self
             .session
             .spclient()
-            .request(&Method::POST, JAM_LEAVE, None, None)
+            .request(&Method::POST, JAM_LEAVE, Some(empty_body()), None)
             .await;
         if let Err(error) = answer {
             log::warn!("connect: cannot leave the jam: {error}");
@@ -936,6 +937,13 @@ async fn control(session: Session, device: &str, command: Command) {
     if let Err(error) = answer {
         log::warn!("connect: cannot send {what} to {device}: {error}");
     }
+}
+
+/// The headers of a POST with no body, which Spotify wants to see a length of 0 on.
+fn empty_body() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
+    headers
 }
 
 /// The token of a group session in a shared link, following a `spotify.link` short link to the
