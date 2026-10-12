@@ -29,6 +29,9 @@ const CLOCK_LONG: f32 = 5.4;
 /// The height of the strip above the bar that names the other device playback is on.
 const ELSEWHERE: f32 = 28.;
 const ELSEWHERE_ICON: f32 = 14.;
+/// How much of the popover colour the strip keeps over its blur, as a menu does, so what it
+/// covers does not read through the text.
+const ELSEWHERE_FILL: f32 = 0.75;
 
 pub(crate) struct PlayerBar {
     playback: Entity<Playback>,
@@ -519,6 +522,11 @@ impl Render for PlayerBar {
                 ),
         };
 
+        let frosting = ui::blurring(cx);
+        let fill = match frosting {
+            true => theme.popover.opacity(ELSEWHERE_FILL),
+            false => theme.popover,
+        };
         let elsewhere = self.playback.read(cx).steered(cx).map(|steered| {
             let devices = Sonora::global(cx).devices.clone();
             div()
@@ -533,7 +541,8 @@ impl Render for PlayerBar {
                 .gap_2()
                 .text_size(theme.text(ui::Text::Small))
                 .text_color(theme.foreground)
-                .bg(theme.muted)
+                .bg(fill)
+                .when(frosting, ui::frost)
                 .child(
                     gpui::svg()
                         .path(icons::path("icons/monitor-speaker.svg"))
