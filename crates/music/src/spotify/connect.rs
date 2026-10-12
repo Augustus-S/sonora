@@ -67,6 +67,12 @@ const PUT_GAP: Duration = Duration::from_secs(1);
 /// after being refused again and again.
 const BACKOFF_FIRST: Duration = Duration::from_secs(2);
 const BACKOFF_LAST: Duration = Duration::from_secs(60);
+
+/// How long a shared short link may take to answer before it is given up on.
+const LINK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Where a Jam's token goes to make a link that opens in Spotify's apps and on the web.
+const INVITE: &str = "https://open.spotify.com/socialsession/";
 const VOLUME_STEPS: u32 = 64;
 /// The protobuf tags of a collection update: its items, and in each its kind, raw id and whether
 /// it was removed.
@@ -371,10 +377,8 @@ impl Worker {
         match answer {
             Ok(body) => {
                 log::info!("connect: joined a jam");
-                // the update that follows has the members, and this has them too when it is JSON
-                let jam = serde_json::from_slice(&body)
-                    .ok()
-                    .and_then(|json| session_of(&json, &self.session.username()));
+                // the update that follows has the members, and this has them too when it reads
+                let jam = read_session(&body, &self.session.username()).map(|read| read.jam);
                 self.out
                     .send(Event::Jam(Some(jam.unwrap_or_default())))
                     .ok();
@@ -383,24 +387,28 @@ impl Worker {
         }
     }
 
-    /// The group session the account is in now, if any. Spotify answers 404 when there is none.
-    async fn current_jam(session: Session) -> Option<Jam> {
-        let jam = Self::current_session(&session).await.map(|read| read.jam);
+    /// The group session the account is in now, if any.
+    async fn current_jam(session: &Session) -> Result<Option<Jam>, Error> {
+        let jam = Self::current_session(session).await?.map(|read| read.jam);
         match &jam {
             Some(jam) => log::info!("connect: in a jam of {}", jam.members.len()),
             None => log::info!("connect: not in a jam"),
         }
-        jam
+        Ok(jam)
     }
 
-    /// The group session the account is in.
-    async fn current_session(session: &Session) -> Option<Read> {
-        let body = session
+    /// The group session the account is in. Spotify answers 404 when there is none, which is
+    /// `Ok(None)`, unlike a request that failed.
+    async fn current_session(session: &Session) -> Result<Option<Read>, Error> {
+        let answer = session
             .spclient()
             .request(&Method::GET, JAM_CURRENT, None, None)
-            .await
-            .ok()?;
-        read_session(&body, &session.username())
+            .await;
+        match answer {
+            Ok(body) => Ok(read_session(&body, &session.username())),
+            Err(error) if error.kind == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Starts a group session with this device as the one playing, or finds the one that runs.
@@ -431,11 +439,12 @@ impl Worker {
     }
 
     /// Leaves the group session. The owner ends it for everyone instead, since leaving would
-    /// only hand it on.
+    /// only hand it on. A session that cannot be read is left as it is, since it may be owned.
     async fn leave(&mut self) {
         let owned = match Self::current_session(&self.session).await {
-            Some(read) if read.owner => Some(read.id),
-            _ => None,
+            Ok(Some(read)) if read.owner => Some(read.id),
+            Ok(_) => None,
+            Err(error) => return log::warn!("connect: cannot read the jam to leave it: {error}"),
         };
         let answer = match owned {
             Some(id) => {
@@ -455,10 +464,12 @@ impl Worker {
                     .await
             }
         };
-        if let Err(error) = answer {
-            log::warn!("connect: cannot leave the jam: {error}");
+        match answer {
+            Ok(_) => {
+                self.out.send(Event::Jam(None)).ok();
+            }
+            Err(error) => log::warn!("connect: cannot leave the jam: {error}"),
         }
-        self.out.send(Event::Jam(None)).ok();
     }
 
     /// Reads a change to the group session. The payload is read as loose JSON, since a value
@@ -476,9 +487,12 @@ impl Worker {
             reason,
             Some("SESSION_DELETED" | "YOU_LEFT" | "YOU_WERE_KICKED")
         );
-        match (ended, session_of(&json, &self.session.username())) {
+        let jam = json
+            .get("session")
+            .and_then(|_| session_of(&json, &self.session.username()));
+        match (ended, jam) {
             (true, _) => self.out.send(Event::Jam(None)).ok(),
-            // an update with no member list says nothing about who is in it
+            // an update with no session says nothing about who is in it
             (false, Some(jam)) => self.out.send(Event::Jam(Some(jam))).ok(),
             (false, None) => None,
         };
@@ -568,8 +582,12 @@ impl Worker {
         self.active_device = cluster.active_device_id.clone();
         self.out.send(Event::Roster(self.roster(&cluster))).ok();
         // the listener may have joined a jam from another app before this one was listed
-        let jam = Self::current_jam(self.session.clone()).await;
-        self.out.send(Event::Jam(jam)).ok();
+        match Self::current_jam(&self.session).await {
+            Ok(jam) => {
+                self.out.send(Event::Jam(jam)).ok();
+            }
+            Err(error) => log::warn!("connect: cannot read the jam: {error}"),
+        }
         // something may have been playing before the device was listed
         if self.now.is_some() {
             self.sync(None).await;
@@ -883,6 +901,7 @@ impl Worker {
 
     fn request(&mut self, (request, reply): RequestReply) {
         self.last_command = (request.message_id, request.sent_by_device_id.clone());
+        log::debug!("connect: asked, {}", request.command);
         let commands = self.translate(request.command);
         let verdict = match &commands {
             Some(_) => Reply::Success,
@@ -1011,7 +1030,11 @@ async fn jam_token(link: &str) -> Option<String> {
     let Some(short) = short else {
         return token_in(link);
     };
-    let response = reqwest::get(short).await.ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(LINK_TIMEOUT)
+        .build()
+        .ok()?;
+    let response = client.get(short).send().await.ok()?;
     if let Some(token) = token_in(response.url().as_str()) {
         return Some(token);
     }
@@ -1019,13 +1042,24 @@ async fn jam_token(link: &str) -> Option<String> {
     token_in(&response.text().await.ok()?)
 }
 
-/// The token that follows `socialsession/` in a link or a page.
+/// The token that follows `socialsession/` in a link or a page, or `sessions/join/` in the
+/// address Spotify itself gives a session. It is letters and digits only, since it goes into a
+/// request.
 fn token_in(text: &str) -> Option<String> {
-    let rest = text.split("socialsession/").nth(1)?;
-    let token = rest
-        .split(|c: char| c.is_whitespace() || "?/#&\"'<>\\".contains(c))
-        .next()?;
+    let rest = ["socialsession/", "sessions/join/"]
+        .into_iter()
+        .find_map(|marker| text.split(marker).nth(1))?;
+    let token = rest.split(|c: char| !c.is_ascii_alphanumeric()).next()?;
     (!token.is_empty()).then(|| token.to_owned())
+}
+
+/// The link that invites others to the session at `url`, which Spotify gives as an address only
+/// its own apps open.
+fn invite(url: &str) -> Option<String> {
+    match token_in(url) {
+        Some(token) => Some(format!("{INVITE}{token}")),
+        None => url.starts_with("https://").then(|| url.to_owned()),
+    }
 }
 
 /// A group session as Spotify answers for it: what the app shows, the id to end it by, and
@@ -1049,8 +1083,13 @@ fn read_session(body: &[u8], own: &str) -> Option<Read> {
         });
     }
     let session = SocialSession::parse_from_bytes(body).ok()?;
-    let link = Some(session.join_session_url.clone())
-        .filter(|url| session.is_session_owner && !url.is_empty());
+    // an empty answer parses as a session with nothing in it
+    if session.session_id.is_empty() {
+        return None;
+    }
+    let link = Some(&session.join_session_url)
+        .filter(|_| session.is_session_owner)
+        .and_then(|url| invite(url));
     Some(Read {
         jam: Jam {
             members: session
@@ -1060,6 +1099,7 @@ fn read_session(body: &[u8], own: &str) -> Option<Read> {
                 .map(|member| member.display_name.clone())
                 .filter(|name| !name.is_empty())
                 .collect(),
+            owner: session.is_session_owner,
             link,
         },
         id: session.session_id,
@@ -1083,11 +1123,14 @@ fn is_owner(session: &serde_json::Value) -> bool {
 /// there only when `own` owns the session.
 fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
     let session = json.get("session").unwrap_or(json);
-    let members = key_of(session, ["session_members", "sessionMembers"])?.as_array()?;
+    // a session nobody else is in has no member list, since JSON leaves out an empty one
+    let members = key_of(session, ["session_members", "sessionMembers"])
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
     let link = key_of(session, ["join_session_url", "joinSessionUrl"])
         .and_then(serde_json::Value::as_str)
-        .filter(|url| is_owner(session) && !url.is_empty())
-        .map(str::to_owned);
+        .filter(|_| is_owner(session))
+        .and_then(invite);
     let members = members
         .iter()
         .filter(|member| {
@@ -1102,7 +1145,11 @@ fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
         })
         .map(str::to_owned)
         .collect();
-    Some(Jam { members, link })
+    Some(Jam {
+        members,
+        owner: is_owner(session),
+        link,
+    })
 }
 
 /// How much a put matters when two are due at once: the stronger one goes out.

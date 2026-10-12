@@ -150,9 +150,10 @@ pub struct Roster {
 /// too.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Jam {
-    /// The display names of the other people in it, the host first when known. The listener is
-    /// not among them.
+    /// The display names of the other people in it. The listener is not among them.
     pub members: Vec<String>,
+    /// Whether the listener owns the session, which leaving ends for everyone.
+    pub owner: bool,
     /// The link that invites others, when the listener owns the session.
     pub link: Option<String>,
 }
@@ -197,12 +198,12 @@ pub trait Connect: Send + Sync {
     /// Sends a command to another device of the account.
     fn control(&self, device: &str, command: Command);
 
-    /// Joins a friend's group session from the link they shared. The outcome arrives as an
-    /// `Event::Jam`.
+    /// Joins a friend's group session from the link they shared. The session arrives as an
+    /// `Event::Jam` once it is joined.
     fn join(&self, link: &str);
 
-    /// Starts a group session on this app, or reports the one already running. The outcome
-    /// arrives as an `Event::Jam`.
+    /// Starts a group session on this app, or reports the one already running. The session
+    /// arrives as an `Event::Jam` once it started.
     fn start(&self);
 
     /// Leaves the group session joined, or ends the one the listener started.
