@@ -17,6 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   controls and the songs you pick play there, the way Spotify's own apps do.
 - While Show as a Spotify device is on, a song you like or unlike in Spotify's other apps
   updates its heart in Sonora right away, without a restart.
+- Songs in your history show a heart when you hover them, so you can save one to your library
+  straight from there.
 
 ### Changed
 
