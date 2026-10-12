@@ -312,6 +312,7 @@ fn open_window(cx: &mut App) {
         playback,
         potoken: _,
         queue,
+        requirements: _,
         scan: _,
         scrobbling: _,
         settings: _,
