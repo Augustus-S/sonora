@@ -69,6 +69,10 @@ pub struct Devices {
     jam: Option<Jam>,
     /// The group session a link named, which the listener is being asked to join.
     invite: Option<Invite>,
+    /// Whether the listener started a Jam that is not up yet, so its code shows once it is.
+    awaiting_code: bool,
+    /// Whether the code that opens the Jam's link on a phone is on show.
+    code: bool,
     /// The track playing on another device, once it is read in.
     remote: Option<Track>,
     /// Whether this app took playback, which only the listener pressing play does. A track
@@ -122,6 +126,8 @@ impl Devices {
             roster: Roster::default(),
             jam: None,
             invite: None,
+            awaiting_code: false,
+            code: false,
             remote: None,
             claimed: false,
             sent: None,
@@ -201,11 +207,24 @@ impl Devices {
         }
     }
 
-    /// Starts a group session on this app. Its link to share is on `jam()` once it is up.
-    pub fn start_jam(&self) {
+    /// Starts a group session on this app. Its link to share is on `jam()` once it is up, and its
+    /// code is shown then.
+    pub fn start_jam(&mut self) {
         if let Some(link) = &self.link {
             link.start();
+            self.awaiting_code = true;
         }
+    }
+
+    /// Whether the code of the Jam's link is on show, which only a Jam with a link can have.
+    pub fn code_shown(&self) -> bool {
+        self.code && self.jam.as_ref().is_some_and(|jam| jam.link.is_some())
+    }
+
+    /// Shows or hides the code of the Jam's link.
+    pub fn show_code(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.code = shown;
+        cx.notify();
     }
 
     /// Leaves the group session, or ends it when the listener started it.
@@ -303,6 +322,8 @@ impl Devices {
         self.roster = Roster::default();
         self.jam = None;
         self.invite = None;
+        self.awaiting_code = false;
+        self.code = false;
         self.remote = None;
         self.claimed = false;
         self.sent = None;
@@ -349,6 +370,8 @@ impl Devices {
             self.roster = Roster::default();
             self.jam = None;
             self.invite = None;
+            self.awaiting_code = false;
+            self.code = false;
             self.remote = None;
         }
         cx.notify();
@@ -373,6 +396,14 @@ impl Devices {
             Event::Command(command) => self.run(command, cx),
             Event::Liked { track, liked } => self.liked(track, liked, cx),
             Event::Jam(jam) => {
+                // a Jam the listener started shows its code once, as it comes up
+                if self.awaiting_code && jam.as_ref().is_some_and(|jam| jam.link.is_some()) {
+                    self.awaiting_code = false;
+                    self.code = true;
+                }
+                if jam.is_none() {
+                    self.code = false;
+                }
                 self.jam = jam;
                 cx.notify();
             }
