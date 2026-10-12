@@ -21,8 +21,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   clipboard in the devices menu. Sonora asks whether to join the host's Jam first. A strip above
   the player bar names the Jam and shows who is in it, a click on it lists everyone with their
   pictures and who hosts, and the same menu leaves it.
-- The devices menu can start a Jam, copy its link to share, and end it. As host you can remove
-  people from the list.
+- The devices menu can start a Jam, copy its link to share, and end it. Starting one shows a
+  code others can scan to join. As host you can remove people from the list.
 
 ### Changed
 

@@ -598,6 +598,18 @@ impl Render for PlayerBar {
                 )
                 .when_some(jam.link.clone(), |this, link| {
                     this.child(
+                        Button::new("jam-code")
+                            .ghost()
+                            .small()
+                            .label(t!("devices-jam-code"))
+                            .on_click({
+                                let devices = controls.clone();
+                                move |_, _, cx| {
+                                    devices.update(cx, |devices, cx| devices.show_code(true, cx))
+                                }
+                            }),
+                    )
+                    .child(
                         Button::new("jam-copy")
                             .ghost()
                             .small()

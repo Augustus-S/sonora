@@ -11,7 +11,7 @@ pub(crate) mod tools;
 mod update_notice;
 
 pub(crate) use aside::Aside;
-pub(crate) use jam::JamInvite;
+pub(crate) use jam::{JamCode, JamInvite};
 pub(crate) use player_bar::PlayerBar;
 pub(crate) use sidebar_left::SidebarLeft;
 pub(crate) use sidebar_right::SidebarRight;

@@ -1,18 +1,23 @@
-//! The Jam as the app shows it: the question before a shared link is joined, and the list of
-//! people in the one the listener is in. Both are `state::Devices`' to answer; this only draws
-//! them.
+//! The Jam as the app shows it: the question before a shared link is joined, the code a phone
+//! scans to join the one the listener started, and the list of people in the one the listener is
+//! in. All of them are `state::Devices`' to answer; this only draws them.
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Div, Entity, FocusHandle, Pixels, Point, Render, SharedString, Window, div,
+    AnyElement, ClipboardItem, Context, Div, Entity, FocusHandle, Pixels, Point, Render,
+    SharedString, Window, div, px,
 };
 use i18n::t;
 use music::connect::{Jam, JamMember};
 use state::{Devices, Sonora};
 use ui::{
     ActiveTheme as _, Avatar, Button, Dismiss, FORM_CONTEXT, Initials, Menu, MenuItem, Modal,
-    Picker, Popup, Submit, Text, Theme,
+    Picker, Popup, Qr, Submit, Text, Theme,
 };
+
+/// The side of the Jam's QR code. It does not scale with the theme, since a code has to stay a
+/// size a camera can read.
+const CODE: Pixels = px(220.);
 
 /// Asks whether to join the Jam a pasted link names. It shows for as long as `Devices` holds an
 /// invite, wherever the listener is in the app, and either answer hands the invite back.
@@ -109,6 +114,110 @@ impl Render for JamInvite {
                             .on_click(cx.listener(|this, _, window, cx| this.join(window, cx))),
                     )
                     .on_dismiss(cx.listener(|this, _, window, cx| this.decline(window, cx))),
+            )
+            .into_any_element()
+    }
+}
+
+/// The link to the Jam the listener started as a QR code, for a phone to scan. It shows for as
+/// long as `Devices` says the code is on, wherever the listener is in the app, and closing it
+/// hands that back.
+pub(crate) struct JamCode {
+    devices: Entity<Devices>,
+    focus: FocusHandle,
+    restore: Option<FocusHandle>,
+    shown: bool,
+}
+
+impl JamCode {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let devices = Sonora::global(cx).devices.clone();
+        cx.observe(&devices, |_, _, cx| cx.notify()).detach();
+        Self {
+            devices,
+            focus: cx.focus_handle(),
+            restore: None,
+            shown: false,
+        }
+    }
+
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.release(window, cx);
+        self.devices
+            .update(cx, |devices, cx| devices.show_code(false, cx));
+    }
+
+    fn release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(focus) = self.restore.take() {
+            window.focus(&focus, cx);
+        }
+        self.shown = false;
+    }
+}
+
+impl Render for JamCode {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let devices = self.devices.read(cx);
+        let shown = devices
+            .jam()
+            .filter(|_| devices.code_shown())
+            .and_then(|jam| {
+                let link = jam.link.clone()?;
+                Some((host_name(jam).map(str::to_owned), link))
+            });
+        let Some((host, link)) = shown else {
+            if self.shown {
+                self.release(window, cx);
+            }
+            return div().into_any_element();
+        };
+        if !self.shown {
+            self.restore = window.focused(cx);
+            window.focus(&self.focus, cx);
+            self.shown = true;
+        }
+
+        let title = match host.as_deref() {
+            Some(host) => t!("devices-jam-code-title", host = host),
+            None => t!("devices-jam-code-title-anonymous"),
+        };
+
+        div()
+            .absolute()
+            .inset_0()
+            .key_context(FORM_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                cx.stop_propagation();
+                this.close(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &Submit, window, cx| {
+                cx.stop_propagation();
+                this.close(window, cx);
+            }))
+            .child(
+                Modal::new("jam-code", title)
+                    .child(
+                        div()
+                            .flex()
+                            .justify_center()
+                            .child(Qr::new(link.clone()).size(CODE)),
+                    )
+                    .action(
+                        Button::new("copy-jam-code")
+                            .ghost()
+                            .label(t!("devices-jam-copy"))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
+                            }),
+                    )
+                    .action(
+                        Button::new("close-jam-code")
+                            .primary()
+                            .label(t!("devices-jam-code-close"))
+                            .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    )
+                    .on_dismiss(cx.listener(|this, _, window, cx| this.close(window, cx))),
             )
             .into_any_element()
     }

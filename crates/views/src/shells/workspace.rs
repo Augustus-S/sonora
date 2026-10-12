@@ -11,7 +11,7 @@ use ui::{
 };
 
 use crate::chrome::{
-    Chrome, JamInvite, PlayerBar, SidebarLeft, SidebarRight, TitleBarOptions, ToastStack,
+    Chrome, JamCode, JamInvite, PlayerBar, SidebarLeft, SidebarRight, TitleBarOptions, ToastStack,
     UpdateNotice,
 };
 use crate::shared::confirm::Confirm;
@@ -31,6 +31,7 @@ pub(crate) struct Workspace {
     card_menu: Entity<CardMenu>,
     widevine: Entity<WidevinePrompt>,
     jam_invite: Entity<JamInvite>,
+    jam_code: Entity<JamCode>,
     toasts: Entity<ToastStack>,
     notice: Entity<UpdateNotice>,
     content: AnyView,
@@ -62,6 +63,7 @@ impl Workspace {
             card_menu: CardMenu::entity(cx),
             widevine: cx.new(WidevinePrompt::new),
             jam_invite: cx.new(JamInvite::new),
+            jam_code: cx.new(JamCode::new),
             toasts: cx.new(ToastStack::new),
             notice: cx.new(UpdateNotice::new),
             content,
@@ -343,6 +345,7 @@ impl Render for Workspace {
             .child(self.confirm.clone())
             .child(self.widevine.clone())
             .child(self.jam_invite.clone())
+            .child(self.jam_code.clone())
             .child(self.notice.clone())
     }
 }

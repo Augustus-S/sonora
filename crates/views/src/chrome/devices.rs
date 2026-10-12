@@ -109,6 +109,16 @@ impl Render for DevicePicker {
             Some(jam) => {
                 if let Some(link) = jam.link.clone() {
                     items.push(
+                        MenuItem::new("jam-code", t!("devices-jam-code-menu"))
+                            .icon("icons/smartphone.svg")
+                            .on_click({
+                                let devices = devices.clone();
+                                move |_, _, cx| {
+                                    devices.update(cx, |devices, cx| devices.show_code(true, cx))
+                                }
+                            }),
+                    );
+                    items.push(
                         MenuItem::new("jam-copy", t!("devices-jam-copy"))
                             .icon("icons/copy.svg")
                             .on_click(move |_, _, cx| {
@@ -148,7 +158,7 @@ impl Render for DevicePicker {
                         .icon("icons/user.svg")
                         .on_click({
                             let devices = devices.clone();
-                            move |_, _, cx| devices.read(cx).start_jam()
+                            move |_, _, cx| devices.update(cx, |devices, _| devices.start_jam())
                         }),
                 );
                 items.push(
