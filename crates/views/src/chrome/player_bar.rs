@@ -511,8 +511,8 @@ impl Render for PlayerBar {
                         .items_center()
                         .justify_end()
                         .gap_2()
+                        // never narrower than its buttons, or they spill over the seek bar's clock
                         .flex_1()
-                        .min_w_0()
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
                         .child(self.fullscreen_button()),
