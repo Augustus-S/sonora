@@ -289,27 +289,30 @@ impl Devices {
             .iter()
             .filter_map(|listed| {
                 let mut track = self.listed.get(&listed.id)?.clone();
-                track.added_by = listed.added_by.as_deref().map(|id| {
-                    let member = self
-                        .jam
-                        .iter()
-                        .flat_map(|jam| &jam.members)
-                        .find(|member| member.id == id);
-                    Arc::new(match member {
-                        Some(member) => Contributor {
-                            id: member.id.clone(),
-                            name: member.name.clone(),
-                            avatar: member.image.clone(),
-                        },
-                        None => Contributor::unnamed(id),
-                    })
-                });
+                track.added_by = listed.added_by.as_deref().map(|id| self.contributor(id));
                 Some(Upcoming {
                     track,
                     queued: listed.queued,
                 })
             })
             .collect()
+    }
+
+    /// The person a provider id names, by the Jam's members when they are in it.
+    fn contributor(&self, id: &str) -> Arc<Contributor> {
+        let member = self
+            .jam
+            .iter()
+            .flat_map(|jam| &jam.members)
+            .find(|member| member.id == id);
+        Arc::new(match member {
+            Some(member) => Contributor {
+                id: member.id.clone(),
+                name: member.name.clone(),
+                avatar: member.image.clone(),
+            },
+            None => Contributor::unnamed(id),
+        })
     }
 
     /// Moves playback onto this app from whichever device has it.
@@ -612,7 +615,7 @@ impl Devices {
             Command::Repeat(mode) => {
                 self.here(cx, |playback, cx| playback.set_repeat(repeat_of(mode), cx))
             }
-            Command::Enqueue(id) => self.enqueue(id, cx),
+            Command::Enqueue { id, added_by } => self.enqueue(id, added_by, cx),
             Command::Start(start) => self.start(start, cx),
             Command::Released => {
                 // another device took over, so this one stops without calling playback back
@@ -623,7 +626,7 @@ impl Devices {
         }
     }
 
-    fn enqueue(&mut self, id: String, cx: &mut Context<Self>) {
+    fn enqueue(&mut self, id: String, added_by: Option<String>, cx: &mut Context<Self>) {
         let Some(client) = self.session.read(cx).client() else {
             return;
         };
@@ -635,7 +638,10 @@ impl Devices {
             this.update(cx, |this, cx| {
                 this.queuing.remove(&key);
                 match found {
-                    Ok(track) => this.here(cx, |playback, cx| playback.enqueue(track, cx)),
+                    Ok(mut track) => {
+                        track.added_by = added_by.as_deref().map(|id| this.contributor(id));
+                        this.here(cx, |playback, cx| playback.enqueue(track, cx))
+                    }
                     Err(error) => log::warn!("connect: cannot queue {key}: {error:#}"),
                 }
             })

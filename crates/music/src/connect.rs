@@ -85,8 +85,12 @@ pub enum Command {
     Volume(f32),
     Shuffle(bool),
     Repeat(RepeatMode),
-    /// Adds a track to the end of the hand-made queue.
-    Enqueue(String),
+    /// Adds a track to the end of the hand-made queue, with the id of whoever queued it when
+    /// the provider says who that is.
+    Enqueue {
+        id: String,
+        added_by: Option<String>,
+    },
     /// Plays a collection or a track list, from this app's side only.
     Start(Start),
     /// Another device took playback over, so this app has to let go of it.

@@ -1118,10 +1118,19 @@ impl Worker {
                 }
                 commands
             }
-            Wire::AddToQueue(add) => track_id(&add.track.uri)
-                .map(Command::Enqueue)
-                .into_iter()
-                .collect(),
+            Wire::AddToQueue(add) => {
+                log::debug!(
+                    "connect: a track was queued, it carries {:?}",
+                    keys(&add.track)
+                );
+                track_id(&add.track.uri)
+                    .map(|id| Command::Enqueue {
+                        id,
+                        added_by: adder(&add.track),
+                    })
+                    .into_iter()
+                    .collect()
+            }
             // the app keeps its own queue, which it reports back with the next state
             Wire::SetQueue(_) | Wire::UpdateContext(_) => Vec::new(),
             Wire::Unknown(_) => return None,
@@ -1604,21 +1613,31 @@ fn listed(tracks: &[ProvidedTrack]) -> Vec<Listed> {
                         .metadata
                         .get("is_queued")
                         .is_some_and(|queued| queued == "true"),
-                added_by: ADDERS
-                    .iter()
-                    .find_map(|key| track.metadata.get(*key))
-                    .filter(|name| !name.is_empty())
-                    .cloned(),
+                added_by: adder(track),
             })
         })
         .take(LISTED)
         .collect::<Vec<_>>();
     if let Some(track) = tracks.iter().find(|track| track.provider == "queue") {
-        let mut keys = track.metadata.keys().collect::<Vec<_>>();
-        keys.sort();
-        log::debug!("connect: a queued track carries {keys:?}");
+        log::debug!("connect: a queued track carries {:?}", keys(track));
     }
     listed
+}
+
+/// Who queued a track, read from the first of the metadata keys Spotify names them by.
+fn adder(track: &ProvidedTrack) -> Option<String> {
+    ADDERS
+        .iter()
+        .find_map(|key| track.metadata.get(*key))
+        .filter(|name| !name.is_empty())
+        .cloned()
+}
+
+/// The metadata keys a track carries, sorted, so a log shows what Spotify sends without the values.
+fn keys(track: &ProvidedTrack) -> Vec<&String> {
+    let mut keys = track.metadata.keys().collect::<Vec<_>>();
+    keys.sort();
+    keys
 }
 
 /// The id of a track another device lists, read from its uri or, since Spotify's apps often send
