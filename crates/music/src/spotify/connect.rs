@@ -41,8 +41,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::Instant;
 
 use crate::connect::{
-    Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Jam, Naming, NowPlaying,
-    RepeatMode, Roster, Start,
+    Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Invite, Jam, JamMember,
+    Naming, NowPlaying, RepeatMode, Roster, Start,
 };
 
 const DEVICE_NAME: &str = "Sonora";
@@ -86,6 +86,7 @@ const JAM_JOIN: &str = "/social-connect/v2/sessions/join";
 const JAM_CURRENT: &str = "/social-connect/v2/sessions/current";
 const JAM_LEAVE: &str = "/social-connect/v2/sessions/leave";
 const JAM_START: &str = "/social-connect/v2/sessions/current_or_new";
+const JAM_INFO: &str = "/social-connect/v2/sessions/info";
 const JAM_END: &str = "/social-connect/v3/sessions";
 
 enum Input {
@@ -95,8 +96,10 @@ enum Input {
     Transfer(String),
     Control(String, Command),
     Join(String),
+    Peek(String),
     Start,
     Leave,
+    Kick(String),
 }
 
 /// The handle the app holds. The work happens on a task of the session's runtime, which ends
@@ -162,8 +165,16 @@ impl Connect for Connection {
         self.inputs.send(Input::Start).ok();
     }
 
+    fn peek(&self, link: &str) {
+        self.inputs.send(Input::Peek(link.to_owned())).ok();
+    }
+
     fn leave(&self) {
         self.inputs.send(Input::Leave).ok();
+    }
+
+    fn kick(&self, member: &str) {
+        self.inputs.send(Input::Kick(member.to_owned())).ok();
     }
 }
 
@@ -348,8 +359,10 @@ impl Worker {
             Input::Publish(now) => self.publish(now).await,
             Input::Transfer(to) => self.transfer(to).await,
             Input::Join(link) => self.join(&link).await,
+            Input::Peek(link) => self.peek(&link).await,
             Input::Start => self.start_jam().await,
             Input::Leave => self.leave().await,
+            Input::Kick(member) => self.kick(&member).await,
             Input::Control(device, command) => {
                 control(self.session.clone(), &device, command).await
             }
@@ -372,7 +385,12 @@ impl Worker {
         let answer = self
             .session
             .spclient()
-            .request(&Method::POST, &endpoint, Some(empty_body()), None)
+            .request(
+                &Method::POST,
+                &endpoint,
+                Some(jam_headers(&self.session, true)),
+                None,
+            )
             .await;
         match answer {
             Ok(body) => {
@@ -402,7 +420,12 @@ impl Worker {
     async fn current_session(session: &Session) -> Result<Option<Read>, Error> {
         let answer = session
             .spclient()
-            .request(&Method::GET, JAM_CURRENT, None, None)
+            .request(
+                &Method::GET,
+                JAM_CURRENT,
+                Some(jam_headers(session, false)),
+                None,
+            )
             .await;
         match answer {
             Ok(body) => Ok(read_session(&body, &session.username())),
@@ -411,20 +434,61 @@ impl Worker {
         }
     }
 
+    /// Reads the group session a link names without joining it, and says what it found in an
+    /// `Event::Invite`, which is `None` when the link names none or it cannot be read.
+    async fn peek(&mut self, link: &str) {
+        let found = self.peeked(link).await;
+        self.out.send(Event::Invite(found)).ok();
+    }
+
+    async fn peeked(&mut self, link: &str) -> Option<Invite> {
+        if !self.enabled || !self.connected {
+            log::warn!("connect: cannot look up a jam while not listed as a device");
+            return None;
+        }
+        let Some(token) = jam_token(link).await else {
+            log::warn!("connect: no jam token in the link");
+            return None;
+        };
+        let body = self
+            .session
+            .spclient()
+            .request(
+                &Method::GET,
+                &format!("{JAM_INFO}/{token}"),
+                Some(jam_headers(&self.session, false)),
+                None,
+            )
+            .await
+            .inspect_err(|error| log::warn!("connect: cannot look up the jam: {error}"))
+            .ok()?;
+        let read = read_session(&body, &self.session.username())?;
+        Some(Invite {
+            link: format!("{INVITE}{token}"),
+            jam: read.jam,
+        })
+    }
+
     /// Starts a group session with this device as the one playing, or finds the one that runs.
     /// The link to invite others with comes back in the `Event::Jam`.
     async fn start_jam(&mut self) {
         if !self.enabled || !self.connected {
             return log::warn!("connect: cannot start a jam while not listed as a device");
         }
+        // activate is what the desktop app asks for, and what has the session show in the others
         let endpoint = format!(
-            "{JAM_START}?local_device_id={}&type=REMOTE",
+            "{JAM_START}?activate=true&local_device_id={}&type=REMOTE",
             self.session.device_id()
         );
         let answer = self
             .session
             .spclient()
-            .request(&Method::GET, &endpoint, None, None)
+            .request(
+                &Method::GET,
+                &endpoint,
+                Some(jam_headers(&self.session, false)),
+                None,
+            )
             .await;
         match answer {
             Ok(body) => match read_session(&body, &self.session.username()) {
@@ -454,13 +518,23 @@ impl Worker {
                 );
                 self.session
                     .spclient()
-                    .request(&Method::DELETE, &endpoint, None, None)
+                    .request(
+                        &Method::DELETE,
+                        &endpoint,
+                        Some(jam_headers(&self.session, false)),
+                        None,
+                    )
                     .await
             }
             None => {
                 self.session
                     .spclient()
-                    .request(&Method::POST, JAM_LEAVE, Some(empty_body()), None)
+                    .request(
+                        &Method::POST,
+                        JAM_LEAVE,
+                        Some(jam_headers(&self.session, true)),
+                        None,
+                    )
                     .await
             }
         };
@@ -469,6 +543,49 @@ impl Worker {
                 self.out.send(Event::Jam(None)).ok();
             }
             Err(error) => log::warn!("connect: cannot leave the jam: {error}"),
+        }
+    }
+
+    /// Removes `member` from the group session, which only its owner may do, and then reports
+    /// who is left without waiting for the dealer to.
+    async fn kick(&mut self, member: &str) {
+        // the id goes into the path, so nothing else than what an id is made of is let through
+        if member.is_empty()
+            || !member
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        {
+            return log::warn!("connect: not a member id to remove");
+        }
+        let id = match Self::current_session(&self.session).await {
+            Ok(Some(read)) if read.owner => read.id,
+            Ok(_) => return log::warn!("connect: only the owner of a jam can remove a member"),
+            Err(error) => {
+                return log::warn!("connect: cannot read the jam to remove from: {error}");
+            }
+        };
+        let endpoint = format!(
+            "{JAM_END}/{id}/member/{member}/kick?local_device_id={}",
+            self.session.device_id()
+        );
+        let answer = self
+            .session
+            .spclient()
+            .request(
+                &Method::POST,
+                &endpoint,
+                Some(jam_headers(&self.session, true)),
+                None,
+            )
+            .await;
+        match answer {
+            Ok(_) => {
+                log::info!("connect: removed a member from the jam");
+                if let Ok(Some(read)) = Self::current_session(&self.session).await {
+                    self.out.send(Event::Jam(Some(read.jam))).ok();
+                }
+            }
+            Err(error) => log::warn!("connect: cannot remove the member: {error}"),
         }
     }
 
@@ -1090,21 +1207,74 @@ fn read_session(body: &[u8], own: &str) -> Option<Read> {
     let link = Some(&session.join_session_url)
         .filter(|_| session.is_session_owner)
         .and_then(|url| invite(url));
+    let listed = session.session_members.iter().map(|member| {
+        let image = match member.image_url.is_empty() {
+            true => &member.large_image_url,
+            false => &member.image_url,
+        };
+        [&member.id, &member.username, &member.display_name, image].map(String::as_str)
+    });
     Some(Read {
         jam: Jam {
-            members: session
-                .session_members
-                .iter()
-                .filter(|member| member.username != own && member.id != own)
-                .map(|member| member.display_name.clone())
-                .filter(|name| !name.is_empty())
-                .collect(),
+            members: members_of(
+                listed,
+                &session.session_owner_id,
+                session.is_session_owner,
+                own,
+            ),
             owner: session.is_session_owner,
             link,
         },
         id: session.session_id,
         owner: session.is_session_owner,
     })
+}
+
+/// The people in a session, from what it lists of each as `[id, username, name, image]`.
+/// `owner` is the id of whoever owns the session when it says, and `owned` whether the account
+/// `own` does, which makes the account the host when no id names one.
+fn members_of<'a>(
+    listed: impl Iterator<Item = [&'a str; 4]>,
+    owner: &str,
+    owned: bool,
+    own: &str,
+) -> Vec<JamMember> {
+    let mut members = listed
+        .filter_map(|[id, username, name, image]| {
+            let id = [id, username].into_iter().find(|id| !id.is_empty())?;
+            Some(JamMember {
+                id: id.to_owned(),
+                name: [name, username, id]
+                    .into_iter()
+                    .find(|name| !name.is_empty())?
+                    .to_owned(),
+                image: image_of(image),
+                host: !owner.is_empty() && (id == owner || username == owner),
+                you: id == own || username == own,
+            })
+        })
+        .collect::<Vec<_>>();
+    if owned && !members.iter().any(|member| member.host) {
+        if let Some(you) = members.iter_mut().find(|member| member.you) {
+            you.host = true;
+        }
+    }
+    members
+}
+
+/// The address of a picture Spotify names either by a link or by an `spotify:image:` uri.
+fn image_of(image: &str) -> Option<String> {
+    match image.strip_prefix("spotify:image:") {
+        Some(id) => Some(format!("https://i.scdn.co/image/{id}")),
+        None => image.starts_with("https://").then(|| image.to_owned()),
+    }
+}
+
+/// The text under the first of `keys` in a JSON object, or nothing.
+fn text_of<'a>(object: &'a serde_json::Value, keys: [&str; 2]) -> &'a str {
+    key_of(object, keys)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
 }
 
 /// The value under the first of `keys` a JSON object has, since the case of the keys varies.
@@ -1118,38 +1288,56 @@ fn is_owner(session: &serde_json::Value) -> bool {
         .unwrap_or(false)
 }
 
-/// The members of the group session in a JSON `Session`, or in a `SessionUpdate` holding one,
-/// whichever case its keys are in, without the account `own`. The link to invite others is
-/// there only when `own` owns the session.
+/// The group session in a JSON `Session`, or in a `SessionUpdate` holding one, whichever case
+/// its keys are in. The link to invite others is there only when `own` owns the session.
 fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
     let session = json.get("session").unwrap_or(json);
+    let owned = is_owner(session);
     // a session nobody else is in has no member list, since JSON leaves out an empty one
     let members = key_of(session, ["session_members", "sessionMembers"])
         .and_then(serde_json::Value::as_array)
         .map_or(&[][..], Vec::as_slice);
     let link = key_of(session, ["join_session_url", "joinSessionUrl"])
         .and_then(serde_json::Value::as_str)
-        .filter(|_| is_owner(session))
+        .filter(|_| owned)
         .and_then(invite);
-    let members = members
-        .iter()
-        .filter(|member| {
-            !["username", "id"]
-                .into_iter()
-                .any(|key| member.get(key).and_then(serde_json::Value::as_str) == Some(own))
-        })
-        .filter_map(|member| {
-            ["display_name", "displayName", "username"]
-                .into_iter()
-                .find_map(|key| member.get(key)?.as_str().filter(|name| !name.is_empty()))
-        })
-        .map(str::to_owned)
-        .collect();
+    let listed = members.iter().map(|member| {
+        let image = match text_of(member, ["image_url", "imageUrl"]) {
+            "" => text_of(member, ["large_image_url", "largeImageUrl"]),
+            image => image,
+        };
+        [
+            text_of(member, ["id", "id"]),
+            text_of(member, ["username", "username"]),
+            text_of(member, ["display_name", "displayName"]),
+            image,
+        ]
+    });
     Some(Jam {
-        members,
-        owner: is_owner(session),
+        members: members_of(
+            listed,
+            text_of(session, ["session_owner_id", "sessionOwnerId"]),
+            owned,
+            own,
+        ),
+        owner: owned,
         link,
     })
+}
+
+/// The headers every Jam request carries: the dealer connection this device listens on, which
+/// ties the session to this device, and a zero length for a request with no body.
+fn jam_headers(session: &Session, post: bool) -> HeaderMap {
+    let mut headers = match post {
+        true => empty_body(),
+        false => HeaderMap::new(),
+    };
+    if let Ok(id) = HeaderValue::from_str(&session.connection_id())
+        && !id.is_empty()
+    {
+        headers.insert("spotify-connection-id", id);
+    }
+    headers
 }
 
 /// How much a put matters when two are due at once: the stronger one goes out.

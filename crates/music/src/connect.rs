@@ -146,16 +146,45 @@ pub struct Roster {
     pub elsewhere: Option<Elsewhere>,
 }
 
+/// One person in a group session.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JamMember {
+    /// What the provider goes by to name the person, as removing them does.
+    pub id: String,
+    pub name: String,
+    /// The address of their picture, when they have one.
+    pub image: Option<String>,
+    /// Whether they own the session.
+    pub host: bool,
+    /// Whether they are the listener.
+    pub you: bool,
+}
+
 /// A group listening session the listener has joined, in which the host's playback plays here
 /// too.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Jam {
-    /// The display names of the other people in it. The listener is not among them.
-    pub members: Vec<String>,
+    /// Everyone in it, the listener too, in the order the provider lists them.
+    pub members: Vec<JamMember>,
     /// Whether the listener owns the session, which leaving ends for everyone.
     pub owner: bool,
     /// The link that invites others, when the listener owns the session.
     pub link: Option<String>,
+}
+
+impl Jam {
+    /// The person who owns the session, when the provider says who that is.
+    pub fn host(&self) -> Option<&JamMember> {
+        self.members.iter().find(|member| member.host)
+    }
+}
+
+/// A group session a link names, read before the listener joins it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Invite {
+    /// The link to join it by, which needs no lookup of its own.
+    pub link: String,
+    pub jam: Jam,
 }
 
 pub enum Event {
@@ -169,6 +198,8 @@ pub enum Event {
     },
     /// The group session changed: joined, updated, or `None` once it ended or was left.
     Jam(Option<Jam>),
+    /// What `Connect::peek` found, or `None` when the link names no group session.
+    Invite(Option<Invite>),
 }
 
 /// The connection to a provider's device network. Every call is fire-and-forget: what comes
@@ -206,6 +237,13 @@ pub trait Connect: Send + Sync {
     /// arrives as an `Event::Jam` once it started.
     fn start(&self);
 
+    /// Reads the group session a link names without joining it, so the listener can be asked.
+    /// What it found arrives as an `Event::Invite`.
+    fn peek(&self, link: &str);
+
     /// Leaves the group session joined, or ends the one the listener started.
     fn leave(&self);
+
+    /// Removes a member, by `JamMember::id`, from the group session the listener owns.
+    fn kick(&self, member: &str);
 }
