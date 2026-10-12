@@ -433,6 +433,7 @@ impl Devices {
     /// Plays what another device handed over, from where it left off.
     fn start(&mut self, start: Start, cx: &mut Context<Self>) {
         let Some(client) = self.session.read(cx).client() else {
+            log::warn!("connect: cannot start what was handed over, no client");
             return;
         };
         self.claimed = true;
@@ -570,7 +571,6 @@ pub(crate) fn collection_of(origin: &Origin) -> Option<Collection> {
         Whence::Album => Some(Collection::Album(origin.id.clone())),
         Whence::Playlist => Some(Collection::Playlist(origin.id.clone())),
         Whence::Saved => Some(Collection::Saved),
-        Whence::Radio => Some(Collection::Radio(origin.id.clone())),
         _ => None,
     }
 }
@@ -599,8 +599,18 @@ async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
             Some(Origin::playlist(id)),
         ),
         Some(Collection::Saved) => (client.saved_tracks().await?, Some(Origin::saved())),
-        // a radio is not read back; the track it names plays and the radio follows it
-        Some(Collection::Radio(_)) | None => (Vec::new(), None),
+        // a radio that was refused elsewhere plays here: its seed, then what the station brings
+        Some(Collection::Radio(id)) => {
+            let mut tracks = client
+                .track_radio(id, None)
+                .await
+                .map(|(tracks, _)| tracks)
+                .unwrap_or_default();
+            tracks.retain(|track| track.playable && track.id.as_deref() != Some(id));
+            tracks.insert(0, client.track(id).await?);
+            (tracks, Some(Origin::radio(id)))
+        }
+        None => (Vec::new(), None),
     };
 
     let at = |tracks: &[Track]| {
