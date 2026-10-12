@@ -313,6 +313,9 @@ struct Values {
     local_folders: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     hidden_nav: Vec<String>,
+    /// Missing system requirements the user asked never to hear about again.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    silenced_requirements: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     scrobbling: BTreeMap<String, Account>,
     appearance: Appearance,
@@ -344,9 +347,15 @@ struct Appearance {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     server_side_decorations: bool,
     /// The window's own corner rounding, independent of `rounding` (the UI element radius).
-    /// On Windows this maps onto DWM's two fixed presets; on Linux/FreeBSD it only has an
-    /// effect with client-side decorations, since server-side ones are the compositor's call.
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    /// On Windows this maps onto DWM's two fixed presets and on macOS onto the toolbar styles
+    /// AppKit sizes its corners by. On Linux/FreeBSD it only has an effect with client-side
+    /// decorations, since server-side ones are the compositor's call.
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
     window_rounding: String,
     window_controls: bool,
     #[cfg(not(target_os = "macos"))]
@@ -464,6 +473,7 @@ impl Default for Values {
             startup: DEFAULT_STARTUP.to_owned(),
             local_folders: Vec::new(),
             hidden_nav: Vec::new(),
+            silenced_requirements: Vec::new(),
             scrobbling: BTreeMap::new(),
             appearance: Appearance::default(),
         }
@@ -623,6 +633,8 @@ impl Default for Appearance {
             window_rounding: Rounding::Rounded.id().to_owned(),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             window_rounding: Rounding::Square.id().to_owned(),
+            #[cfg(target_os = "macos")]
+            window_rounding: Rounding::Subtle.id().to_owned(),
             window_controls: true,
             #[cfg(not(target_os = "macos"))]
             traffic_light_controls: false,
@@ -1056,7 +1068,12 @@ impl AppSettings {
         }
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
     pub fn window_rounding(&self) -> Rounding {
         Rounding::from_id(&self.values.appearance.window_rounding)
     }
@@ -1563,6 +1580,21 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
+    pub fn requirement_silenced(&self, slug: &str) -> bool {
+        self.values
+            .silenced_requirements
+            .iter()
+            .any(|silenced| silenced == slug)
+    }
+
+    pub fn silence_requirement(&mut self, slug: &str, cx: &mut Context<Self>) {
+        if self.requirement_silenced(slug) {
+            return;
+        }
+        self.values.silenced_requirements.push(slug.to_owned());
+        self.schedule_save(cx);
+    }
+
     pub fn set_startup(&mut self, screen: impl Into<String>, cx: &mut Context<Self>) {
         let screen = screen.into();
         if self.values.startup == screen {
@@ -1687,7 +1719,12 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "macos"
+    ))]
     pub fn set_window_rounding(&mut self, rounding: Rounding, cx: &mut Context<Self>) {
         self.values.appearance.window_rounding = rounding.id().to_owned();
         self.schedule_save(cx);
