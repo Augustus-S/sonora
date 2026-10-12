@@ -7,7 +7,6 @@
 use std::collections::HashSet;
 
 use anyhow::{Context as _, Result};
-use serde_json::Value;
 
 use crate::apple::client::{ALBUM_ARTISTS, AppleClient};
 use crate::apple::wire;
@@ -25,29 +24,33 @@ const VIEW_PAGE: usize = 100;
 const VIEW_PAGES: usize = 10;
 
 /// The whole discography and the appears-on view of one artist, once a library id has been
-/// turned into the catalog's. The artist page itself holds only the first ten albums and ten
-/// singles. A discography that cannot be read leaves those on the page.
+/// turned into the catalog's. The artist page itself holds only the first ten releases of each
+/// view. A discography that cannot be read leaves those on the page.
 pub(crate) async fn artist_catalogue(
     client: &AppleClient,
     artist_id: &str,
 ) -> Result<ArtistCatalogue> {
     let artist_id = client.catalog_artist(artist_id).await?;
     let path = client.catalog(&format!("/artists/{}", escape::component(&artist_id)));
-    let (answered, albums, singles) = tokio::join!(
+    let views = wire::DISCOGRAPHY
+        .iter()
+        .map(|name| whole_view(client, &artist_id, name));
+    let (answered, views) = tokio::join!(
         client.get(&path, &[("views", "appears-on-albums"), ALBUM_ARTISTS]),
-        whole_view(client, &artist_id, "full-albums"),
-        whole_view(client, &artist_id, "singles"),
+        futures::future::try_join_all(views),
     );
-    let answered = answered?;
-    let albums = match (albums, singles) {
-        (Ok(albums), Ok(singles)) => albums.into_iter().chain(singles).collect(),
-        (Err(error), _) | (_, Err(error)) => {
+    let body = answered?;
+    let answered: wire::Answer = wire::answer(&body);
+    let albums = match views {
+        Ok(views) => views.into_iter().flatten().collect(),
+        Err(error) => {
             log::warn!("apple: cannot read the discography of {artist_id}: {error:#}");
             Vec::new()
         }
     };
     let found = answered
-        .pointer("/data/0")
+        .data
+        .first()
         .context("apple music has no such artist")?;
     Ok(ArtistCatalogue {
         albums,
@@ -66,15 +69,17 @@ async fn related_albums(client: &AppleClient, album_id: &str) -> Result<Vec<Albu
     if AppleClient::is_mine(album_id) {
         return Ok(Vec::new());
     }
-    let answered = client
+    let body = client
         .get(
             &client.catalog(&format!("/albums/{}", escape::component(album_id))),
             &[("views", "related-albums"), ALBUM_ARTISTS],
         )
         .await
         .context("cannot read the related albums")?;
+    let answered: wire::Answer = wire::answer(&body);
     let found = answered
-        .pointer("/data/0")
+        .data
+        .first()
         .context("apple music has no such album")?;
     Ok(wire::view(found, "related-albums")
         .iter()
@@ -91,7 +96,7 @@ async fn more_from_artist(
     artist_id: &str,
 ) -> Result<(Vec<Album>, Vec<SavedArtist>)> {
     let artist_id = &client.catalog_artist(artist_id).await?;
-    let answered = client
+    let body = client
         .get(
             &client.catalog(&format!("/artists/{}", escape::component(artist_id))),
             &[
@@ -101,8 +106,10 @@ async fn more_from_artist(
         )
         .await
         .context("cannot read more from this artist")?;
+    let answered: wire::Answer = wire::answer(&body);
     let found = answered
-        .pointer("/data/0")
+        .data
+        .first()
         .context("apple music has no such artist")?;
     let more = wire::view(found, "full-albums")
         .iter()
@@ -119,15 +126,17 @@ async fn more_from_artist(
 
 /// A few releases by one similar artist, skipping the page's own album.
 async fn releases_by(client: &AppleClient, album_id: &str, artist_id: &str) -> Result<Vec<Album>> {
-    let answered = client
+    let body = client
         .get(
             &client.catalog(&format!("/artists/{}", escape::component(artist_id))),
             &[("views", "full-albums,singles"), ALBUM_ARTISTS],
         )
         .await
         .with_context(|| format!("cannot read releases by similar artist {artist_id}"))?;
+    let answered: wire::Answer = wire::answer(&body);
     let found = answered
-        .pointer("/data/0")
+        .data
+        .first()
         .with_context(|| format!("apple music has no such artist {artist_id}"))?;
     Ok(wire::view(found, "full-albums")
         .iter()
@@ -223,22 +232,16 @@ async fn whole_view(client: &AppleClient, artist_id: &str, name: &str) -> Result
     let mut albums = Vec::new();
     for page in 0..VIEW_PAGES {
         let offset = (page * VIEW_PAGE).to_string();
-        let answered = client
+        let body = client
             .get(
                 &path,
                 &[("limit", &limit), ("offset", &offset), ALBUM_ARTISTS],
             )
             .await
             .with_context(|| format!("cannot read the {name} of artist {artist_id}"))?;
-        albums.extend(
-            answered
-                .get("data")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(wire::album),
-        );
-        if answered.get("next").is_none() {
+        let outline = wire::outline(&body);
+        albums.extend(outline.read(&wire::album));
+        if !outline.next.is_present() {
             break;
         }
     }

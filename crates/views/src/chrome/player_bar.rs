@@ -19,7 +19,7 @@ use ui::{
 use crate::chrome::SidebarRight;
 use crate::chrome::devices::DevicePicker;
 use crate::shared::menus::ItemMenu;
-use crate::shared::transport::{NOTCH, like, moved, percent, steered, transport, volume_icon};
+use crate::shared::transport::{NOTCH, fraction, like, moved, percent, transport, volume_icon};
 
 const SEEK_MAX: f32 = 560.;
 const VOLUME_WIDTH: f32 = 110.;
@@ -83,6 +83,15 @@ impl PlayerBar {
         self.track_menu.reset(cx);
         self.context_menu = Some((track, position));
         cx.notify();
+    }
+
+    /// Opens the track menu on whatever is playing when the click lands, so a render does not
+    /// have to hold a copy of the track for a menu that is rarely asked for.
+    fn open_playing_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(track) = self.playback.read(cx).shown_track(cx) else {
+            return;
+        };
+        self.open_context_menu(track, position, cx);
     }
 
     fn commit_seek(&mut self, cx: &mut Context<Self>) {
@@ -248,13 +257,11 @@ impl PlayerBar {
         let muted = theme.muted_foreground;
         let artwork = ui::snapped(theme.metrics.row, window);
         let artists = theme.text(ui::Text::Small);
-        let track = match steered(cx) {
-            Some(steered) => steered.track,
-            None => self.playback.read(cx).track().cloned(),
-        };
-        let cover = track.as_ref().and_then(|track| track.cover.clone());
-        let explicit = track.as_ref().is_some_and(|track| track.explicit);
-        let like = like(track.clone(), cx);
+        let shown = self.playback.read(cx).shown_track(cx);
+        let track = shown.as_ref();
+        let cover = track.and_then(|track| track.cover.clone());
+        let explicit = track.is_some_and(|track| track.explicit);
+        let like = like(track, &self.playback, cx);
 
         div()
             .flex()
@@ -266,15 +273,15 @@ impl PlayerBar {
                 div()
                     .id("now-playing-artwork")
                     .when_some(
-                        track.as_ref().and_then(|track| track.album_id.clone()),
+                        track.and_then(|track| track.album_id.clone()),
                         |this, album| this.link(Destination::Album(album.into())),
                     )
-                    .when_some(track.clone(), |this, context| {
+                    .when(track.is_some(), |this| {
                         this.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                 window.prevent_default();
-                                this.open_context_menu(context.clone(), event.position, cx);
+                                this.open_playing_menu(event.position, cx);
                             }),
                         )
                     })
@@ -294,30 +301,25 @@ impl PlayerBar {
                                 .min_w_0()
                                 .items_center()
                                 .gap_1()
-                                .child(match &track {
-                                    Some(track) => {
-                                        let context_track = track.clone();
-                                        div()
-                                            .id("now-playing-track")
-                                            .when_some(track.album_id.clone(), |this, album_id| {
-                                                this.hover(|style| style.underline())
-                                                    .link(Destination::Album(album_id.into()))
-                                            })
-                                            .on_mouse_down(
-                                                MouseButton::Right,
-                                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                .child(match track {
+                                    Some(track) => div()
+                                        .id("now-playing-track")
+                                        .when_some(track.album_id.clone(), |this, album_id| {
+                                            this.hover(|style| style.underline())
+                                                .link(Destination::Album(album_id.into()))
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Right,
+                                            cx.listener(
+                                                move |this, event: &MouseDownEvent, window, cx| {
                                                     window.prevent_default();
-                                                    this.open_context_menu(
-                                                        context_track.clone(),
-                                                        event.position,
-                                                        cx,
-                                                    );
-                                                }),
-                                            )
-                                            .child(SharedString::from(track.name.clone()))
-                                            .min_w_0()
-                                            .truncate()
-                                    }
+                                                    this.open_playing_menu(event.position, cx);
+                                                },
+                                            ),
+                                        )
+                                        .child(SharedString::from(track.name.clone()))
+                                        .min_w_0()
+                                        .truncate(),
                                     None => div()
                                         .id("now-playing-album")
                                         .child(t!("player-nothing-playing"))
@@ -330,14 +332,17 @@ impl PlayerBar {
                                 })
                                 .child(like),
                         )
-                        .when_some(track.clone(), |this, track| {
+                        .when_some(track, |this, track| {
                             this.child(
                                 InlineLinks::new(
                                     "now-playing-artist",
-                                    track.artist_refs.into_iter().map(|artist| {
-                                        InlineLink::new(artist.name, artist.id.map(Into::into))
+                                    track.artist_refs.iter().map(|artist| {
+                                        InlineLink::new(
+                                            artist.name.clone(),
+                                            artist.id.clone().map(Into::into),
+                                        )
                                     }),
-                                    track.artists,
+                                    track.artists.clone(),
                                     muted,
                                 )
                                 .text_size(artists)
@@ -379,24 +384,9 @@ impl Render for PlayerBar {
         };
 
         let playback = self.playback.read(cx);
-        let (seekable, elapsed, total, progress) = match steered(cx) {
-            Some(steered) => (
-                !steered.duration.is_zero(),
-                steered.position,
-                steered.duration,
-                steered.position.as_secs_f32() / steered.duration.as_secs_f32().max(1.),
-            ),
-            None => (
-                playback.track().is_some(),
-                playback.position(),
-                playback
-                    .track()
-                    .map(|track| track.duration)
-                    .unwrap_or(Duration::ZERO),
-                playback.progress(),
-            ),
-        };
-        let progress = self.pending.unwrap_or(progress);
+        let seekable = playback.shown_track(cx).is_some();
+        let (elapsed, total) = playback.shown_time(cx);
+        let progress = self.pending.unwrap_or_else(|| fraction(elapsed, total));
         let clock_width = clock_text
             * match total.as_secs() >= 3600 {
                 true => CLOCK_LONG,
