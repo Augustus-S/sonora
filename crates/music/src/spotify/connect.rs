@@ -1204,9 +1204,10 @@ fn read_session(body: &[u8], own: &str) -> Option<Read> {
     if session.session_id.is_empty() {
         return None;
     }
-    let link = Some(&session.join_session_url)
-        .filter(|_| session.is_session_owner)
-        .and_then(|url| invite(url));
+    let link = session
+        .is_session_owner
+        .then(|| invite(&session.join_session_url))
+        .flatten();
     let listed = session.session_members.iter().map(|member| {
         let image = match member.image_url.is_empty() {
             true => &member.large_image_url,
@@ -1254,10 +1255,11 @@ fn members_of<'a>(
             })
         })
         .collect::<Vec<_>>();
-    if owned && !members.iter().any(|member| member.host) {
-        if let Some(you) = members.iter_mut().find(|member| member.you) {
-            you.host = true;
-        }
+    if owned
+        && !members.iter().any(|member| member.host)
+        && let Some(you) = members.iter_mut().find(|member| member.you)
+    {
+        you.host = true;
     }
     members
 }
