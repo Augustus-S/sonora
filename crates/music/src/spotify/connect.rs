@@ -946,16 +946,31 @@ fn empty_body() -> HeaderMap {
     headers
 }
 
-/// The token of a group session in a shared link, following a `spotify.link` short link to the
-/// page it leads to first.
+/// The token of a group session in a shared link. Only an https `spotify.link` short link is
+/// fetched, and then its address or its page names the session; no other text makes the app
+/// fetch anything.
 async fn jam_token(link: &str) -> Option<String> {
-    let mut link = link.trim().to_owned();
-    if link.contains("spotify.link") {
-        let response = reqwest::get(&link).await.ok()?;
-        link = response.url().to_string();
+    let link = link.trim();
+    let short = reqwest::Url::parse(link)
+        .ok()
+        .filter(|url| url.scheme() == "https" && url.host_str() == Some("spotify.link"));
+    let Some(short) = short else {
+        return token_in(link);
+    };
+    let response = reqwest::get(short).await.ok()?;
+    if let Some(token) = token_in(response.url().as_str()) {
+        return Some(token);
     }
-    let rest = link.split("socialsession/").nth(1)?;
-    let token = rest.split(['?', '/', '#']).next()?;
+    // a short link sometimes answers with a page that names the session instead of redirecting
+    token_in(&response.text().await.ok()?)
+}
+
+/// The token that follows `socialsession/` in a link or a page.
+fn token_in(text: &str) -> Option<String> {
+    let rest = text.split("socialsession/").nth(1)?;
+    let token = rest
+        .split(|c: char| c.is_whitespace() || "?/#&\"'<>\\".contains(c))
+        .next()?;
     (!token.is_empty()).then(|| token.to_owned())
 }
 
