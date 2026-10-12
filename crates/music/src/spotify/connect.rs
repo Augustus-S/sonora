@@ -320,6 +320,21 @@ impl Worker {
                 ..Default::default()
             },
         };
+        // Spotify answers a move here only once this device has answered the command it sends
+        // for it, which the loop can give only if it is not waiting on the move itself
+        if to == mine {
+            let session = self.session.clone();
+            self.session.spawn(async move {
+                let answer = session
+                    .spclient()
+                    .transfer(&from, &to, Some(&request))
+                    .await;
+                if let Err(error) = answer {
+                    log::warn!("connect: cannot move playback here: {error}");
+                }
+            });
+            return;
+        }
         let answer = self
             .session
             .spclient()
