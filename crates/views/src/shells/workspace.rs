@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{AnyView, App, Context, Entity, FocusHandle, Render, StyleRefinement};
-use gpui::{Window, div};
+use gpui::{Window, deferred, div};
 use input::WORKSPACE_CONTEXT;
 use state::{Playback, Queue, SideTab};
 use ui::{
@@ -11,8 +11,8 @@ use ui::{
 };
 
 use crate::chrome::{
-    Chrome, JamCode, JamInvite, PlayerBar, SidebarLeft, SidebarRight, TitleBarOptions, ToastStack,
-    UpdateNotice,
+    AppNotice, Chrome, JamCode, JamInvite, PlayerBar, SidebarLeft, SidebarRight, TitleBarOptions,
+    ToastStack,
 };
 use crate::shared::confirm::Confirm;
 use crate::shared::menus::CardMenu;
@@ -33,7 +33,7 @@ pub(crate) struct Workspace {
     jam_invite: Entity<JamInvite>,
     jam_code: Entity<JamCode>,
     toasts: Entity<ToastStack>,
-    notice: Entity<UpdateNotice>,
+    notice: Entity<AppNotice>,
     content: AnyView,
     /// A screen's own header, floated over the top of the page and outside its transition.
     /// The page pads itself to start beneath it.
@@ -65,7 +65,7 @@ impl Workspace {
             jam_invite: cx.new(JamInvite::new),
             jam_code: cx.new(JamCode::new),
             toasts: cx.new(ToastStack::new),
-            notice: cx.new(UpdateNotice::new),
+            notice: cx.new(AppNotice::new),
             content,
             header: None,
             transition: None,
@@ -339,6 +339,9 @@ impl Render for Workspace {
                     )
                     .child(self.toasts.clone()),
             )
+            // deferred so the cards sit above the sidebars' resize grips, and ahead of the
+            // dialogs so those still cover them
+            .child(deferred(self.notice.clone()))
             .child(self.card_menu.clone())
             .child(self.playlist_editor.clone())
             .child(self.tag_editor.clone())
@@ -346,6 +349,5 @@ impl Render for Workspace {
             .child(self.widevine.clone())
             .child(self.jam_invite.clone())
             .child(self.jam_code.clone())
-            .child(self.notice.clone())
     }
 }
