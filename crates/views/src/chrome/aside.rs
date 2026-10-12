@@ -24,7 +24,7 @@ use ui::{
     ease_out_cubic, ease_out_expo, eyebrow, faint, mix, snapped, vacant,
 };
 
-use crate::chrome::{Chrome, section_label};
+use crate::chrome::{Chrome, PlayerBar, section_label};
 use crate::shared::effects;
 use crate::shared::menus::ItemMenu;
 use crate::shared::pins::Pinned as _;
@@ -1051,7 +1051,7 @@ impl Aside {
                         cx.notify();
                     })),
                 cx,
-            )),
+            ), cx),
         )
     }
 
@@ -1068,11 +1068,13 @@ impl Aside {
         };
         let perch = ui::return_to("queue-return-top", &self.scrollbar, goal, tooltip, cx)?;
 
-        Some(self.raised(perch))
+        Some(self.raised(perch, cx))
     }
 
     /// Lifts a floating control clear of the transport a stripped aside leaves underneath it.
-    fn raised(&self, perch: Div) -> Div {
+    fn raised(&self, perch: Div, cx: &App) -> Div {
+        // the strip over the player bar sits on the aside's bottom edge, so lift clear of it too
+        let perch = perch.mb(PlayerBar::strip(self.playback.read(cx), cx));
         match self.titled {
             true => perch,
             false => perch.bottom_16(),
