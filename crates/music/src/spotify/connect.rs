@@ -7,7 +7,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt as _;
@@ -74,6 +74,8 @@ const BACKOFF_LAST: Duration = Duration::from_secs(60);
 
 /// How long a shared short link may take to answer before it is given up on.
 const LINK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How much of a short link's page is read when looking for the session in it.
+const LINK_PAGE_LIMIT: usize = 256 * 1024;
 
 /// Where a Jam's token goes to make a link that opens in Spotify's apps and on the web.
 const INVITE: &str = "https://open.spotify.com/socialsession/";
@@ -400,12 +402,14 @@ impl Worker {
             Ok(body) => {
                 log::info!("connect: joined a jam");
                 // the update that follows has the members, and this has them too when it reads
-                let jam = read_session(&body, &self.session.username()).map(|read| read.jam);
-                self.out
-                    .send(Event::Jam(Some(jam.unwrap_or_default())))
-                    .ok();
+                if let Some(read) = read_session(&body, &self.session.username()) {
+                    self.out.send(Event::Jam(Some(read.jam))).ok();
+                }
             }
-            Err(error) => log::warn!("connect: cannot join the jam: {error}"),
+            Err(error) => {
+                log::warn!("connect: cannot join the jam: {error}");
+                self.out.send(Event::JamFailed).ok();
+            }
         }
     }
 
@@ -432,7 +436,9 @@ impl Worker {
             )
             .await;
         match answer {
-            Ok(body) => Ok(read_session(&body, &session.username())),
+            Ok(body) => read_session(&body, &session.username())
+                .map(Some)
+                .ok_or_else(|| Error::data_loss("the jam answer cannot be read")),
             Err(error) if error.kind == ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
@@ -500,9 +506,15 @@ impl Worker {
                     log::info!("connect: started a jam, link {}", read.jam.link.is_some());
                     self.out.send(Event::Jam(Some(read.jam))).ok();
                 }
-                None => log::warn!("connect: the jam that started cannot be read"),
+                None => {
+                    log::warn!("connect: the jam that started cannot be read");
+                    self.out.send(Event::JamFailed).ok();
+                }
             },
-            Err(error) => log::warn!("connect: cannot start a jam: {error}"),
+            Err(error) => {
+                log::warn!("connect: cannot start a jam: {error}");
+                self.out.send(Event::JamFailed).ok();
+            }
         }
     }
 
@@ -510,7 +522,7 @@ impl Worker {
     /// only hand it on. A session that cannot be read is left as it is, since it may be owned.
     async fn leave(&mut self) {
         let owned = match Self::current_session(&self.session).await {
-            Ok(Some(read)) if read.owner => Some(read.id),
+            Ok(Some(read)) if read.owner && is_path_id(&read.id, "_-") => Some(read.id),
             Ok(_) => None,
             Err(error) => return log::warn!("connect: cannot read the jam to leave it: {error}"),
         };
@@ -554,15 +566,11 @@ impl Worker {
     /// who is left without waiting for the dealer to.
     async fn kick(&mut self, member: &str) {
         // the id goes into the path, so nothing else than what an id is made of is let through
-        if member.is_empty()
-            || !member
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
-        {
+        if !is_path_id(member, "._-") {
             return log::warn!("connect: not a member id to remove");
         }
         let id = match Self::current_session(&self.session).await {
-            Ok(Some(read)) if read.owner => read.id,
+            Ok(Some(read)) if read.owner && is_path_id(&read.id, "_-") => read.id,
             Ok(_) => return log::warn!("connect: only the owner of a jam can remove a member"),
             Err(error) => {
                 return log::warn!("connect: cannot read the jam to remove from: {error}");
@@ -784,14 +792,19 @@ impl Worker {
         self.want_put(reason).await;
     }
 
-    /// Asks for the state to be put. Puts are spaced out, and held back for longer each time
-    /// Spotify refuses one for coming too often. Whatever the wait, the put that goes out
-    /// carries the state as it is then, so the changes in between cost nothing.
-    async fn want_put(&mut self, reason: PutStateReason) {
+    /// Keeps `reason` as the pending put unless one that matters more is already held.
+    fn hold(&mut self, reason: PutStateReason) {
         self.pending = Some(match self.pending {
             Some(held) if rank(held) > rank(reason) => held,
             _ => reason,
         });
+    }
+
+    /// Asks for the state to be put. Puts are spaced out, and held back for longer each time
+    /// Spotify refuses one for coming too often. Whatever the wait, the put that goes out
+    /// carries the state as it is then, so the changes in between cost nothing.
+    async fn want_put(&mut self, reason: PutStateReason) {
+        self.hold(reason);
 
         let now = Instant::now();
         let due = [self.last_put.map(|at| at + PUT_GAP), self.blocked_until]
@@ -835,10 +848,7 @@ impl Worker {
                 let until = Instant::now() + self.backoff;
                 self.blocked_until = Some(until);
                 self.flush_at = Some(until);
-                self.pending = Some(match self.pending {
-                    Some(held) if rank(held) > rank(reason) => held,
-                    _ => reason,
-                });
+                self.hold(reason);
                 log::warn!(
                     "connect: Spotify asked for fewer state updates, waiting {}s",
                     self.backoff.as_secs()
@@ -1102,7 +1112,7 @@ async fn control(session: Session, device: &str, command: Command) {
         ),
         Command::Start(start) => {
             let Some(command) = play_command(&start, &session.username()) else {
-                return;
+                return log::warn!("connect: nothing to send for {what}");
             };
             (
                 Method::POST,
@@ -1112,7 +1122,7 @@ async fn control(session: Session, device: &str, command: Command) {
         }
         command => {
             let Some(command) = wire_command(&command) else {
-                return;
+                return log::warn!("connect: nothing to send for {what}");
             };
             (
                 Method::POST,
@@ -1152,16 +1162,29 @@ async fn jam_token(link: &str) -> Option<String> {
     let Some(short) = short else {
         return token_in(link);
     };
-    let client = reqwest::Client::builder()
-        .timeout(LINK_TIMEOUT)
-        .build()
-        .ok()?;
-    let response = client.get(short).send().await.ok()?;
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(LINK_TIMEOUT)
+                .build()
+                .ok()
+        })
+        .as_ref()?;
+    let mut response = client.get(short).send().await.ok()?;
     if let Some(token) = token_in(response.url().as_str()) {
         return Some(token);
     }
-    // a short link sometimes answers with a page that names the session instead of redirecting
-    token_in(&response.text().await.ok()?)
+    // a short link sometimes answers with a page that names the session instead of redirecting,
+    // and only the start of a page is read
+    let mut page = Vec::new();
+    while page.len() < LINK_PAGE_LIMIT {
+        match response.chunk().await.ok()? {
+            Some(chunk) => page.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    token_in(&String::from_utf8_lossy(&page))
 }
 
 /// The token that follows `socialsession/` in a link or a page, or `sessions/join/` in the
@@ -1345,6 +1368,15 @@ fn jam_headers(session: &Session, post: bool) -> HeaderMap {
         headers.insert("spotify-connection-id", id);
     }
     headers
+}
+
+/// Whether `id` is non-empty and made only of letters, digits and the `extra` characters, which
+/// makes it safe to put in a URL path.
+fn is_path_id(id: &str, extra: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
 }
 
 /// How much a put matters when two are due at once: the stronger one goes out.

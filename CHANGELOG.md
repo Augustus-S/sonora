@@ -18,9 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - While Show as a Spotify device is on, a song you like or unlike in Spotify's other apps
   updates its heart in Sonora right away, without a restart.
 - While Show as a Spotify device is on, copy a friend's Jam link and pick Join a Jam from the
-  clipboard in the devices menu. Sonora asks whether to join the host's Jam first. A strip above
-  the player bar names the Jam and shows who is in it, a click on it lists everyone with their
-  pictures and who hosts, and the same menu leaves it.
+  clipboard in the devices menu and confirm. A strip above the player bar shows who is in the
+  Jam, and the same menu leaves it.
 - The devices menu can start a Jam, copy its link to share, and end it. Starting one shows a
   code others can scan to join. As host you can remove people from the list.
 

@@ -465,6 +465,10 @@ impl Devices {
                 self.invite = invite;
                 cx.notify();
             }
+            Event::JamFailed => {
+                self.awaiting_code = false;
+                Toasts::show(Outcome::Failed, "toast-jam-failed", cx);
+            }
         }
     }
 

@@ -212,6 +212,8 @@ pub enum Event {
     Jam(Option<Jam>),
     /// What `Connect::peek` found, or `None` when the link names no group session.
     Invite(Option<Invite>),
+    /// Starting or joining a group session failed.
+    JamFailed,
 }
 
 /// The connection to a provider's device network. Every call is fire-and-forget: what comes
