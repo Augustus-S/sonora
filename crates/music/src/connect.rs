@@ -148,7 +148,8 @@ pub struct Roster {
 /// too.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Jam {
-    /// The display names of the people in it, the host first when known.
+    /// The display names of the other people in it, the host first when known. The listener is
+    /// not among them.
     pub members: Vec<String>,
 }
 

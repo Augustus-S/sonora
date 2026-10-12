@@ -365,7 +365,7 @@ impl Worker {
                 // the update that follows has the members, and this has them too when it is JSON
                 let jam = serde_json::from_slice(&body)
                     .ok()
-                    .and_then(|json| session_of(&json));
+                    .and_then(|json| session_of(&json, &self.session.username()));
                 self.out
                     .send(Event::Jam(Some(jam.unwrap_or_default())))
                     .ok();
@@ -381,14 +381,16 @@ impl Worker {
             .request(&Method::GET, JAM_CURRENT, None, None)
             .await
             .ok()?;
+        let own = session.username();
         let jam = match serde_json::from_slice(&body) {
-            Ok(json) => session_of(&json),
+            Ok(json) => session_of(&json, &own),
             Err(_) => SocialSession::parse_from_bytes(&body)
                 .ok()
                 .map(|session| Jam {
                     members: session
                         .session_members
                         .iter()
+                        .filter(|member| member.username != own && member.id != own)
                         .map(|member| member.display_name.clone())
                         .filter(|name| !name.is_empty())
                         .collect(),
@@ -428,7 +430,7 @@ impl Worker {
             reason,
             Some("SESSION_DELETED" | "YOU_LEFT" | "YOU_WERE_KICKED")
         );
-        match (ended, session_of(&json)) {
+        match (ended, session_of(&json, &self.session.username())) {
             (true, _) => self.out.send(Event::Jam(None)).ok(),
             // an update with no member list says nothing about who is in it
             (false, Some(jam)) => self.out.send(Event::Jam(Some(jam))).ok(),
@@ -950,8 +952,8 @@ async fn jam_token(link: &str) -> Option<String> {
 }
 
 /// The members of the group session in a JSON `Session`, or in a `SessionUpdate` holding one,
-/// whichever case its keys are in.
-fn session_of(json: &serde_json::Value) -> Option<Jam> {
+/// whichever case its keys are in, without the account `own`.
+fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
     let session = json.get("session").unwrap_or(json);
     let members = ["session_members", "sessionMembers"]
         .into_iter()
@@ -959,6 +961,11 @@ fn session_of(json: &serde_json::Value) -> Option<Jam> {
         .as_array()?;
     let members = members
         .iter()
+        .filter(|member| {
+            !["username", "id"]
+                .into_iter()
+                .any(|key| member.get(key).and_then(serde_json::Value::as_str) == Some(own))
+        })
         .filter_map(|member| {
             ["display_name", "displayName", "username"]
                 .into_iter()
