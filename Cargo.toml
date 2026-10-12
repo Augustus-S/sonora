@@ -137,6 +137,7 @@ reqwest = { version = "0.13", default-features = false, features = [
   "query",
   "rustls",
 ] }
+qrcodegen = "1"
 raw-window-handle = "0.6"
 resvg = { version = "0.46", default-features = false }
 roxmltree = "0.21"
