@@ -555,7 +555,12 @@ impl Render for PlayerBar {
                         .size(px(BANNER_ICON))
                         .text_color(theme.foreground),
                 )
-                .child(div().child(t!("devices-jam-banner", members = members, device = device)))
+                .child(div().child(t!(
+                    "devices-jam-banner",
+                    count = jam.members.len(),
+                    members = members,
+                    device = device
+                )))
         });
 
         content

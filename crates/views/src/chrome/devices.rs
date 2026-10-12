@@ -105,7 +105,9 @@ impl Render for DevicePicker {
                 items.push(
                     MenuItem::new("jam-leave", t!("devices-jam-leave"))
                         .icon("icons/user.svg")
-                        .detail(jam.members.join(", "))
+                        .when(!jam.members.is_empty(), |item| {
+                            item.detail(jam.members.join(", "))
+                        })
                         .on_click({
                             let devices = devices.clone();
                             move |_, _, cx| devices.read(cx).leave()
