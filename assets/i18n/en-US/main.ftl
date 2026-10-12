@@ -244,6 +244,8 @@ player-devices = Devices
 devices-this-computer = This computer
 devices-pause = Pause
 devices-resume = Resume
+devices-elsewhere-banner = Playing on { $device }
+devices-elsewhere-here = Play here
 fullscreen-artwork = Artwork
 
 # filters

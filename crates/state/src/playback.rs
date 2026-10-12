@@ -598,7 +598,8 @@ impl Playback {
     }
 
     /// Sends the command `make` builds to the other device that has playback, if one does, and
-    /// says whether it did. A caller that got `true` leaves its own engine and queue alone.
+    /// says whether it did. A caller that got `true` leaves its own engine and queue alone, except
+    /// that a `Start` the device refuses is played here once it comes back as an event.
     fn steer(&self, make: impl FnOnce(&Steered) -> Command, cx: &App) -> bool {
         let Some((devices, steered)) = self.steering(cx) else {
             return false;
@@ -621,7 +622,10 @@ impl Playback {
         self.steer(
             |_| {
                 Command::Start(connect::Start {
-                    collection: origin.and_then(collection_of),
+                    collection: origin.and_then(|origin| match origin.whence {
+                        Whence::Radio => Some(connect::Collection::Radio(origin.id.clone())),
+                        _ => collection_of(origin),
+                    }),
                     track: Some(id),
                     ..Default::default()
                 })

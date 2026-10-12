@@ -26,6 +26,12 @@ const VOLUME_WIDTH: f32 = 110.;
 const VOLUME_TIGHT: f32 = 72.;
 const CLOCK_SHORT: f32 = 3.4;
 const CLOCK_LONG: f32 = 5.4;
+/// The height of the strip above the bar that names the other device playback is on.
+const ELSEWHERE: f32 = 28.;
+const ELSEWHERE_ICON: f32 = 14.;
+/// How much of the popover colour the strip keeps over its blur, as a menu does, so what it
+/// covers does not read through the text.
+const ELSEWHERE_FILL: f32 = 0.75;
 
 pub(crate) struct PlayerBar {
     playback: Entity<Playback>,
@@ -508,14 +514,61 @@ impl Render for PlayerBar {
                         .items_center()
                         .justify_end()
                         .gap_2()
+                        // never narrower than its buttons, or they spill over the seek bar's clock
                         .flex_1()
-                        .min_w_0()
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
                         .child(self.fullscreen_button()),
                 ),
         };
 
-        content.when_some(context_menu, |this, menu| this.child(menu))
+        let frosting = ui::blurring(cx);
+        let fill = match frosting {
+            true => theme.popover.opacity(ELSEWHERE_FILL),
+            false => theme.popover,
+        };
+        let elsewhere = self.playback.read(cx).steered(cx).map(|steered| {
+            let devices = Sonora::global(cx).devices.clone();
+            div()
+                .absolute()
+                .left_0()
+                .bottom(height)
+                .w_full()
+                .h(px(ELSEWHERE))
+                .px_5()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(theme.text(ui::Text::Small))
+                .text_color(theme.foreground)
+                .bg(fill)
+                .when(frosting, ui::frost)
+                .child(
+                    gpui::svg()
+                        .path(icons::path("icons/monitor-speaker.svg"))
+                        .size(px(ELSEWHERE_ICON))
+                        .flex_none()
+                        .text_color(theme.foreground),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(t!("devices-elsewhere-banner", device = steered.device.name)),
+                )
+                .child(
+                    Button::new("elsewhere-here")
+                        .ghost()
+                        .small()
+                        .label(t!("devices-elsewhere-here"))
+                        .on_click(move |_, _, cx| devices.read(cx).transfer_here()),
+                )
+        });
+
+        content
+            .relative()
+            .when_some(elsewhere, |this, banner| this.child(banner))
+            .when_some(context_menu, |this, menu| this.child(menu))
     }
 }

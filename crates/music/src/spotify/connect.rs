@@ -308,7 +308,16 @@ impl Worker {
             Input::Publish(now) => self.publish(now).await,
             Input::Transfer(to) => self.transfer(to).await,
             Input::Control(device, command) => {
-                control(self.session.clone(), &device, command).await
+                let start = match &command {
+                    Command::Start(start) => Some(start.clone()),
+                    _ => None,
+                };
+                let sent = control(self.session.clone(), &device, command).await;
+                // a pick the other device refused plays here rather than going nowhere
+                if let Some(start) = start.filter(|_| !sent) {
+                    log::info!("connect: {device} did not take the pick, so it plays here");
+                    self.out.send(Event::Command(Command::Start(start))).ok();
+                }
             }
         }
     }
@@ -328,9 +337,18 @@ impl Worker {
         let blocked = self
             .blocked_until
             .is_some_and(|until| until > Instant::now());
-        if from == mine && to != mine && self.now.is_some() && !blocked {
+        let put = from == mine && to != mine && self.now.is_some() && !blocked;
+        if put {
             self.put(PutStateReason::PLAYER_STATE_CHANGED).await;
         }
+        log::info!(
+            "connect: moving playback, from here {}, state put {put}, held back {blocked}, at {:?}s, playing {:?}",
+            from == mine,
+            self.now
+                .as_ref()
+                .map(|now| self.live_position(now).as_secs()),
+            self.now.as_ref().map(|now| now.playing),
+        );
         // without this the device that takes over may start paused
         let request = TransferRequest {
             transfer_options: TransferOptions {
@@ -338,6 +356,21 @@ impl Worker {
                 ..Default::default()
             },
         };
+        // Spotify answers a move here only once this device has answered the command it sends
+        // for it, which the loop can give only if it is not waiting on the move itself
+        if to == mine {
+            let session = self.session.clone();
+            self.session.spawn(async move {
+                let answer = session
+                    .spclient()
+                    .transfer(&from, &to, Some(&request))
+                    .await;
+                if let Err(error) = answer {
+                    log::warn!("connect: cannot move playback here: {error}");
+                }
+            });
+            return;
+        }
         let answer = self
             .session
             .spclient()
@@ -345,13 +378,13 @@ impl Worker {
             .await;
         match answer {
             Ok(_) => {
-                log::info!("connect: moved playback from {from} to {to}");
+                log::info!("connect: moved playback");
                 // the cluster naming the new device is no longer older than the claim
                 if from == mine && to != mine {
                     self.claimed_at = None;
                 }
             }
-            Err(error) => log::warn!("connect: cannot move playback from {from} to {to}: {error}"),
+            Err(error) => log::warn!("connect: cannot move playback: {error}"),
         }
     }
 
@@ -395,7 +428,16 @@ impl Worker {
             return;
         };
         self.active_device = cluster.active_device_id.clone();
-        self.out.send(Event::Roster(self.roster(&cluster))).ok();
+        let roster = self.roster(&cluster);
+        let elsewhere = match roster.elsewhere.is_some() {
+            true => "playback on another device",
+            false => "no playback elsewhere",
+        };
+        log::info!(
+            "connect: listed, other devices: {}, {elsewhere}",
+            roster.devices.len()
+        );
+        self.out.send(Event::Roster(roster)).ok();
         // something may have been playing before the device was listed
         if self.now.is_some() {
             self.sync(None).await;
@@ -775,8 +817,10 @@ impl Worker {
     }
 }
 
-/// Sends a command to another device of the account through the session.
-async fn control(session: Session, device: &str, command: Command) {
+/// Sends a command to another device of the account through the session. Returns `false` when
+/// the request failed, so a caller can play the pick here instead; `true` when it was sent or
+/// there was nothing to send.
+async fn control(session: Session, device: &str, command: Command) -> bool {
     let mine = session.device_id();
     let what = format!("{command:?}");
     let (method, endpoint, body) = match command {
@@ -787,7 +831,7 @@ async fn control(session: Session, device: &str, command: Command) {
         ),
         Command::Start(start) => {
             let Some(command) = play_command(&start, &session.username()) else {
-                return;
+                return true;
             };
             (
                 Method::POST,
@@ -797,7 +841,7 @@ async fn control(session: Session, device: &str, command: Command) {
         }
         command => {
             let Some(command) = wire_command(&command) else {
-                return;
+                return true;
             };
             (
                 Method::POST,
@@ -814,8 +858,12 @@ async fn control(session: Session, device: &str, command: Command) {
         .spclient()
         .request(&method, &endpoint, Some(headers), Some(body.as_bytes()))
         .await;
-    if let Err(error) = answer {
-        log::warn!("connect: cannot send {what} to {device}: {error}");
+    match answer {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("connect: cannot send {what} to {device}: {error}");
+            false
+        }
     }
 }
 
@@ -937,6 +985,7 @@ fn collection_uri(collection: &Collection, username: &str) -> String {
         Collection::Album(id) => format!("spotify:album:{id}"),
         Collection::Playlist(id) => format!("spotify:playlist:{id}"),
         Collection::Saved => format!("spotify:user:{username}:collection"),
+        Collection::Radio(id) => format!("spotify:station:track:{id}"),
     }
 }
 
@@ -1041,6 +1090,7 @@ fn started_by_transfer(state: TransferState) -> Start {
         collection: context.uri.as_deref().and_then(collection),
         upcoming: queued.chain(following).take(CARRIED).collect(),
         track,
+        index: None,
         position: Duration::from_millis(position),
         paused,
     }
@@ -1056,14 +1106,33 @@ fn started_by_play(play: &PlayCommand) -> Start {
         .filter_map(listed_id)
         .collect::<Vec<_>>();
 
+    // the same order librespot resolves a skip in: uri, then uid, then place
     let skip = play.options.skip_to.as_ref();
     let track = skip
         .and_then(|skip| skip.track_uri.as_deref())
         .and_then(track_id)
         .or_else(|| {
+            let uid = skip?.track_uid.as_deref().filter(|uid| !uid.is_empty())?;
+            play.context
+                .pages
+                .iter()
+                .flat_map(|page| page.tracks.iter())
+                .find(|track| track.uid.as_deref() == Some(uid))
+                .and_then(listed_id)
+        })
+        .or_else(|| {
             let index = skip.and_then(|skip| skip.track_index)? as usize;
-            listed.get(index).cloned()
+            // the place counts every entry of the page, including ones that name no track
+            play.context
+                .pages
+                .iter()
+                .flat_map(|page| page.tracks.iter())
+                .nth(index)
+                .and_then(listed_id)
         });
+    let index = skip
+        .and_then(|skip| skip.track_index)
+        .map(|index| index as usize);
     let upcoming = listed
         .into_iter()
         .skip_while(|id| Some(id) != track.as_ref())
@@ -1074,6 +1143,7 @@ fn started_by_play(play: &PlayCommand) -> Start {
     Start {
         collection: play.context.uri.as_deref().and_then(collection),
         track,
+        index,
         upcoming,
         position: Duration::from_millis(play.options.seek_to.unwrap_or_default().into()),
         paused: play.options.initially_paused.unwrap_or_default(),

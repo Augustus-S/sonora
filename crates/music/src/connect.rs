@@ -13,6 +13,8 @@ pub enum Collection {
     Playlist(String),
     /// The listener's saved tracks.
     Saved,
+    /// The radio of a track, which goes on with similar songs once the track ends.
+    Radio(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -61,6 +63,9 @@ pub struct Start {
     pub collection: Option<Collection>,
     /// The track to open on, or the collection's first when there is none.
     pub track: Option<String>,
+    /// Where the track to open on sits in `collection`, counted from 0, for when the remote end
+    /// names it only by its place.
+    pub index: Option<usize>,
     /// What follows `track` when there is no collection to read it from.
     pub upcoming: Vec<String>,
     pub position: Duration,
@@ -181,6 +186,7 @@ pub trait Connect: Send + Sync {
     /// Moves playback to another device of the account.
     fn transfer(&self, to: &str);
 
-    /// Sends a command to another device of the account.
+    /// Sends a command to another device of the account. A `Start` it does not take comes back as
+    /// `Event::Command(Command::Start)`, so it plays here instead.
     fn control(&self, device: &str, command: Command);
 }
