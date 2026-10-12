@@ -447,6 +447,10 @@ impl Devices {
                 .library
                 .update(cx, |library, cx| library.liked_elsewhere(&id, None, cx));
         }
+        // a like this app made comes back the same way, with nothing left to show
+        if self.library.read(cx).saved(&id) {
+            return;
+        }
         let Some(client) = self.session.read(cx).client() else {
             return;
         };
