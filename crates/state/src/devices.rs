@@ -88,6 +88,9 @@ pub struct Devices {
     /// The tracks on that device's queue that are read in, by id.
     listed: HashMap<String, Track>,
     listing: Option<Task<()>>,
+    /// People who queued songs and are not in the Jam's member list, read from their profiles,
+    /// by the id the queue names them by.
+    people: HashMap<String, Arc<Contributor>>,
     /// Whether this app took playback, which only the listener pressing play does. A track
     /// restored paused at launch must not pull playback off another device.
     claimed: bool,
@@ -143,6 +146,7 @@ impl Devices {
             code: false,
             remote: None,
             listed: HashMap::new(),
+            people: HashMap::new(),
             listing: None,
             claimed: false,
             sent: None,
@@ -298,21 +302,28 @@ impl Devices {
             .collect()
     }
 
-    /// The person a provider id names, by the Jam's members when they are in it.
-    fn contributor(&self, id: &str) -> Arc<Contributor> {
+    /// The person a provider id names, by the Jam's members or a profile already read, when
+    /// either knows them.
+    fn known(&self, id: &str) -> Option<Arc<Contributor>> {
         let member = self
             .jam
             .iter()
             .flat_map(|jam| &jam.members)
-            .find(|member| member.id == id);
-        Arc::new(match member {
-            Some(member) => Contributor {
+            .find(|member| member.id == id || member.username == id);
+        match member {
+            Some(member) => Some(Arc::new(Contributor {
                 id: member.id.clone(),
                 name: member.name.clone(),
                 avatar: member.image.clone(),
-            },
-            None => Contributor::unnamed(id),
-        })
+            })),
+            None => self.people.get(id).cloned(),
+        }
+    }
+
+    /// The person a provider id names, or the id itself until a profile is read.
+    fn contributor(&self, id: &str) -> Arc<Contributor> {
+        self.known(id)
+            .unwrap_or_else(|| Arc::new(Contributor::unnamed(id)))
     }
 
     /// Moves playback onto this app from whichever device has it.
@@ -376,6 +387,7 @@ impl Devices {
         self.code = false;
         self.remote = None;
         self.listed.clear();
+        self.people.clear();
         self.listing = None;
         self.claimed = false;
         self.sent = None;
@@ -505,14 +517,24 @@ impl Devices {
         let Some(client) = self.session.read(cx).client() else {
             return;
         };
-        let missing = self
+        let upcoming = self
             .elsewhere()
             .into_iter()
             .flat_map(|elsewhere| &elsewhere.upcoming)
+            .collect::<Vec<_>>();
+        let missing = upcoming
+            .iter()
             .filter(|listed| !self.listed.contains_key(&listed.id))
             .map(|listed| listed.id.clone())
             .collect::<Vec<_>>();
-        if missing.is_empty() {
+        let mut strangers = upcoming
+            .iter()
+            .filter_map(|listed| listed.added_by.clone())
+            .filter(|adder| self.known(adder).is_none())
+            .collect::<Vec<_>>();
+        strangers.sort();
+        strangers.dedup();
+        if missing.is_empty() && strangers.is_empty() {
             return;
         }
         let io = self.io.clone();
@@ -525,12 +547,18 @@ impl Devices {
                         Err(error) => log::warn!("connect: cannot read a queued track: {error:#}"),
                     }
                 }
-                Ok(read)
+                let mut people = Vec::new();
+                for adder in strangers {
+                    people.extend(person(&*client, adder).await);
+                }
+                Ok((read, people))
             }))
             .await;
             this.update(cx, |this, cx| {
                 this.listing = None;
-                this.listed.extend(read.unwrap_or_default());
+                let (read, people) = read.unwrap_or_default();
+                this.listed.extend(read);
+                this.people.extend(people);
                 this.list(cx);
                 this.redraw(cx);
             })
@@ -633,12 +661,22 @@ impl Devices {
         let io = self.io.clone();
         let key = id.clone();
         let slot = id.clone();
+        let stranger = added_by.clone().filter(|adder| self.known(adder).is_none());
         let task = cx.spawn(async move |this, cx| {
-            let found = join(io.spawn(async move { client.track(&id).await })).await;
+            let found = join(io.spawn(async move {
+                let track = client.track(&id).await?;
+                let person = match stranger {
+                    Some(adder) => person(&*client, adder).await,
+                    None => None,
+                };
+                Ok((track, person))
+            }))
+            .await;
             this.update(cx, |this, cx| {
                 this.queuing.remove(&key);
                 match found {
-                    Ok(mut track) => {
+                    Ok((mut track, person)) => {
+                        this.people.extend(person);
                         track.added_by = added_by.as_deref().map(|id| this.contributor(id));
                         this.here(cx, |playback, cx| playback.enqueue(track, cx))
                     }
@@ -849,6 +887,24 @@ fn differs(a: &NowPlaying, b: &NowPlaying) -> &'static str {
 
 /// Reads in what a start names: the collection if it has one the track is in, otherwise the
 /// track and the tracks that follow it.
+/// The profile of someone a queue names by an id the Jam's members do not list, keyed by that id.
+async fn person(client: &dyn MusicApi, id: String) -> Option<(String, Arc<Contributor>)> {
+    match client.user(&id).await {
+        Ok(user) => Some((
+            id,
+            Arc::new(Contributor {
+                id: user.id,
+                name: user.name,
+                avatar: user.avatar,
+            }),
+        )),
+        Err(error) => {
+            log::warn!("connect: cannot read who queued a track: {error:#}");
+            None
+        }
+    }
+}
+
 async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
     let (tracks, origin) = match &start.collection {
         Some(Collection::Album(id)) => (client.album_tracks(id).await?, Some(Origin::album(id))),

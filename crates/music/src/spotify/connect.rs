@@ -1335,6 +1335,7 @@ fn members_of<'a>(
             let id = [id, username].into_iter().find(|id| !id.is_empty())?;
             Some(JamMember {
                 id: id.to_owned(),
+                username: username.to_owned(),
                 name: [name, username, id]
                     .into_iter()
                     .find(|name| !name.is_empty())?

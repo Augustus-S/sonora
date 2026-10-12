@@ -172,6 +172,8 @@ pub struct Roster {
 pub struct JamMember {
     /// What the provider goes by to name the person, as removing them does.
     pub id: String,
+    /// The account name, which songs they queue name them by when it differs from `id`.
+    pub username: String,
     pub name: String,
     /// The address of their picture, when they have one.
     pub image: Option<String>,
