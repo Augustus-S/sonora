@@ -425,8 +425,12 @@ impl Worker {
             reason,
             Some("SESSION_DELETED" | "YOU_LEFT" | "YOU_WERE_KICKED")
         );
-        let jam = session_of(&json).filter(|_| !ended);
-        self.out.send(Event::Jam(jam)).ok();
+        match (ended, session_of(&json)) {
+            (true, _) => self.out.send(Event::Jam(None)).ok(),
+            // an update with no member list says nothing about who is in it
+            (false, Some(jam)) => self.out.send(Event::Jam(Some(jam))).ok(),
+            (false, None) => None,
+        };
     }
 
     /// Moves playback to `to`. This app takes it the way librespot does, by naming itself on both
