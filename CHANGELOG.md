@@ -20,6 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - While Show as a Spotify device is on, copy a friend's Jam link and pick Join a Jam from the
   clipboard in the devices menu to listen along. A strip above the player bar shows who is in
   the Jam, and the same menu leaves it.
+- The devices menu can start a Jam, copy its link to share, and end it.
 
 ### Changed
 

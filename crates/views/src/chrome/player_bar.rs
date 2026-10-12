@@ -520,7 +520,7 @@ impl Render for PlayerBar {
         };
 
         let devices = Sonora::global(cx).devices.read(cx);
-        let banner = devices.jam().map(|jam| {
+        let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
             let device = match devices.steered() {
                 Some(steered) => steered.device.name,
                 None => t!("devices-this-computer").to_string(),

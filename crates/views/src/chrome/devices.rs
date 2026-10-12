@@ -114,7 +114,7 @@ impl Render for DevicePicker {
                 items.push(
                     MenuItem::new(
                         "jam-leave",
-                        match jam.link.is_some() {
+                        match jam.owner {
                             true => t!("devices-jam-end"),
                             false => t!("devices-jam-leave"),
                         },
