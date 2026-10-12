@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use gpui::prelude::*;
 use gpui::{App, Entity, SharedString, div};
 use i18n::t;
@@ -14,6 +16,14 @@ pub(crate) fn steered(cx: &App) -> Option<Steered> {
     Sonora::global(cx).devices.read(cx).steered()
 }
 
+/// How far through `total` `elapsed` is, from 0 to 1.
+pub(crate) fn fraction(elapsed: Duration, total: Duration) -> f32 {
+    match total.is_zero() {
+        true => 0.,
+        false => (elapsed.as_secs_f32() / total.as_secs_f32()).clamp(0., 1.),
+    }
+}
+
 pub(crate) fn volume_icon(level: f32) -> &'static str {
     match level {
         level if level <= 0.0001 => "icons/volume-x.svg",
@@ -27,10 +37,13 @@ pub(crate) fn percent(fraction: f32) -> SharedString {
     t!("player-percent", value = (fraction * 100.).round())
 }
 
-pub(crate) fn like(track: Option<music::Track>, cx: &App) -> Button {
+/// The heart that saves or drops `track`. A click toggles the track `playback` holds by then,
+/// which is the one shown, so callers only lend the track to read its state.
+pub(crate) fn like(track: Option<&music::Track>, playback: &Entity<Playback>, cx: &App) -> Button {
     let theme = *cx.theme();
     let library = Sonora::global(cx).library.clone();
-    let id = track.as_ref().and_then(|track| track.id.as_deref());
+    let playback = playback.clone();
+    let id = track.and_then(|track| track.id.as_deref());
     let saved = id.is_some_and(|id| library.read(cx).saved(id));
 
     Button::new("toggle-liked-track")
@@ -51,7 +64,7 @@ pub(crate) fn like(track: Option<music::Track>, cx: &App) -> Button {
         })
         .disabled(id.is_none())
         .on_click(move |_, _, cx| {
-            if let Some(track) = track.clone() {
+            if let Some(track) = playback.read(cx).track().cloned() {
                 library.update(cx, |library, cx| library.toggle(track, cx));
             }
         })
@@ -72,7 +85,7 @@ pub(crate) fn transport(
         .flex()
         .items_center()
         .gap_2()
-        .child(shuffle(queue, frosted, cx))
+        .child(shuffle(playback, frosted, cx))
         .child(previous(playback, frosted, cx))
         .child(toggle(playback, big, frosted, cx))
         .child(next(playback, queue, frosted, cx))
@@ -105,10 +118,10 @@ pub(crate) fn toggle(playback: &Entity<Playback>, big: bool, frosted: bool, cx: 
         })
 }
 
-fn shuffle(queue: &Entity<Queue>, frosted: bool, cx: &App) -> Button {
+fn shuffle(playback: &Entity<Playback>, frosted: bool, cx: &App) -> Button {
     let theme = *cx.theme();
-    let on = queue.read(cx).shuffle();
-    let queue = queue.clone();
+    let on = playback.read(cx).shown_shuffle(cx);
+    let playback = playback.clone();
 
     Button::new("shuffle")
         .ghost()
@@ -121,13 +134,13 @@ fn shuffle(queue: &Entity<Queue>, frosted: bool, cx: &App) -> Button {
             false => theme.muted_foreground,
         })
         .on_click(move |_, _, cx| {
-            queue.update(cx, |queue, cx| queue.toggle_shuffle(cx));
+            playback.update(cx, |playback, cx| playback.toggle_shuffle(cx));
         })
 }
 
 fn repeat(playback: &Entity<Playback>, frosted: bool, cx: &App) -> Button {
     let theme = *cx.theme();
-    let repeat = playback.read(cx).repeat();
+    let repeat = playback.read(cx).shown_repeat(cx);
     let playback = playback.clone();
 
     Button::new("repeat")

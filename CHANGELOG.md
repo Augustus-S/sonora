@@ -23,23 +23,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Fullscreen lyrics grow with a large window, up to twice their size, so they no longer look
+  small on a big screen. Small windows keep the size they had.
 - On Windows, the minimize, maximize, restore and close buttons now use Windows' own icons, so
   they match other Windows apps.
+- Sonora uses less memory while your Apple Music library loads at startup, and it no longer
+  frees memory in the background every few seconds to stay small.
 
 ### Fixed
 
 - YouTube Music and Apple Music artist pages now list the artist's whole discography instead
   of stopping at ten albums and ten singles, and Deezer artist pages no longer stop at 50.
+- Apple Music artist pages now list the artist's live albums and compilations, which were
+  missing even though they opened fine from search.
 - Albums on YouTube Music and Deezer artist pages now name the artist, and a card with no
   artist to show no longer ends its line in a stray dot.
 - Artist names on Apple Music album cards now open the artist, in search, charts, home, the
   library and on artist pages.
 - Top songs on Apple Music charts now show and play as songs instead of album cards.
 - The Appears on row of an artist page no longer sits flush against the Show all button.
+- Dragging a track to the top of the queue now moves it whenever the drop line shows, even if
+  you let go over the Up next heading or between two rows.
 - Seeking in the last few seconds of a song now moves within that song, instead of jumping into
   the next one or doing nothing.
+- The fullscreen controls blur away as they hide, instead of leaving the top of the seek bar cut
+  off for the last moment.
 - Signing in to Spotify on Windows on ARM no longer fails with "Spotify turned down the
   sign-in".
+- Spotify and Deezer accounts now show profile picture in Settings instead of initials.
 
 ## [0.42.2] - 2026-10-07
 
