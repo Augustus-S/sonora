@@ -23,6 +23,7 @@ webview = { path = "crates/webview" }
 widevine = { path = "crates/widevine" }
 
 anyhow = "1.0"
+ardftsrc = { version = "0.4.1", features = ["rodio"] }
 async-trait = "0.1"
 base64 = "0.22"
 blowfish = "0.9"
@@ -115,6 +116,15 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSRunningApplication",
   "NSStatusItem",
   "NSWorkspace",
+] }
+objc2-core-audio = { version = "0.3", default-features = false, features = [
+  "std",
+  "AudioHardware",
+  "objc2-core-audio-types",
+] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = [
+  "std",
+  "CoreAudioBaseTypes",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
   "std",

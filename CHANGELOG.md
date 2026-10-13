@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- When your audio device can't play a track at its own sample rate, Sonora now converts it with
+  the higher-quality ardftsrc resampler, Spotify included.
+
+### Fixed
+
+- On macOS, playing a track at its own sample rate now really switches your audio device to that
+  rate. Before, macOS quietly converted every track to the rate the device was already set to.
+
 ## [0.42.2] - 2026-10-07
 
 ### Added

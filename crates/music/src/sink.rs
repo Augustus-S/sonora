@@ -228,6 +228,17 @@ impl Paced {
         })
     }
 
+    /// Has the output resample packets, which come in `channels`, in front of the mixer
+    /// whenever the device runs at another rate than they come at, for a writer whose packets
+    /// keep a rate of their own. A clear resets that resampler, so nothing it holds from before
+    /// is heard after.
+    pub fn converting(mut self, channels: u16) -> Self {
+        self.output = self
+            .output
+            .converting(self.cue.generation.clone(), channels);
+        self
+    }
+
     pub fn play(&mut self) -> Result<(), Gone> {
         if self.output.failed() || self.output.changed() {
             return Err(self.disconnected());
@@ -270,6 +281,11 @@ impl Paced {
     /// failed or closed never plays out, so it counts as drained.
     pub fn drained(&self) -> bool {
         self.live.load(Ordering::Relaxed) == 0 || self.output.failed()
+    }
+
+    /// The rate the device runs at. A packet at any other rate is resampled before it is heard.
+    pub fn rate(&self) -> u32 {
+        self.output.rate()
     }
 
     /// Whether packets at `rate` can go out without the output reopening.

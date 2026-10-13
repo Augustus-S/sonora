@@ -20,7 +20,8 @@ impl OutputSink {
     /// The sink librespot's player builder asks for. Without an output device it gets a silent
     /// one, so playback state still moves.
     pub fn boxed(cue: Cue, chain: Chain, changed: UnboundedSender<()>) -> Box<dyn Sink> {
-        match Paced::open(cue.clone(), chain, changed.clone()) {
+        let opened = Paced::open(cue.clone(), chain, changed.clone());
+        match opened.map(|paced| paced.converting(NUM_CHANNELS as u16)) {
             Ok(paced) => Box::new(Self { paced }),
             Err(error) => {
                 log::error!("sink: cannot open an output device: {error:#}");
@@ -33,7 +34,8 @@ impl OutputSink {
 
 impl Sink for OutputSink {
     /// librespot decodes everything at `SAMPLE_RATE`, so this is the one place the output
-    /// follows it, before the first packet of a play.
+    /// follows it, before the first packet of a play. A device that turns that rate down has
+    /// the packets resampled in front of its mixer.
     fn start(&mut self) -> SinkResult<()> {
         self.paced
             .fit(SAMPLE_RATE)
