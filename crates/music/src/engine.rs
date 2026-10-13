@@ -26,7 +26,7 @@ use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::audio::{Chain, Resampled, Volume};
-use crate::sink::{Cue, Gone, Paced, packet, watch_for_output};
+use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
 
@@ -698,10 +698,7 @@ struct Playing<F: Fetch> {
     loaded: F::Loaded,
     source: Resampled<F::Source>,
     channels: u16,
-    /// The decoder's own rate, which the output is fitted for.
-    native: u32,
-    /// The rate the samples reach the queue at: `native`, or the device's when it turned that
-    /// down and the track is resampled.
+    /// The rate the samples reach the queue at, which is the device's.
     rate: u32,
     base: Duration,
     /// Samples queued before this track's first one. On a gapless join the one before it is
@@ -713,7 +710,8 @@ struct Playing<F: Fetch> {
 }
 
 impl<F: Fetch> Playing<F> {
-    /// Opens a decoder for one track, or reports that it cannot be played.
+    /// Opens a decoder for one track, resampled to `rate`, the device's, when that is not its
+    /// own. `None` means it cannot be played, or the resampler failed after taking the decoder.
     fn open(
         fetch: &F,
         id: &str,
@@ -721,40 +719,26 @@ impl<F: Fetch> Playing<F> {
         at: Duration,
         offset: u64,
         normalise: bool,
+        rate: u32,
     ) -> Option<Self> {
         let source = fetch.open(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
-        let rate = source.sample_rate().get();
-        Some(Self {
-            id: id.to_owned(),
-            channels: source.channels().get(),
-            native: rate,
-            rate,
-            loaded,
-            source: Resampled::Native(source),
-            base: at,
-            offset,
-            gain,
-        })
-    }
-
-    /// Hands the track to an output running at `rate`, resampling it when that is not its own.
-    /// `None` means the resampler failed after taking the decoder, which leaves nothing to play.
-    fn resample(self, rate: u32) -> Option<Self> {
-        if self.rate == rate {
-            return Some(self);
-        }
-        let source = match self.source.to(rate) {
+        let source = match Resampled::Native(source).to(rate) {
             Ok(source) => source,
             Err(error) => {
-                log::error!("playback: cannot resample {}: {error:#}", self.id);
+                log::error!("playback: cannot resample {id}: {error:#}");
                 return None;
             }
         };
         Some(Self {
+            id: id.to_owned(),
+            channels: source.channels().get(),
             rate: source.sample_rate().get(),
+            loaded,
             source,
-            ..self
+            base: at,
+            offset,
+            gain,
         })
     }
 
@@ -839,15 +823,10 @@ fn audio_loop<F: Fetch>(
     let mut reported_at = Instant::now();
 
     loop {
-        // a track at another rate waits for the last one's tail to play out before the
-        // output reopens under it
-        let refitting = current
-            .as_ref()
-            .is_some_and(|held| !paced.fits(held.native) && !paced.drained());
         // anything but decoding means waiting for work rather than spinning: no
         // track, a paused one, or a full queue. A restored track sits paused
         // with an empty queue, which the old condition mistook for decoding.
-        let idle = current.is_none() || !playing || paced.full() || refitting;
+        let idle = current.is_none() || !playing || paced.full();
         let job = match idle {
             false => match jobs.try_recv() {
                 Ok(job) => Some(job),
@@ -907,10 +886,8 @@ fn audio_loop<F: Fetch>(
                     queued = None;
                     joining = None;
                     written = 0;
-                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise);
-                    if fit(&mut paced, &mut current).is_err() {
-                        return;
-                    }
+                    current =
+                        Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise, paced.rate());
                     heard = current.as_ref().map(Playing::mark);
                     playing = start && current.is_some();
                     match playing {
@@ -972,8 +949,16 @@ fn audio_loop<F: Fetch>(
                         // has moved.
                         true => {
                             let (id, loaded) = (held.id.clone(), held.loaded.clone());
-                            match Playing::open(fetch.as_ref(), &id, loaded, position, 0, normalise)
-                            {
+                            let rate = paced.rate();
+                            match Playing::open(
+                                fetch.as_ref(),
+                                &id,
+                                loaded,
+                                position,
+                                0,
+                                normalise,
+                                rate,
+                            ) {
                                 Some(fresh) => current = Some(fresh),
                                 None => {
                                     log::warn!("playback: cannot seek {id}");
@@ -989,10 +974,6 @@ fn audio_loop<F: Fetch>(
                             held.offset = 0;
                         }
                     }
-                    // a track queued behind one at another rate may not have had the output yet
-                    if fit(&mut paced, &mut current).is_err() {
-                        return;
-                    }
                     joining = None;
                     written = 0;
                     heard = current.as_ref().map(Playing::mark);
@@ -1005,9 +986,6 @@ fn audio_loop<F: Fetch>(
 
         if idle {
             continue;
-        }
-        if fit(&mut paced, &mut current).is_err() {
-            return;
         }
         let Some(held) = &mut current else { continue };
 
@@ -1023,6 +1001,7 @@ fn audio_loop<F: Fetch>(
                     Duration::ZERO,
                     written,
                     normalise,
+                    paced.rate(),
                 );
                 current.as_ref().map(|_| (id, duration))
             });
@@ -1049,18 +1028,6 @@ fn audio_loop<F: Fetch>(
         }
         written += samples.len() as u64;
     }
-}
-
-/// Puts the track being decoded on the output: reopens the device for the track's own rate
-/// unless it fits already, then resamples the track when the device runs at another. Anything
-/// still queued is dropped by a reopen, so a caller that wants a tail heard waits for it first.
-fn fit<F: Fetch>(paced: &mut Paced, current: &mut Option<Playing<F>>) -> Result<(), Gone> {
-    let Some(held) = current.take() else {
-        return Ok(());
-    };
-    paced.fit(held.native)?;
-    *current = held.resample(paced.rate());
-    Ok(())
 }
 
 /// The gain a track plays at: unity with normalisation off or no loudness known, and otherwise

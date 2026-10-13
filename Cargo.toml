@@ -122,10 +122,6 @@ objc2-core-audio = { version = "0.3", default-features = false, features = [
   "AudioHardware",
   "objc2-core-audio-types",
 ] }
-objc2-core-audio-types = { version = "0.3", default-features = false, features = [
-  "std",
-  "CoreAudioBaseTypes",
-] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "CFString",
@@ -219,3 +215,23 @@ opt-level = 2
 [profile.dev.package."*"]
 debug = false
 opt-level = 2
+
+# The audio path runs in real time, decoding, resampling and mixing every sample, so it is built
+# fully optimised even in debug builds.
+[profile.dev.package.music]
+opt-level = 3
+
+[profile.dev.package.rodio]
+opt-level = 3
+
+[profile.dev.package.cpal]
+opt-level = 3
+
+[profile.dev.package.ardftsrc]
+opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
+
+[profile.dev.package.rustfft]
+opt-level = 3

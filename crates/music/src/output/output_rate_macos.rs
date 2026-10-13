@@ -1,80 +1,28 @@
-//! CoreAudio's own view of an output device: the nominal rates its hardware runs at, and switching
-//! between them. cpal merges those rates into one range and never switches them for an output, so
-//! the device is asked directly.
+//! CoreAudio's own view of an output device: the nominal rate its hardware runs at. cpal's default
+//! config reads the stream format = takes 18 to 37 ms a call against this module's 50 to
+//! 170 µs. The watcher asks every 500 ms for as long as a stream is open, so we have this optimized path.
+//!
+//! TODO: Re-assess once sonora moves to cpal 0.18. If its default config is as cheap to read, or
+//! it reports rate changes on an open stream, this module and its unsafe code can go, along with
+//! the `objc2-core-audio` dependency.
 
 use std::ptr::{NonNull, null};
-use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
-use cpal::SupportedStreamConfig;
 use cpal::traits::DeviceTrait as _;
 use objc2_core_audio::{
     AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
-    AudioObjectPropertyAddress, AudioObjectPropertySelector, AudioObjectSetPropertyData,
-    kAudioDevicePropertyAvailableNominalSampleRates, kAudioDevicePropertyDeviceUID,
+    AudioObjectPropertyAddress, AudioObjectPropertySelector, kAudioDevicePropertyDeviceUID,
     kAudioDevicePropertyNominalSampleRate, kAudioHardwarePropertyDevices,
     kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
 };
-use objc2_core_audio_types::AudioValueRange;
 use objc2_core_foundation::{CFRetained, CFString};
 
-/// How long a switch may take to be confirmed, as long as cpal waits when it switches an input.
-const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
-/// How often a switch is looked for while it is pending.
-const SWITCH_POLL: Duration = Duration::from_millis(5);
-
-/// Whether `rate` is one of the hardware's nominal rates. A device CoreAudio cannot find or answer
-/// for offers none, so a track is never left to a hidden conversion.
-pub(super) fn offers(device: &cpal::Device, _default: &SupportedStreamConfig, rate: u32) -> bool {
-    let Some(object) = object(device) else {
-        return false;
-    };
-    let Some(ranges) =
-        list::<AudioValueRange>(object, kAudioDevicePropertyAvailableNominalSampleRates)
-    else {
-        return false;
-    };
-    let rate = f64::from(rate);
-    ranges
-        .iter()
-        .any(|range| range.mMinimum <= rate && rate <= range.mMaximum)
-}
-
-/// Sets the hardware's nominal rate and waits until the device reports it. This changes the rate
-/// for every app on the device, which then has its own audio converted instead.
-pub(super) fn switch(device: &cpal::Device, rate: u32) -> Result<()> {
-    let Some(object) = object(device) else {
-        bail!("cannot find the device in CoreAudio");
-    };
-    let rate = f64::from(rate);
-    if nominal(object) == Some(rate) {
-        return Ok(());
-    }
-
-    let address = address(kAudioDevicePropertyNominalSampleRate);
-    // SAFETY: the nominal rate is a single f64, and the size passed is that of `rate`.
-    let status = unsafe {
-        AudioObjectSetPropertyData(
-            object,
-            NonNull::from(&address),
-            0,
-            null(),
-            size_of::<f64>() as u32,
-            NonNull::from(&rate).cast(),
-        )
-    };
-    if status != 0 {
-        bail!("CoreAudio refused the rate (OSStatus {status})");
-    }
-
-    let start = Instant::now();
-    while start.elapsed() < SWITCH_TIMEOUT {
-        if nominal(object) == Some(rate) {
-            return Ok(());
-        }
-        std::thread::sleep(SWITCH_POLL);
-    }
-    bail!("the device did not confirm the switch")
+/// The hardware's nominal rate, or `None` when CoreAudio cannot find or answer for the device.
+pub(super) fn rate(device: &cpal::Device) -> Option<u32> {
+    let rate = nominal(object(device)?)?;
+    (1.0..=f64::from(u32::MAX))
+        .contains(&rate)
+        .then(|| rate.round() as u32)
 }
 
 /// The CoreAudio object behind a cpal device, matched on the UID cpal reports as its id. Walking

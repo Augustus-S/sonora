@@ -4572,7 +4572,6 @@ dependencies = [
  "md-5",
  "oauth2",
  "objc2-core-audio",
- "objc2-core-audio-types",
  "objc2-core-foundation",
  "open",
  "opensubsonic",

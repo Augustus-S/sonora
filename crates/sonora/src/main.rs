@@ -305,6 +305,7 @@ fn open_window(cx: &mut App) {
         history: _,
         lyrics: _,
         network: _,
+        outputs: _,
         pins: _,
         playback,
         potoken: _,

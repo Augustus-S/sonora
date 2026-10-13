@@ -26,6 +26,7 @@ pub struct Picker {
     width: Pixels,
     left: bool,
     sticky: bool,
+    disabled: bool,
     items: Vec<MenuItem>,
     menu: Option<Menu>,
 }
@@ -49,6 +50,7 @@ impl Picker {
             width: Self::REGULAR,
             left: false,
             sticky: false,
+            disabled: false,
             items: Vec::new(),
             menu: None,
         }
@@ -111,6 +113,12 @@ impl Picker {
         self
     }
 
+    /// Holds the trigger still, so the menu cannot open, as while an earlier choice is applied.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
     pub fn item(mut self, item: MenuItem) -> Self {
         self.items.push(item);
         self
@@ -148,6 +156,7 @@ impl RenderOnce for Picker {
             width,
             left,
             sticky,
+            disabled,
             items,
             menu,
         } = self;
@@ -176,7 +185,8 @@ impl RenderOnce for Picker {
                 true => button.tooltip_above(key),
                 false => button.tooltip(key),
             })
-            .when_some(tint, Button::tint);
+            .when_some(tint, Button::tint)
+            .disabled(disabled);
 
         let menu = menu
             .unwrap_or_else(|| Menu::new(SharedString::from(format!("{key}-menu"))).w(width))

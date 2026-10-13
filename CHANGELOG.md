@@ -7,15 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Choose your audio output device in Settings → Playback → Devices. Sonora remembers it, plays on
+  your system's default while it is disconnected, forgets it if it stops working, and shows the
+  sample rate and buffer size it plays at, with a shortcut to your system's audio settings.
+
 ### Changed
 
-- When your audio device can't play a track at its own sample rate, Sonora now converts it with
-  the higher-quality ardftsrc resampler, Spotify included.
-
-### Fixed
-
-- On macOS, playing a track at its own sample rate now really switches your audio device to that
-  rate. Before, macOS quietly converted every track to the rate the device was already set to.
+- Sonora now plays at your device's own sample rate and converts each track to it with the
+  higher-quality ardftsrc resampler, rather than switching the device's rate between tracks.
 
 ## [0.42.2] - 2026-10-07
 

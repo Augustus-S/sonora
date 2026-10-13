@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use ardftsrc::RealtimeResampler;
 use rodio::buffer::SamplesBuffer;
 use rodio::{ChannelCount, SampleRate, Source};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -19,12 +20,16 @@ use crate::audio::{Chain, Output};
 /// time; deeper rides out network hiccups, but the decoder's position runs this far ahead of
 /// what is heard.
 const QUEUED_CHUNKS: usize = 26;
+/// About how many frames a resampled packet comes out as, before conversion, so a converted queue
+/// paces like one of the packets that went in.
+const PIECE_FRAMES: u64 = 1024;
 /// How long a blocked write sleeps between looks at the queue.
 const DRAIN_POLL: Duration = Duration::from_millis(10);
-/// How often a write asks the system whether the default device changed.
-const DEVICE_POLL: Duration = Duration::from_millis(500);
 /// How often a watch looks for an output device to come back once none could be opened.
 const WATCH_POLL: Duration = Duration::from_secs(1);
+// TEMPORARY, remove before merging: one packet in this many logs how long it waited in the queue.
+const QUEUE_SAMPLE: u64 = 50;
+static QUEUE_SAMPLED: AtomicU64 = AtomicU64::new(0);
 
 /// What the cue does with the next write. It rides in an `AtomicU8`, so it converts at that
 /// boundary and stays a type everywhere else.
@@ -50,8 +55,8 @@ impl Admit {
     }
 }
 
-/// The output device went away, or the default one changed. The engine reopens rather than
-/// carrying on into silence.
+/// The output device went away, another one is wanted, or its rate changed. The engine reopens
+/// rather than carrying on into silence or into a conversion.
 #[derive(Debug)]
 pub struct Gone;
 
@@ -149,6 +154,8 @@ struct Chunk {
     generation: Arc<AtomicU32>,
     played: Arc<AtomicU64>,
     live: Arc<AtomicUsize>,
+    // TEMPORARY, remove before merging: when the packet was queued, until its first pull.
+    queued: Option<Instant>,
 }
 
 impl Chunk {
@@ -160,6 +167,7 @@ impl Chunk {
             generation: cue.generation.clone(),
             played: cue.played.clone(),
             live: live.clone(),
+            queued: Some(Instant::now()),
         }
     }
 }
@@ -173,6 +181,20 @@ impl Iterator for Chunk {
         }
         let sample = self.samples.next()?;
         self.played.fetch_add(1, Ordering::Relaxed);
+        // TEMPORARY, remove before merging
+        if let Some(queued) = self.queued.take()
+            && QUEUE_SAMPLED
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(QUEUE_SAMPLE)
+        {
+            let length = self.samples.total_duration().unwrap_or_default();
+            log::debug!(
+                "sink: packet waited {:.1} ms in the queue ({} queued, {:.1} ms each)",
+                queued.elapsed().as_secs_f64() * 1000.,
+                self.live.load(Ordering::Relaxed),
+                length.as_secs_f64() * 1000.,
+            );
+        }
         Some(sample)
     }
 }
@@ -202,45 +224,66 @@ impl Drop for Chunk {
 }
 
 /// The shared rodio output with a paced queue in front of it. A write blocks once enough is
-/// queued, which keeps a decoder in step with playback, and every write checks that the default
-/// device is still the one the output was opened on.
+/// queued, which keeps a decoder in step with playback. A write on an output that has to reopen
+/// reports it gone; the output also says so on `changed` itself, playing or not.
 pub struct Paced {
     output: Output,
     cue: Cue,
     /// Chunks appended and not yet played out or retired.
     live: Arc<AtomicUsize>,
     changed: UnboundedSender<()>,
-    checked_at: Instant,
+    /// Resamples packets as they are written, for a writer whose packets keep a rate of their
+    /// own while the device runs at another.
+    converter: Option<Converter>,
 }
 
 impl Paced {
-    /// Claims the default output device, paused until the caller starts it.
+    /// Claims the output device, paused until the caller starts it, for packets the caller
+    /// resamples to its `rate`.
     pub fn open(cue: Cue, chain: Chain, changed: UnboundedSender<()>) -> Result<Self> {
-        let output = Output::open(chain)?;
-        output.sink().pause();
+        let output = Output::open(chain, changed.clone())?;
+        Ok(Self::paused(output, cue, changed))
+    }
 
-        Ok(Self {
+    /// Claims the output device for packets that keep `rate` and `channels` of their own, which
+    /// are resampled as they are written when the device runs at another rate. A resampler that
+    /// cannot start leaves the conversion to the mixer.
+    pub fn converting(
+        cue: Cue,
+        chain: Chain,
+        changed: UnboundedSender<()>,
+        rate: u32,
+        channels: u16,
+    ) -> Result<Self> {
+        let output = Output::open(chain, changed.clone())?;
+        let mut paced = Self::paused(output, cue, changed);
+        let device = paced.rate();
+        if rate != device {
+            let generation = paced.cue.generation.load(Ordering::Relaxed);
+            match Converter::new(rate, device, channels, generation) {
+                Ok(converter) => {
+                    log::info!("sink: resampling {rate} Hz to {device} Hz as it is written");
+                    paced.converter = Some(converter);
+                }
+                Err(error) => log::error!("sink: {error:#}, leaving the conversion to the mixer"),
+            }
+        }
+        Ok(paced)
+    }
+
+    fn paused(output: Output, cue: Cue, changed: UnboundedSender<()>) -> Self {
+        output.sink().pause();
+        Self {
             output,
             cue,
             live: Arc::default(),
             changed,
-            checked_at: Instant::now(),
-        })
-    }
-
-    /// Has the output resample packets, which come in `channels`, in front of the mixer
-    /// whenever the device runs at another rate than they come at, for a writer whose packets
-    /// keep a rate of their own. A clear resets that resampler, so nothing it holds from before
-    /// is heard after.
-    pub fn converting(mut self, channels: u16) -> Self {
-        self.output = self
-            .output
-            .converting(self.cue.generation.clone(), channels);
-        self
+            converter: None,
+        }
     }
 
     pub fn play(&mut self) -> Result<(), Gone> {
-        if self.output.failed() || self.output.changed() {
+        if self.output.failed() {
             return Err(self.disconnected());
         }
         self.output.sink().play();
@@ -259,17 +302,49 @@ impl Paced {
     /// retired makes no sound while it winds down. This never blocks: a caller with nothing
     /// else to do waits through `drain`, one with commands to answer waits through `full`.
     pub fn write(&mut self, samples: SamplesBuffer) -> Result<(), Gone> {
-        if self.output_changed() {
+        if self.output.failed() {
             return Err(self.disconnected());
         }
         if !self.cue.admit() {
             return Ok(());
         }
+        let Some(converter) = &mut self.converter else {
+            self.append(samples);
+            return Ok(());
+        };
 
+        // what it holds from before a clear is the old position, which is not heard
+        let generation = self.cue.generation.load(Ordering::Relaxed);
+        if converter.generation != generation {
+            converter.reset(generation);
+        }
+        for piece in converter.push(samples) {
+            self.append(piece);
+        }
+        Ok(())
+    }
+
+    /// Queues whatever the resampler still holds, as when the writer stops, so the last of it is
+    /// heard. The next write primes it afresh, so a resume is a splice rather than a seamless
+    /// join. What it holds from before a clear is dropped instead.
+    pub fn flush(&mut self) {
+        let Some(converter) = &mut self.converter else {
+            return;
+        };
+        let generation = self.cue.generation.load(Ordering::Relaxed);
+        if self.cue.cleared() || converter.generation != generation {
+            converter.reset(generation);
+            return;
+        }
+        for piece in converter.flush() {
+            self.append(piece);
+        }
+    }
+
+    fn append(&self, samples: SamplesBuffer) {
         self.output
             .sink()
             .append(Chunk::new(samples, &self.cue, &self.live));
-        Ok(())
     }
 
     /// Whether the queue holds all it should, so the next packet can wait.
@@ -277,38 +352,15 @@ impl Paced {
         self.live.load(Ordering::Relaxed) > QUEUED_CHUNKS
     }
 
-    /// Whether everything queued has played out or been retired. A queue on a stream that has
-    /// failed or closed never plays out, so it counts as drained.
-    pub fn drained(&self) -> bool {
-        self.live.load(Ordering::Relaxed) == 0 || self.output.failed()
-    }
-
     /// The rate the device runs at. A packet at any other rate is resampled before it is heard.
     pub fn rate(&self) -> u32 {
         self.output.rate()
     }
 
-    /// Whether packets at `rate` can go out without the output reopening.
-    pub fn fits(&self, rate: u32) -> bool {
-        self.output.fits(rate)
-    }
-
-    /// Reopens the output for packets at `rate` unless it fits already. Anything still queued
-    /// is dropped, so a caller that wants the tail heard waits for `drained` first.
-    pub fn fit(&mut self, rate: u32) -> Result<(), Gone> {
-        match self.output.fit(rate) {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                log::error!("sink: cannot reopen the audio output: {error:#}");
-                Err(self.disconnected())
-            }
-        }
-    }
-
     /// Waits until there is room for another packet.
     pub fn drain(&mut self) -> Result<(), Gone> {
         while self.full() {
-            if self.output_changed() {
+            if self.output.failed() {
                 return Err(self.disconnected());
             }
             std::thread::sleep(DRAIN_POLL);
@@ -322,18 +374,6 @@ impl Paced {
         DRAIN_POLL
     }
 
-    /// Whether the output failed or the default device is no longer the one it was opened on,
-    /// asking the system at most every `DEVICE_POLL`.
-    pub fn output_changed(&mut self) -> bool {
-        let now = Instant::now();
-        let changed = self.output.failed()
-            || now.duration_since(self.checked_at) >= DEVICE_POLL && self.output.changed();
-        if now.duration_since(self.checked_at) >= DEVICE_POLL {
-            self.checked_at = now;
-        }
-        changed
-    }
-
     /// Tells the engine the output is gone.
     pub fn disconnected(&self) -> Gone {
         self.changed.send(()).ok();
@@ -341,8 +381,97 @@ impl Paced {
     }
 }
 
+/// Packets resampled to the device's rate as they are written, for a writer whose packets keep a
+/// rate of their own, which is Spotify's. librespot decodes faster than real time, so the resampler
+/// primes from real audio within a few packets, and everything queued is at the device's rate
+/// already: a pause or a clear acts on it at once. It uses ardftsrc's good preset, which holds less
+/// than high's, since what it holds is how far librespot's position runs ahead of the sound.
+struct Converter {
+    resampler: RealtimeResampler,
+    channels: u16,
+    rate: u32,
+    /// Samples per queued piece.
+    piece: usize,
+    /// The cue generation the audio it holds belongs to.
+    generation: u32,
+    input: Vec<f64>,
+    output: Vec<f64>,
+}
+
+impl Converter {
+    fn new(from: u32, to: u32, channels: u16, generation: u32) -> Result<Self> {
+        let config = ardftsrc::PRESET_GOOD
+            .with_input_rate(from as usize)
+            .with_output_rate(to as usize)
+            .with_channels(usize::from(channels));
+        let resampler = RealtimeResampler::new(config).context("cannot start the resampler")?;
+        let frames = (PIECE_FRAMES * u64::from(to)).div_ceil(u64::from(from.max(1)));
+        Ok(Self {
+            resampler,
+            channels,
+            rate: to,
+            piece: frames as usize * usize::from(channels),
+            generation,
+            input: Vec::new(),
+            output: Vec::new(),
+        })
+    }
+
+    /// Takes one packet in and hands back what is ready, in pieces about a packet long. The rest
+    /// waits for more input or `flush`.
+    fn push(&mut self, samples: SamplesBuffer) -> Vec<SamplesBuffer> {
+        self.input.clear();
+        self.input.extend(samples.map(f64::from));
+        if let Err(error) = self.resampler.write_samples(&self.input) {
+            log::error!("sink: cannot resample a packet: {error}");
+            self.resampler.reset();
+            return Vec::new();
+        }
+        self.read(false)
+    }
+
+    /// Ends the stream so far and hands back everything it held, then starts afresh.
+    fn flush(&mut self) -> Vec<SamplesBuffer> {
+        let pieces = match self.resampler.finalize() {
+            Ok(()) => self.read(true),
+            Err(error) => {
+                log::error!("sink: cannot flush the resampler: {error}");
+                Vec::new()
+            }
+        };
+        self.resampler.reset();
+        pieces
+    }
+
+    /// Drops what it holds, which belongs to an older `generation`.
+    fn reset(&mut self, generation: u32) {
+        self.resampler.reset();
+        self.generation = generation;
+    }
+
+    /// Reads whole pieces, and with `all` the short one left at the end too.
+    fn read(&mut self, all: bool) -> Vec<SamplesBuffer> {
+        let mut pieces = Vec::new();
+        loop {
+            let ready = self.resampler.num_samples_ready();
+            if ready == 0 || (ready < self.piece && !all) {
+                return pieces;
+            }
+            self.output.resize(ready.min(self.piece), 0.);
+            let read = match self.resampler.read_samples(&mut self.output) {
+                Some(read) if read > 0 => read,
+                _ => return pieces,
+            };
+            let samples: Vec<f32> = self.output[..read].iter().map(|&s| s as f32).collect();
+            if let Some(piece) = packet(&samples, self.channels, self.rate) {
+                pieces.push(piece);
+            }
+        }
+    }
+}
+
 /// Waits for an output device to come back and then tells `notify`, which the engine takes the
-/// way it takes the default device changing: it reopens the output and reloads where it was.
+/// way it takes the device changing: it reopens the output and reloads where it was.
 /// This is what an engine that could not open a device at all waits on. A machine whose only
 /// device has gone, a Bluetooth headset that dropped its link, has nothing to reopen on and
 /// nothing else asks the system again, so without the watch playback stays silent until the app
