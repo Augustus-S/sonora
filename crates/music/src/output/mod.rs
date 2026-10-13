@@ -12,18 +12,14 @@ pub(crate) mod output_rate;
 #[cfg(target_os = "macos")]
 mod output_rate_macos;
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use anyhow::{Context as _, Result, bail};
 use cpal::traits::{DeviceTrait as _, HostTrait as _};
 use tokio::sync::watch;
 
-/// The device chosen in settings, or `None` to follow the system's default.
-static CHOSEN: Mutex<Option<Choice>> = Mutex::new(None);
-
-/// Counts the choices made, so a stream or a failure tells which choice it answers.
-static ROUND: AtomicU64 = AtomicU64::new(0);
+/// The device chosen in settings, by cpal id, or `None` to follow the system's default.
+static CHOSEN: Mutex<Option<String>> = Mutex::new(None);
 
 /// The devices that would not open, most recent last.
 static FAILED: Mutex<Vec<Failure>> = Mutex::new(Vec::new());
@@ -46,26 +42,16 @@ pub struct Device {
 pub struct Failure {
     pub id: String,
     pub error: String,
-    /// Whether it is the saved device, which gave way to the system's default, rather than one
-    /// picked just now, which leaves nothing playing.
+    /// Whether it is the chosen device, which gave way to the system's default, rather than the
+    /// default itself, which leaves nothing playing.
     pub saved: bool,
-    round: u64,
 }
 
-/// How the device chosen in one round turned out.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    Opened(Status),
-    Failed(Failure),
-}
-
-/// A device chosen in settings, by cpal id.
-#[derive(Clone)]
-struct Choice {
-    id: String,
-    /// Whether the system's default plays in its place when it would not open, as for a saved
-    /// device rather than one picked just now and not yet opened.
-    fallback: bool,
+/// A stream opened on a device picked in settings, before the engines move onto it. It stays
+/// open while this is held, so the engines join it rather than opening the device again.
+pub struct Opened {
+    pub status: Status,
+    _device: Arc<crate::audio::Device>,
 }
 
 /// The stream Sonora plays into.
@@ -77,7 +63,6 @@ pub struct Status {
     pub rate: u32,
     /// The buffer Sonora asks the device for, in frames.
     pub buffer: u32,
-    pub(crate) round: u64,
 }
 
 /// Every output device the system offers. This opens devices on some platforms, so call it off
@@ -102,58 +87,36 @@ pub fn devices() -> Vec<Device> {
         .collect()
 }
 
-/// Plays on the device with `id` from now on, or on the system's default when `id` is `None`, as
-/// picked in settings. A device that would not open leaves nothing playing, with `failure` saying
-/// why, rather than playing somewhere the user did not pick. Every device is tried afresh.
-/// Returns the round to ask `outcome` about.
-pub fn choose(id: Option<String>) -> u64 {
-    set(id.map(|id| Choice {
-        id,
-        fallback: false,
-    }))
+/// Opens the device with `id`, or the system's default when `id` is `None`, as a device picked in
+/// settings is tried before anything moves onto it. A device that will not open is not
+/// remembered: the pick is simply not taken. This blocks for as long as the system takes, which
+/// CoreAudio can stretch to ten seconds, so call it off the UI thread.
+pub fn open(id: Option<&str>) -> Result<Opened> {
+    let host = cpal::default_host();
+    let device = match id {
+        Some(id) => id
+            .parse()
+            .ok()
+            .and_then(|id| host.device_by_id(&id))
+            .context("the device is not connected")?,
+        None => host
+            .default_output_device()
+            .context("no audio output device")?,
+    };
+    let device = crate::audio::Device::open_now(device)?;
+    Ok(Opened {
+        status: crate::audio::describe(&device),
+        _device: device,
+    })
 }
 
-/// Plays on the device with `id`, saved from an earlier run, or on the system's default when it
-/// would not open or `id` is `None`.
-pub fn restore(id: Option<String>) {
-    set(id.map(|id| Choice { id, fallback: true }));
-}
-
-/// Treats the device picked in `round` as saved, as it is once it has opened: from then on it
-/// gives way to the system's default when it will not open. A later choice is left as it is.
-pub fn keep(round: u64) {
-    if ROUND.load(Ordering::Acquire) != round {
-        return;
-    }
-    if let Some(choice) = CHOSEN
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_mut()
-    {
-        choice.fallback = true;
-    }
-}
-
-fn set(choice: Option<Choice>) -> u64 {
-    *CHOSEN.lock().unwrap_or_else(PoisonError::into_inner) = choice;
-    let round = ROUND.fetch_add(1, Ordering::AcqRel) + 1;
+/// Plays on the device with `id` from now on, or on the system's default when `id` is `None`.
+/// The chosen device gives way to the default while it is not connected or would not open.
+/// Every device is tried afresh.
+pub fn choose(id: Option<String>) {
+    *CHOSEN.lock().unwrap_or_else(PoisonError::into_inner) = id;
     failed().clear();
     announce();
-    round
-}
-
-/// Whether the device chosen in `round` has opened or would not, or `None` while that is not
-/// known yet. A later choice answers for it too.
-pub fn outcome(round: u64) -> Option<Outcome> {
-    if let Some(status) = status().filter(|status| status.round >= round) {
-        return Some(Outcome::Opened(status));
-    }
-    failed()
-        .iter()
-        .rev()
-        .find(|failure| failure.round >= round)
-        .cloned()
-        .map(Outcome::Failed)
 }
 
 /// The stream every engine plays into, if one is open.
@@ -183,9 +146,8 @@ pub fn settings() -> Option<&'static str> {
     }
 }
 
-/// The device to play on: the chosen one while it is connected, and the system's default
-/// otherwise. A device that would not open is not offered again, and a chosen one gives way to
-/// the default only when it was restored rather than picked.
+/// The device to play on: the chosen one while it is connected and has not failed to open, and
+/// the system's default otherwise. A device that would not open is not offered again.
 pub(crate) fn wanted() -> Result<cpal::Device> {
     let host = cpal::default_host();
     forget_gone(&host);
@@ -193,15 +155,10 @@ pub(crate) fn wanted() -> Result<cpal::Device> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
-    if let Some(choice) = chosen
-        && let Some(device) = choice.id.parse().ok().and_then(|id| host.device_by_id(&id))
+    if let Some(id) = chosen.filter(|id| !refused(id))
+        && let Some(device) = id.parse().ok().and_then(|id| host.device_by_id(&id))
     {
-        if !refused(&choice.id) {
-            return Ok(device);
-        }
-        if !choice.fallback {
-            bail!("the chosen output device would not open");
-        }
+        return Ok(device);
     }
     let device = host
         .default_output_device()
@@ -213,19 +170,18 @@ pub(crate) fn wanted() -> Result<cpal::Device> {
 }
 
 /// Remembers that the device with `id` would not open, so `wanted` passes it over.
-pub(crate) fn refuse(id: &str, error: &anyhow::Error, round: u64) {
+pub(crate) fn refuse(id: &str, error: &anyhow::Error) {
     let saved = CHOSEN
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .is_some_and(|choice| choice.fallback && choice.id == id);
+        .as_deref()
+        == Some(id);
     let mut failed = failed();
     failed.retain(|failure| failure.id != id);
     failed.push(Failure {
         id: id.to_owned(),
         error: format!("{error:#}"),
         saved,
-        round,
     });
     drop(failed);
     announce();
@@ -235,11 +191,6 @@ pub(crate) fn refuse(id: &str, error: &anyhow::Error, round: u64) {
 pub(crate) fn opened(id: &str) {
     failed().retain(|failure| failure.id != id);
     announce();
-}
-
-/// The round of the latest choice.
-pub(crate) fn round() -> u64 {
-    ROUND.load(Ordering::Acquire)
 }
 
 /// cpal's id for `device` as a string, or `unknown` when it has none.

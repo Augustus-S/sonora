@@ -1,18 +1,22 @@
 use std::time::Duration;
 
+use anyhow::Result;
 use gpui::{Context, Entity, Task};
-use music::output::{self, Device, Failure, Outcome, Status};
+use music::output::{self, Device, Failure, Opened, Status};
 
-use crate::{AppSettings, Playback};
+use crate::{AppSettings, Io, Playback, join};
 
 /// How long a newly picked device holds the picker before it is let go, whether or not it has
 /// answered. CoreAudio takes about ten seconds to give up on a device that will not start.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a picked device's stream is kept open for the restarted engines to join it.
+const HANDOVER: Duration = Duration::from_secs(2);
 
 /// The output devices the system offers, the one chosen, and what the stream Sonora plays into
 /// runs at. The list is read off the main thread, since that opens devices on some platforms, and
-/// both are read again whenever a stream opens or closes. A device picked here is saved only once
-/// it has opened, so one that will not open is never what the next run starts on.
+/// both are read again whenever a stream opens or closes. A device picked here is opened first
+/// and only moved onto, and saved, once it has; one that will not open leaves everything as it
+/// was.
 pub struct Outputs {
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
@@ -21,12 +25,18 @@ pub struct Outputs {
     listed: bool,
     status: Option<Status>,
     failure: Option<Failure>,
-    /// The device playing, or being tried, by cpal id, or `None` to follow the system's default.
+    /// The device chosen, by cpal id, or `None` to follow the system's default.
     selected: Option<String>,
-    /// A device picked and not yet answered for, with the round `output::outcome` answers.
-    pending: Option<(Option<String>, u64)>,
+    /// A device picked and being opened, shown as chosen until it answers.
+    trying: Option<Option<String>>,
+    /// The last pick that would not open, with why.
+    rejected: Option<(Option<String>, String)>,
+    /// Opens the picked device off the main thread. Dropping it drops the pick.
+    opening: Option<Task<()>>,
     /// Runs out `SWITCH_TIMEOUT` after a pick. While it is set the picker is held.
     holding: Option<Task<()>>,
+    /// The picked device's stream, kept open until the engines have joined it.
+    handover: Option<(Opened, Task<()>)>,
     listing: Option<Task<()>>,
     _watch: Task<()>,
 }
@@ -40,7 +50,7 @@ impl Outputs {
         cx: &mut Context<Self>,
     ) -> Self {
         let selected = settings.read(cx).output_device().map(str::to_owned);
-        output::restore(selected.clone());
+        output::choose(selected.clone());
 
         let mut changes = output::changes();
         let watch = cx.spawn(async move |this, cx| {
@@ -48,7 +58,6 @@ impl Outputs {
                 let updated = this.update(cx, |this, cx| {
                     this.status = output::status();
                     this.failure = output::failure();
-                    this.settle(cx);
                     this.forget_broken(cx);
                     this.refresh(cx);
                     cx.notify();
@@ -67,8 +76,11 @@ impl Outputs {
             status: output::status(),
             failure: output::failure(),
             selected,
-            pending: None,
+            trying: None,
+            rejected: None,
+            opening: None,
             holding: None,
+            handover: None,
             listing: None,
             _watch: watch,
         };
@@ -98,7 +110,18 @@ impl Outputs {
     /// The device playing or being tried, or `None` when Sonora follows the system's default.
     /// It may not be connected, in which case Sonora plays on the default until it is.
     pub fn chosen(&self) -> Option<&str> {
-        self.selected.as_deref()
+        match &self.trying {
+            Some(trying) => trying.as_deref(),
+            None => self.selected.as_deref(),
+        }
+    }
+
+    /// The last pick that would not open, as its device id, `None` for the system's default, and
+    /// the error. It stays until the next pick.
+    pub fn rejected(&self) -> Option<(Option<&str>, &str)> {
+        self.rejected
+            .as_ref()
+            .map(|(id, error)| (id.as_deref(), error.as_str()))
     }
 
     /// Whether a device was just picked and has not answered yet, so no other can be picked.
@@ -106,30 +129,25 @@ impl Outputs {
         self.holding.is_some()
     }
 
-    /// Moves playback onto `id`, or the system's default when `None`, now, paused or not, and
-    /// saves it once it opens. A device that would not open leaves nothing playing, `failure`
-    /// saying why, and the saved device as it was. Once saved, a device that later will not open
-    /// gives way to the default and is forgotten.
+    /// Opens `id`, or the system's default when `None`, and once it opens moves playback onto
+    /// it, paused or not, and saves it. A device that will not open leaves playback and the saved
+    /// device as they were, with `rejected` saying why.
     pub fn choose(&mut self, id: Option<String>, cx: &mut Context<Self>) {
         if self.switching() {
             return;
         }
         // the same device again, with nothing wrong, would only cut the sound for a moment
-        if id == self.selected && self.failure.is_none() {
+        if id == self.selected && self.failure.is_none() && self.rejected.is_none() {
             return;
         }
-        self.selected = id.clone();
-        let round = output::choose(id.clone());
-        let restarted = self
-            .playback
-            .update(cx, |playback, cx| playback.restart_outputs(cx));
-        // with no engine running nothing opens to answer, so the pick is kept as it is
-        if !restarted {
-            self.save(id, cx);
-            cx.notify();
-            return;
-        }
-        self.pending = Some((id, round));
+        self.rejected = None;
+        self.trying = Some(id.clone());
+        let io = Io::global(cx);
+        let wanted = id.clone();
+        self.opening = Some(cx.spawn(async move |this, cx| {
+            let opened = join(io.spawn_blocking(move || output::open(wanted.as_deref()))).await;
+            this.update(cx, |this, cx| this.picked(id, opened, cx)).ok();
+        }));
         self.holding = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SWITCH_TIMEOUT).await;
             this.update(cx, |this, cx| {
@@ -138,26 +156,35 @@ impl Outputs {
             })
             .ok();
         }));
-        self.settle(cx);
         cx.notify();
     }
 
-    /// Saves the pending device once it has opened, or drops it once it would not, letting the
-    /// picker go either way. A device that answers after the timeout is still saved.
-    fn settle(&mut self, cx: &mut Context<Self>) {
-        let Some((id, round)) = &self.pending else {
-            return;
-        };
-        let Some(outcome) = output::outcome(*round) else {
-            return;
-        };
-        let (id, round) = (id.clone(), *round);
-        self.pending = None;
+    /// Takes the answer to a pick: moves playback onto a device that opened and saves it, or
+    /// keeps why it would not.
+    fn picked(&mut self, id: Option<String>, opened: Result<Opened>, cx: &mut Context<Self>) {
+        self.opening = None;
         self.holding = None;
-        if let Outcome::Opened(_) = outcome {
-            output::keep(round);
-            self.save(id, cx);
-        }
+        self.trying = None;
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                log::warn!("playback: cannot select the output device: {error:#}");
+                self.rejected = Some((id, format!("{error:#}")));
+                cx.notify();
+                return;
+            }
+        };
+        self.selected = id.clone();
+        output::choose(id.clone());
+        self.save(id, cx);
+        self.playback
+            .update(cx, |playback, cx| playback.restart_outputs(cx));
+        let release = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(HANDOVER).await;
+            this.update(cx, |this, _| this.handover = None).ok();
+        });
+        self.handover = Some((opened, release));
+        cx.notify();
     }
 
     /// Forgets the saved device once it is there but would not open, so the next run does not
@@ -176,7 +203,7 @@ impl Outputs {
         );
         self.selected = None;
         self.save(None, cx);
-        output::restore(None);
+        output::choose(None);
     }
 
     fn save(&self, id: Option<String>, cx: &mut Context<Self>) {

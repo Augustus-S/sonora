@@ -627,9 +627,13 @@ impl SettingsView {
                     slots.push(Slot::Widevine);
                 }
                 slots.extend([Slot::Title("settings-group-devices"), Slot::OutputDevice]);
-                match self.outputs.read(cx).failure().is_some() {
-                    true => slots.push(Slot::OutputFailure),
-                    false => slots.extend([Slot::SampleRate, Slot::Buffer]),
+                let outputs = self.outputs.read(cx);
+                if outputs.rejected().is_some() || outputs.failure().is_some() {
+                    slots.push(Slot::OutputFailure);
+                }
+                // with nothing open there is no rate or buffer to show
+                if outputs.failure().is_none() {
+                    slots.extend([Slot::SampleRate, Slot::Buffer]);
                 }
                 slots.extend([Slot::Title("settings-group-equalizer"), Slot::Equalizer]);
                 if self.playback.read(cx).equalizer() {
@@ -791,7 +795,7 @@ impl SettingsView {
                 t!("settings-output-device"),
                 t!("settings-output-device-detail"),
             ),
-            Slot::OutputFailure => (t!("settings-output-failed"), self.output_error(cx)),
+            Slot::OutputFailure => self.output_failure(cx),
             Slot::SampleRate => (
                 t!("settings-sample-rate"),
                 t!("settings-sample-rate-detail"),
@@ -2352,28 +2356,47 @@ impl SettingsView {
         )
     }
 
-    /// Why nothing plays: the device to play on would not open. It stands in for the rate and
-    /// buffer rows, which have no stream to describe.
+    /// Why a pick was not taken, or, with nothing picked, why nothing plays: the device to play
+    /// on would not open. The latter stands in for the rate and buffer rows.
     fn output_failure_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
+        let (title, detail) = self.output_failure(cx);
 
         self.row(
-            t!("settings-output-failed"),
-            self.output_error(cx),
+            title,
+            detail,
             theme.muted_foreground,
             theme.text(Text::Small),
             div().into_any_element(),
         )
     }
 
-    fn output_error(&self, cx: &App) -> SharedString {
-        let error = self
-            .outputs
-            .read(cx)
+    /// The failure row's title and detail.
+    fn output_failure(&self, cx: &App) -> (SharedString, SharedString) {
+        let outputs = self.outputs.read(cx);
+        if let Some((id, error)) = outputs.rejected() {
+            let name = match id {
+                None => t!("settings-output-device-system"),
+                Some(id) => outputs
+                    .devices()
+                    .iter()
+                    .find(|device| device.id == id)
+                    .map(|device| SharedString::from(device.name.clone()))
+                    .unwrap_or_else(|| SharedString::from(id.to_owned())),
+            };
+            return (
+                t!("settings-output-select-failed", name = name.to_string()),
+                t!("settings-output-failed-detail", error = error),
+            );
+        }
+        let error = outputs
             .failure()
             .map(|failure| failure.error.clone())
             .unwrap_or_default();
-        t!("settings-output-failed-detail", error = error)
+        (
+            t!("settings-output-failed"),
+            t!("settings-output-failed-detail", error = error),
+        )
     }
 
     /// The rate the device runs at, with a way into the system's own settings to change it

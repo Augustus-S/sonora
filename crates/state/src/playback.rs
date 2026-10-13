@@ -2108,11 +2108,10 @@ impl Playback {
     }
 
     /// Rebuilds every running engine on the audio device it should play on now, as when the
-    /// device is chosen in settings. Returns whether any was running.
-    pub(crate) fn restart_outputs(&mut self, cx: &mut Context<Self>) -> bool {
-        let streaming = self.restart_output(false, cx);
-        let local = self.restart_output(true, cx);
-        streaming || local
+    /// device is chosen in settings.
+    pub(crate) fn restart_outputs(&mut self, cx: &mut Context<Self>) {
+        self.restart_output(false, cx);
+        self.restart_output(true, cx);
     }
 
     /// Rebuilds the local or the streaming engine, if it is running, on the audio device it
@@ -2120,20 +2119,20 @@ impl Playback {
     /// playing if it was and held paused there if it was not; the other one, or one with nothing
     /// loaded, comes back empty, so its stream still reopens at the device's new rate. A failed
     /// track is left as it is.
-    fn restart_output(&mut self, local: bool, cx: &mut Context<Self>) -> bool {
+    fn restart_output(&mut self, local: bool, cx: &mut Context<Self>) {
         let running = match local {
             true => self.local_engine.is_some(),
             false => self.engine.is_some(),
         };
         if !running {
-            return false;
+            return;
         }
         let playback = match local {
             true => self.session.read(cx).local_playback(),
             false => self.session.read(cx).playback(),
         };
         let Some(playback) = playback else {
-            return false;
+            return;
         };
         let current = self
             .track
@@ -2169,7 +2168,6 @@ impl Playback {
         {
             self.load_from(&track, at, Start::Pick, cx);
         }
-        true
     }
 
     /// Whether a track's failure is the session having gone stale, in which case the session

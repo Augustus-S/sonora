@@ -21,11 +21,12 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
+use ardftsrc::RodioResampler;
 use async_trait::async_trait;
 use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::audio::{Chain, Resampled, Volume};
+use crate::audio::{Chain, Volume, resampled};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
@@ -696,7 +697,7 @@ struct Playing<F: Fetch> {
     id: String,
     /// Kept so a seek can open a second decoder over the same download.
     loaded: F::Loaded,
-    source: Resampled<F::Source>,
+    source: RodioResampler<F::Source>,
     channels: u16,
     /// The rate the samples reach the queue at, which is the device's.
     rate: u32,
@@ -710,8 +711,9 @@ struct Playing<F: Fetch> {
 }
 
 impl<F: Fetch> Playing<F> {
-    /// Opens a decoder for one track, resampled to `rate`, the device's, when that is not its
-    /// own. `None` means it cannot be played, or the resampler failed after taking the decoder.
+    /// Opens a decoder for one track, resampled to `rate`, the device's, which passes it through
+    /// untouched when that is its own. `None` means it cannot be played, or the resampler failed
+    /// after taking the decoder.
     fn open(
         fetch: &F,
         id: &str,
@@ -723,7 +725,7 @@ impl<F: Fetch> Playing<F> {
     ) -> Option<Self> {
         let source = fetch.open(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
-        let source = match Resampled::Native(source).to(rate) {
+        let source = match resampled(source, rate) {
             Ok(source) => source,
             Err(error) => {
                 log::error!("playback: cannot resample {id}: {error:#}");

@@ -613,6 +613,7 @@ settings-buffer-value = { $frames ->
 settings-output-idle = Not playing
 settings-output-device-loading = Loading devices…
 settings-output-failed = Device not supported
+settings-output-select-failed = Unable to select { $name }
 settings-output-failed-detail = Error: { $error }
 settings-sleep = Sleep timer
 settings-sleep-detail = Lets the music stop on its own after a set time, so it can play you to sleep

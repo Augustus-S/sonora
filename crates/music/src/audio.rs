@@ -1,5 +1,5 @@
 use std::num::NonZero;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread;
 use std::time::Duration;
@@ -56,7 +56,7 @@ pub struct Chain {
 }
 
 /// One open stream on an output device, with the mixer the engines' chains play into.
-struct Device {
+pub(crate) struct Device {
     id: String,
     name: String,
     rate: u32,
@@ -68,8 +68,6 @@ struct Device {
     stale: AtomicBool,
     /// Where each output on the stream hears that it has to reopen.
     listeners: Mutex<Vec<UnboundedSender<()>>>,
-    /// The latest choice of device this stream answers, as `output::outcome` reads it.
-    round: AtomicU64,
     stream: MixerDeviceSink,
 }
 
@@ -83,19 +81,31 @@ impl Device {
         // wait: `status` reads `SHARED`, which is never held across an open, since CoreAudio can
         // take ten seconds to give up on a device.
         let _opening = OPENING.lock().unwrap_or_else(PoisonError::into_inner);
-        match Self::join(output::wanted()?) {
+        match Self::refusing(output::wanted()?) {
             Ok(open) => Ok(open),
             Err(error) => match output::wanted() {
-                Ok(device) => Self::join(device),
+                Ok(device) => Self::refusing(device),
                 Err(_) => Err(error),
             },
         }
     }
 
-    /// The open stream on `device`, or a new one. A device that would not open is refused.
+    /// The shared stream on `device`, opened now whatever is wanted, as a device picked in
+    /// settings is tried before the engines move onto it. A device that will not open is not
+    /// remembered.
+    pub(crate) fn open_now(device: cpal::Device) -> Result<Arc<Self>> {
+        let _opening = OPENING.lock().unwrap_or_else(PoisonError::into_inner);
+        Self::join(device)
+    }
+
+    /// `join`, remembering a device that would not open so `output::wanted` passes it over.
+    fn refusing(device: cpal::Device) -> Result<Arc<Self>> {
+        let id = output::ident(&device);
+        Self::join(device).inspect_err(|error| output::refuse(&id, error))
+    }
+
+    /// The open stream on `device`, or a new one.
     fn join(device: cpal::Device) -> Result<Arc<Self>> {
-        // taken before the open, so a choice made while it runs is not answered by it
-        let round = output::round();
         let id = output::ident(&device);
         let current = SHARED
             .lock()
@@ -104,19 +114,10 @@ impl Device {
         if let Some(open) = current
             .filter(|open| open.id == id && open.live() && !output_rate::moved(&device, open.rate))
         {
-            if open.round.fetch_max(round, Ordering::AcqRel) < round {
-                output::announce();
-            }
             return Ok(open);
         }
 
-        let open = match Self::open(device, id.clone(), round) {
-            Ok(open) => Arc::new(open),
-            Err(error) => {
-                output::refuse(&id, &error, round);
-                return Err(error);
-            }
-        };
+        let open = Arc::new(Self::open(device, id.clone())?);
         *SHARED.lock().unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(&open);
         watch(Arc::downgrade(&open));
         output::opened(&id);
@@ -125,7 +126,7 @@ impl Device {
 
     /// Opens the device at the rate it runs at, so nothing between here and the hardware
     /// converts what Sonora plays.
-    fn open(device: cpal::Device, id: String, round: u64) -> Result<Self> {
+    fn open(device: cpal::Device, id: String) -> Result<Self> {
         let default = device
             .default_output_config()
             .map_err(|error| anyhow::anyhow!("cannot read the output config: {error}"))?;
@@ -141,7 +142,6 @@ impl Device {
             failed,
             stale: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
-            round: AtomicU64::new(round),
             stream,
         })
     }
@@ -250,13 +250,17 @@ pub(crate) fn status() -> Option<output::Status> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .upgrade()?;
-    Some(output::Status {
+    Some(describe(&device))
+}
+
+/// What a stream runs at, as a settings page shows it.
+pub(crate) fn describe(device: &Device) -> output::Status {
+    output::Status {
         id: device.id.clone(),
         name: device.name.clone(),
         rate: device.rate,
         buffer: device.buffer,
-        round: device.round.load(Ordering::Acquire),
-    })
+    }
 }
 
 pub struct SmoothGain<I> {
@@ -467,86 +471,22 @@ impl<I: Source> Source for Trimmed<I> {
     }
 }
 
-/// A track's decoder as the device hears it: untouched when the device runs at the track's own
-/// rate, converted by ardftsrc's high preset when it runs at another. The engine converts as it
+/// A track's decoder converted to `rate`, the device's, by ardftsrc's high preset. A decoder
+/// already at that rate passes through untouched, sample for sample. The engine converts as it
 /// decodes, ahead of the queue, so a pause, a clear or a position read acts on audio already at
-/// the device's rate rather than on what the resampler still holds.
-pub enum Resampled<S: Source> {
-    Native(S),
-    Converted(Box<RodioResampler<S>>),
-}
-
-impl<S: Source> Resampled<S> {
-    /// Converts to `rate` unless the decoder plays at that rate already or is converted already.
-    /// Fast start primes the resampler from the decoder at once, so the first samples out are
-    /// the track rather than silence. `Err` means the resampler failed after taking the decoder.
-    pub fn to(self, rate: u32) -> Result<Self> {
-        let Self::Native(source) = self else {
-            return Ok(self);
-        };
-        let native = source.sample_rate().get();
-        if native == rate {
-            return Ok(Self::Native(source));
-        }
-
-        let config = ardftsrc::PRESET_HIGH
-            .with_input_rate(native as usize)
-            .with_output_rate(rate as usize)
-            .with_channels(usize::from(source.channels().get()))
-            .with_rodio_fast_start(true);
+/// the device's rate rather than on what the resampler still holds. Fast start primes it from the
+/// decoder at once, so the first samples out are the track rather than silence.
+pub fn resampled<S: Source>(source: S, rate: u32) -> Result<RodioResampler<S>> {
+    let native = source.sample_rate().get();
+    let config = ardftsrc::PRESET_HIGH
+        .with_input_rate(native as usize)
+        .with_output_rate(rate as usize)
+        .with_channels(usize::from(source.channels().get()))
+        .with_rodio_fast_start(true);
+    if native != rate {
         log::info!("sink: resampling {native} Hz to {rate} Hz");
-        RodioResampler::new(source, config)
-            .map(|resampler| Self::Converted(Box::new(resampler)))
-            .context("cannot start the resampler")
     }
-}
-
-impl<S: Source> Iterator for Resampled<S> {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Native(source) => source.next(),
-            Self::Converted(source) => source.next(),
-        }
-    }
-}
-
-impl<S: Source> Source for Resampled<S> {
-    fn current_span_len(&self) -> Option<usize> {
-        match self {
-            Self::Native(source) => source.current_span_len(),
-            Self::Converted(source) => source.current_span_len(),
-        }
-    }
-
-    fn channels(&self) -> NonZero<u16> {
-        match self {
-            Self::Native(source) => source.channels(),
-            Self::Converted(source) => source.channels(),
-        }
-    }
-
-    fn sample_rate(&self) -> NonZero<u32> {
-        match self {
-            Self::Native(source) => source.sample_rate(),
-            Self::Converted(source) => source.sample_rate(),
-        }
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        match self {
-            Self::Native(source) => source.total_duration(),
-            Self::Converted(source) => source.total_duration(),
-        }
-    }
-
-    fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
-        match self {
-            Self::Native(source) => source.try_seek(position),
-            Self::Converted(source) => source.try_seek(position),
-        }
-    }
+    RodioResampler::new(source, config).context("cannot start the resampler")
 }
 
 /// Whether there is an output device to play on. A device can be missing for as long as it
