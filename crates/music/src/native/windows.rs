@@ -1,4 +1,4 @@
-//! WASAPI as cpal opens it, in shared mode: the system mixes every stream at the rate set in Sound
+//! Windows: the system mixes every stream at the rate set in Sound
 //! settings, and only Sound settings can change that rate. It is cpal's default config, which
 //! `native::offers` accepts before asking here, so nothing else is offered and nothing is ever
 //! switched. cpal 0.17.1 lists only that rate anyway, but 0.17.3 lists every common rate and has
