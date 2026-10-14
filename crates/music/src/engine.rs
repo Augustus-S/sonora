@@ -724,6 +724,7 @@ struct Playing<F: Fetch> {
 }
 
 impl<F: Fetch> Playing<F> {
+    /// Opens a decoder for one track, or reports that it cannot be played.
     fn open(
         fetch: &F,
         id: &str,
@@ -1023,10 +1024,10 @@ fn audio_loop<F: Fetch>(
             continue;
         }
 
+        let Some(held) = &mut current else { continue };
         if idle {
             continue;
         }
-        let Some(held) = &mut current else { continue };
 
         let buffer = paced.buffer(held.samples(CHUNK));
         let Some(samples) = held.take(CHUNK, buffer) else {

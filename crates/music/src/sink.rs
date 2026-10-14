@@ -375,6 +375,11 @@ impl Paced {
         Ok(self.queue_ready(piece))
     }
 
+    /// Whether the queue holds all it should, so the next packet can wait.
+    pub fn full(&self) -> bool {
+        self.live.load(Ordering::Relaxed) > QUEUED_CHUNKS
+    }
+
     /// Flush the resampler. This ends the stream, so it is for when nothing follows: the end of
     /// the queue, or a writer that stops.
     pub fn flush(&mut self) -> usize {
@@ -399,42 +404,6 @@ impl Paced {
     /// to what the writes returned, it is where the next write starts, to within a frame.
     pub fn held_back(&self) -> usize {
         self.resampler.samples_outstanding()
-    }
-
-    /// Queues what the resampler has ready in pieces of `frames` frames, and returns how many
-    /// samples that added. A partial piece waits for the next write (except the tail of a span,
-    /// which is queued as it is). 
-    fn queue_ready(&mut self, frames: usize) -> usize {
-        let mut queued = 0;
-        while let Some(span) = self.resampler.read_span(frames) {
-            let (channels, rate) = (span.channels() as u16, span.sample_rate() as u32);
-            let mut samples = self.spares.take(span.len());
-            samples.extend(span.map(|sample| sample as f32));
-            let Some(packet) = packet(samples, channels, rate) else {
-                continue;
-            };
-            queued += packet.samples.len();
-            self.output
-                .sink()
-                .append(Chunk::new(packet, &self.cue, &self.live, &self.spares));
-        }
-        queued
-    }
-
-    /// Drops what the resampler holds once the cue has moved on a generation, since that is the
-    /// old position, which is not heard.
-    fn forget_cleared(&mut self) {
-        let generation = self.cue.generation.load(Ordering::Relaxed);
-        if generation == self.generation {
-            return;
-        }
-        self.generation = generation;
-        self.resampler.reset();
-    }
-
-    /// Whether the queue holds all it should, so the next packet can wait.
-    pub fn full(&self) -> bool {
-        self.live.load(Ordering::Relaxed) > QUEUED_CHUNKS
     }
 
     /// The rate the device runs at. A packet at any other rate is resampled before it is heard.
@@ -463,6 +432,37 @@ impl Paced {
     pub fn disconnected(&self) -> Gone {
         self.changed.send(()).ok();
         Gone
+    }
+
+    /// Queues what the resampler has ready in pieces of `frames` frames, and returns how many
+    /// samples that added. A partial piece waits for the next write (except the tail of a span,
+    /// which is queued as it is).
+    fn queue_ready(&mut self, frames: usize) -> usize {
+        let mut queued = 0;
+        while let Some(span) = self.resampler.read_span(frames) {
+            let (channels, rate) = (span.channels() as u16, span.sample_rate() as u32);
+            let mut samples = self.spares.take(span.len());
+            samples.extend(span.map(|sample| sample as f32));
+            let Some(packet) = packet(samples, channels, rate) else {
+                continue;
+            };
+            queued += packet.samples.len();
+            self.output
+                .sink()
+                .append(Chunk::new(packet, &self.cue, &self.live, &self.spares));
+        }
+        queued
+    }
+
+    /// Drops what the resampler holds once the cue has moved on a generation, since that is the
+    /// old position, which is not heard.
+    fn forget_cleared(&mut self) {
+        let generation = self.cue.generation.load(Ordering::Relaxed);
+        if generation == self.generation {
+            return;
+        }
+        self.generation = generation;
+        self.resampler.reset();
     }
 }
 
