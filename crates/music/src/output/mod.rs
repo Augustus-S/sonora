@@ -515,12 +515,20 @@ fn announce_device_changes() {
 }
 
 /// Where the system lets someone change the device's sample rate, as a URI to open, or `None` on
-/// a system that has no such place.
-pub fn system_audio_settings_uri() -> Option<&'static str> {
+/// a system that has no such place. `device` is the `DeviceInfo::id` of the device playing, if
+/// any; Windows opens that device's own page, and its general sound page without one.
+pub fn system_audio_settings_uri(device: Option<&str>) -> Option<String> {
     if cfg!(target_os = "macos") {
-        Some("file:///System/Applications/Utilities/Audio%20MIDI%20Setup.app")
+        Some("file:///System/Applications/Utilities/Audio%20MIDI%20Setup.app".to_owned())
     } else if cfg!(target_os = "windows") {
-        Some("ms-settings:sound")
+        // a WASAPI id is the endpoint id the device properties page takes
+        let endpoint = device
+            .and_then(|id| id.parse::<cpal::DeviceId>().ok())
+            .map(|id| id.1);
+        Some(match endpoint {
+            Some(endpoint) => format!("ms-settings:sound-properties?endpointId={endpoint}"),
+            None => "ms-settings:sound".to_owned(),
+        })
     } else {
         None
     }

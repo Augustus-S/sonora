@@ -2380,9 +2380,10 @@ impl SettingsView {
         let theme = *cx.theme();
         let outputs = self.outputs.read(cx);
         // while another device is being tried, the open stream is not the one that will play
-        let rate = outputs
-            .active()
-            .filter(|_| !outputs.switching())
+        let active = outputs.active().filter(|_| !outputs.switching());
+        let settings_uri =
+            music::output::system_audio_settings_uri(active.map(|active| active.id.as_str()));
+        let rate = active
             .map(|active| {
                 t!(
                     "settings-sample-rate-value",
@@ -2404,14 +2405,14 @@ impl SettingsView {
                 .items_center()
                 .gap_2()
                 .child(rate)
-                .when_some(music::output::system_audio_settings_uri(), |row, uri| {
+                .when_some(settings_uri, |row, uri| {
                     row.child(
                         Button::new("sample-rate-change")
                             .label(t!("settings-sample-rate-change"))
                             .small()
                             .outline()
                             .icon("icons/link.svg")
-                            .on_click(move |_, _, cx| cx.open_url(uri)),
+                            .on_click(move |_, _, cx| cx.open_url(&uri)),
                     )
                 })
                 .into_any_element(),
