@@ -28,6 +28,8 @@ pub struct Outputs {
     listed: bool,
     active: Option<DeviceInfo>,
     failure: Option<Failure>,
+    /// Whether nothing is heard because no stream would open.
+    failing: bool,
     /// The device chosen, by cpal id, or `None` to follow the system's default.
     selected: Option<String>,
     /// A device picked and being opened, shown as chosen until it answers.
@@ -61,6 +63,7 @@ impl Outputs {
                 let updated = this.update(cx, |this, cx| {
                     this.active = output::active_device_info();
                     this.failure = output::latest_device_failure();
+                    this.failing = output::failing();
                     this.forget_broken(cx);
                     this.refresh(cx);
                     cx.notify();
@@ -78,6 +81,7 @@ impl Outputs {
             listed: false,
             active: output::active_device_info(),
             failure: output::latest_device_failure(),
+            failing: output::failing(),
             selected,
             trying: None,
             rejected: None,
@@ -108,6 +112,12 @@ impl Outputs {
     /// Why nothing plays, when the device to play on would not open and nothing took its place.
     pub fn failure(&self) -> Option<&Failure> {
         self.failure.as_ref().filter(|_| self.active.is_none())
+    }
+
+    /// Whether nothing is heard because no stream would open: every device to try would not open,
+    /// or there was none.
+    pub fn failing(&self) -> bool {
+        self.failing
     }
 
     /// The device playing or being tried, or `None` when Sonora follows the system's default.

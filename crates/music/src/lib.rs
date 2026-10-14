@@ -50,6 +50,7 @@ pub use models::{
     Playlist, PlaylistDetail, ReleaseType, RomanizedText, SavedArtist, Track, TrackKey, TrackTags,
     UserDetail, UserProfile, Voice, WritingSystem,
 };
+pub use output::{Server as SoundServer, missing_bridge};
 pub use spectrum::Spectrum;
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";

@@ -69,13 +69,23 @@ pub struct Failure {
     pub saved: bool,
 }
 
-/// Which device was chosen in settings, and which devices would not open. One lock covers both,
-/// so a new choice and the failures it clears change together.
+/// A desktop sound server, which ALSA reaches only through the plugin its package installs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Server {
+    PipeWire,
+    PulseAudio,
+}
+
+/// Which device was chosen in settings, which devices would not open, and whether anything plays
+/// at all. One lock covers them, so a new choice and the failures it clears change together.
 struct DeviceSelection {
     /// The chosen device's cpal id, or `None` to follow the system's default.
     chosen: Option<String>,
     /// The devices that would not open, most recent last.
     failed: Vec<Failure>,
+    /// Whether the last attempt to get a stream to play on failed, so nothing is heard: every
+    /// device to try would not open, or there was none.
+    failing: bool,
 }
 
 impl DeviceSelection {
@@ -83,6 +93,7 @@ impl DeviceSelection {
         Self {
             chosen: None,
             failed: Vec::new(),
+            failing: false,
         }
     }
 
@@ -98,6 +109,7 @@ impl DeviceSelection {
     fn choose(&mut self, id: Option<String>) {
         self.chosen = id;
         self.failed.clear();
+        self.failing = false;
     }
 
     /// Check if the device with `id` has failed to open.
@@ -106,14 +118,23 @@ impl DeviceSelection {
     }
 
     /// Records that the device with `id` would not open, replacing any earlier failure of it.
-    fn record_failure(&mut self, id: &str, error: &anyhow::Error) {
-        let saved = self.chosen.as_deref() == Some(id);
-        self.clear_failure(id);
-        self.failed.push(Failure {
+    /// Returns whether that changed anything, which the same failure again does not.
+    fn record_failure(&mut self, id: &str, error: &anyhow::Error) -> bool {
+        let failure = Failure {
             id: id.to_owned(),
             error: format!("{error:#}"),
-            saved,
-        });
+            saved: self.chosen.as_deref() == Some(id),
+        };
+        let changed = self.failed.last() != Some(&failure);
+        self.clear_failure(id);
+        self.failed.push(failure);
+        changed
+    }
+
+    /// Records whether the last attempt to get a stream to play on failed, returning whether
+    /// that changed.
+    fn set_failing(&mut self, failing: bool) -> bool {
+        std::mem::replace(&mut self.failing, failing) != failing
     }
 
     /// Forgets any failure recorded for the device with `id`, as once it has opened.
@@ -205,13 +226,22 @@ impl Device {
         // `ACTIVE_DEVICE`, and that lock is never held across an open, since CoreAudio can take
         // ten seconds to give up on a device.
         let _opening = DEVICE_OPEN.lock().unwrap_or_else(PoisonError::into_inner);
-        match Self::join_or_record(resolve_device()?) {
-            Ok(open) => Ok(open),
-            Err(error) => match resolve_device() {
+        let acquired = resolve_device().and_then(|device| {
+            Self::join_or_record(device).or_else(|error| match resolve_device() {
                 Ok(device) => Self::join_or_record(device),
                 Err(_) => Err(error),
-            },
+            })
+        });
+        Self::track_failing(acquired)
+    }
+
+    /// Passes `acquired` through, recording whether it failed, so `failing` reports that nothing
+    /// plays, and announcing when that changes.
+    fn track_failing(acquired: Result<Arc<Self>>) -> Result<Arc<Self>> {
+        if DeviceSelection::lock().set_failing(acquired.is_err()) {
+            announce_device_changes();
         }
+        acquired
     }
 
     /// The shared stream on `device`, opened even if it is not the device `resolve_device` would
@@ -226,8 +256,9 @@ impl Device {
     fn join_or_record(device: cpal::Device) -> Result<Arc<Self>> {
         let id = cpal_ident(&device);
         Self::join(device).inspect_err(|error| {
-            if let Some(id) = &id {
-                DeviceSelection::lock().record_failure(id, error);
+            if let Some(id) = &id
+                && DeviceSelection::lock().record_failure(id, error)
+            {
                 announce_device_changes();
             }
         })
@@ -516,6 +547,56 @@ pub fn output_available() -> bool {
     resolve_device().is_ok()
 }
 
+/// Whether a stream on the device to play on opens right now. The stream is the shared one, so
+/// it closes again at once unless an output already plays on it.
+///
+/// A system default that would not open is tried again, in case whatever held it has let go,
+/// which `resolve_device` alone never does. A device chosen in settings that would not open is
+/// not tried again.
+pub(crate) fn output_openable() -> bool {
+    if output_available() {
+        return Device::acquire().is_ok();
+    }
+    let Some(device) = cpal::default_host().default_output_device() else {
+        return false;
+    };
+    let chosen_and_failed = cpal_ident(&device).is_some_and(|id| {
+        let selection = DeviceSelection::lock();
+        selection.chosen.as_deref() == Some(id.as_str()) && selection.has_failed(&id)
+    });
+    if chosen_and_failed {
+        return false;
+    }
+    let _opening = DEVICE_OPEN.lock().unwrap_or_else(PoisonError::into_inner);
+    Device::track_failing(Device::join_or_record(device)).is_ok()
+}
+
+/// Whether the last attempt to get a stream to play on failed, so whatever plays is not heard:
+/// every device to try would not open, or there was none. On Linux ALSA always names a default
+/// device, so this rather than `output_available` is what tells that the sound cannot get out.
+/// `watch_device_changes` fires when it changes.
+pub fn failing() -> bool {
+    DeviceSelection::lock().failing
+}
+
+/// The sound server this session runs when ALSA has no plugin routing to it. Sonora then opens
+/// the card the server already holds and plays nothing, which `pipewire-alsa` or
+/// `pulseaudio-alsa` fixes. Only ALSA's configuration is read, no device is opened.
+#[cfg(target_os = "linux")]
+pub fn missing_bridge() -> Option<Server> {
+    let server = server()?;
+    let hints = alsa::device_name::HintIter::new_str(None, "pcm").ok()?;
+    let bridged = hints
+        .filter_map(|hint| hint.name)
+        .any(|name| name == "pipewire" || name == "pulse");
+    (!bridged).then_some(server)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn missing_bridge() -> Option<Server> {
+    None
+}
+
 /// Forgets the failures of devices that have left the system, so one that comes back is tried
 /// again.
 fn forget_gone(host: &cpal::Host) {
@@ -613,4 +694,16 @@ fn spawn_watcher(device: Weak<Device>) {
     if let Err(error) = spawned {
         log::warn!("output: cannot watch the output device: {error}");
     }
+}
+
+/// The sound server whose socket this session has, PipeWire first since it also answers on the
+/// PulseAudio socket.
+#[cfg(target_os = "linux")]
+fn server() -> Option<Server> {
+    let runtime = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
+    if runtime.join("pipewire-0").exists() {
+        return Some(Server::PipeWire);
+    }
+    let pulse = std::env::var_os("PULSE_SERVER").is_some() || runtime.join("pulse/native").exists();
+    pulse.then_some(Server::PulseAudio)
 }

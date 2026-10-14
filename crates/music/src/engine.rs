@@ -259,8 +259,10 @@ struct Fetched<F: Fetch> {
 }
 
 /// What the audio thread did when a track ran out: which one ended, and which one, if any, it
-/// went on to decode from the queue. The engine follows this rather than the queue it handed
-/// over, because a queued track can arrive after the end it was meant for, or fail to open.
+/// went on to decode from the queue. It is sent once the last of the ended track has been
+/// heard, since until then a seek still moves within that track. The engine follows this rather
+/// than the queue it handed over, because a queued track can arrive after the end it was meant
+/// for, or fail to open.
 struct Joined {
     ended: String,
     next: Option<String>,
@@ -755,10 +757,15 @@ impl<F: Fetch> Playing<F> {
         }
     }
 
-    /// Pulls up to `frames` frames out of the decoder. `None` means the track ended.
-    fn take(&mut self, frames: usize) -> Option<Vec<f32>> {
-        let wanted = frames * usize::from(self.channels).max(1);
-        let mut samples = Vec::with_capacity(wanted);
+    /// How many samples `frames` frames of this track hold, across every channel.
+    fn samples(&self, frames: usize) -> usize {
+        frames * usize::from(self.channels).max(1)
+    }
+
+    /// Pulls up to `frames` frames out of the decoder into `samples`, which starts empty.
+    /// `None` means the track ended.
+    fn take(&mut self, frames: usize, mut samples: Vec<f32>) -> Option<Vec<f32>> {
+        let wanted = self.samples(frames);
         for sample in self.source.by_ref().take(wanted) {
             samples.push(sample * self.gain);
         }
@@ -786,9 +793,11 @@ impl Mark {
 }
 
 /// A track whose last sample is queued but not yet heard. The events for the join wait for it,
-/// so one track's end and the next one's start land together, on the sample.
-struct Join {
+/// so one track's end and the next one's start land together, on the sample. The ended track's
+/// download is kept so a seek before then can reopen it.
+struct Join<F: Fetch> {
     ended: String,
+    loaded: F::Loaded,
     next: Option<(String, Option<Duration>)>,
     at: u64,
 }
@@ -819,7 +828,7 @@ fn audio_loop<F: Fetch>(
 
     let mut current: Option<Playing<F>> = None;
     let mut written = 0u64;
-    let mut joining: Option<Join> = None;
+    let mut joining: Option<Join<F>> = None;
     let mut heard: Option<Mark> = None;
     let mut queued: Option<(String, F::Loaded)> = None;
     let mut playing = false;
@@ -847,6 +856,12 @@ fn audio_loop<F: Fetch>(
             && cue.played() >= join.at
         {
             let Join { ended, next, .. } = joining.take().unwrap_or_else(|| unreachable!());
+            joins
+                .send(Joined {
+                    ended: ended.clone(),
+                    next: next.as_ref().map(|(id, _)| id.clone()),
+                })
+                .ok();
             events.send(PlaybackEvent::Ended { id: Some(ended) }).ok();
             heard = current.as_ref().map(|held| held.mark(paced.rate()));
             match next {
@@ -943,6 +958,35 @@ fn audio_loop<F: Fetch>(
                             .ok();
                     }
                 }
+                Job::Seek(position) if joining.is_some() => {
+                    // The decoder has run past the end of the track still being heard, onto the
+                    // one queued behind it or onto nothing. The seek is in the heard track, so
+                    // that track reopens and the next one goes back in the queue.
+                    let Some(join) = joining.take() else { continue };
+                    if let Some(next) = current.take() {
+                        queued = Some((next.id, next.loaded));
+                    }
+                    current = Playing::open(
+                        fetch.as_ref(),
+                        &join.ended,
+                        join.loaded,
+                        position,
+                        0,
+                        normalise,
+                    );
+                    if current.is_none() {
+                        log::warn!("playback: cannot seek {}", join.ended);
+                        events
+                            .send(PlaybackEvent::Unavailable {
+                                id: Some(join.ended),
+                            })
+                            .ok();
+                        continue;
+                    }
+                    written = 0;
+                    heard = current.as_ref().map(|held| held.mark(paced.rate()));
+                    cue.arm();
+                }
                 Job::Seek(position) => {
                     let Some(held) = &mut current else { continue };
                     match fetch.reopen_to_seek() {
@@ -983,11 +1027,17 @@ fn audio_loop<F: Fetch>(
         }
         let Some(held) = &mut current else { continue };
 
-        let Some(samples) = held.take(CHUNK) else {
+        let buffer = paced.buffer(held.samples(CHUNK));
+        let Some(samples) = held.take(CHUNK, buffer) else {
             // the decoder is done, but its last samples are still queued. Letting out what the
             // resampler holds puts all of it in the queue, so the join below lands exactly.
             written += paced.flush() as u64;
-            let ended = current.take().map(|held| held.id).unwrap_or_default();
+            let Some(Playing {
+                id: ended, loaded, ..
+            }) = current.take()
+            else {
+                continue;
+            };
             let next = queued.take().and_then(|(id, loaded)| {
                 let duration = fetch.length(&loaded);
                 current = Playing::open(
@@ -1000,22 +1050,17 @@ fn audio_loop<F: Fetch>(
                 );
                 current.as_ref().map(|_| (id, duration))
             });
-            joins
-                .send(Joined {
-                    ended: ended.clone(),
-                    next: next.as_ref().map(|(id, _)| id.clone()),
-                })
-                .ok();
             // both events wait for the queue to reach here, so the join lands on the sample
             joining = Some(Join {
                 ended,
+                loaded,
                 next,
                 at: written,
             });
             continue;
         };
 
-        let Some(chunk) = packet(&samples, held.channels, held.rate) else {
+        let Some(chunk) = packet(samples, held.channels, held.rate) else {
             continue;
         };
         match paced.write(chunk) {

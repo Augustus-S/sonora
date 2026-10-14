@@ -4,13 +4,12 @@
 //! waits on either.
 
 use std::num::NonZero;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use anyhow::Result;
 use ardftsrc::RealtimeResampler;
-use rodio::buffer::SamplesBuffer;
 use rodio::{ChannelCount, SampleRate, Source};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -23,13 +22,13 @@ use crate::output::{self, Output};
 const QUEUED_CHUNKS: usize = 26;
 /// How many frames each piece of a flushed resampler tail is queued in.
 const TAIL_FRAMES: usize = 1024;
+/// How many played-out sample buffers are kept for the next packets. A clear retires the whole
+/// queue at once, so this covers all of it and refilling after a seek allocates nothing.
+const SPARES: usize = QUEUED_CHUNKS + 2;
 /// How long a blocked write sleeps between looks at the queue.
 const DRAIN_POLL: Duration = Duration::from_millis(10);
 /// How often a watch looks for an output device to come back once none could be opened.
 const WATCH_POLL: Duration = Duration::from_secs(1);
-// TEMPORARY, remove before merging: one packet in this many logs how long it waited in the queue.
-const QUEUE_SAMPLE: u64 = 50;
-static QUEUE_SAMPLED: AtomicU64 = AtomicU64::new(0);
 
 /// What the cue does with the next write. It rides in an `AtomicU8`, so it converts at that
 /// boundary and stays a type everywhere else.
@@ -146,28 +145,74 @@ impl Cue {
     }
 }
 
+/// A packet of interleaved samples at one rate, ready for the queue.
+pub struct Packet {
+    samples: Vec<f32>,
+    channels: ChannelCount,
+    rate: SampleRate,
+}
+
+/// Sample buffers that have played out, handed back to the decoder for its next packets, so
+/// steady playback reuses the same few buffers instead of allocating one per packet. The output
+/// callback only ever tries the lock, so it never waits on the decoder.
+#[derive(Clone)]
+struct Spares(Arc<Mutex<Vec<Vec<f32>>>>);
+
+impl Spares {
+    fn new() -> Self {
+        Self(Arc::new(Mutex::new(Vec::with_capacity(SPARES))))
+    }
+
+    /// An empty buffer with room for `wanted` samples, a spare one when there is one.
+    fn take(&self, wanted: usize) -> Vec<f32> {
+        let spare = self.0.lock().unwrap_or_else(PoisonError::into_inner).pop();
+        let mut buffer = spare.unwrap_or_default();
+        buffer.clear();
+        buffer.reserve(wanted);
+        buffer
+    }
+
+    /// Keeps `buffer` for a later packet. It is freed instead when the lock is busy or enough
+    /// are kept already, and keeping one never allocates, because the list is sized up front.
+    fn keep(&self, buffer: Vec<f32>) {
+        if let Ok(mut spares) = self.0.try_lock()
+            && spares.len() < SPARES
+            && buffer.capacity() > 0
+        {
+            spares.push(buffer);
+        }
+    }
+}
+
 /// One packet in the output queue. It ends as soon as the cue moves on a generation and counts
-/// itself out when dropped, whichever way it went, so `live` is the number still queued.
+/// itself out when dropped, whichever way it went, so `live` is the number still queued. Its
+/// buffer goes back to the spares when it drops.
 struct Chunk {
-    samples: SamplesBuffer,
+    samples: Vec<f32>,
+    /// The next sample to hand out.
+    at: usize,
+    channels: ChannelCount,
+    rate: SampleRate,
     born: u32,
     generation: Arc<AtomicU32>,
     played: Arc<AtomicU64>,
     live: Arc<AtomicUsize>,
-    // TEMPORARY, remove before merging: when the packet was queued, until its first pull.
-    queued: Option<Instant>,
+    spares: Spares,
 }
 
 impl Chunk {
-    fn new(samples: SamplesBuffer, cue: &Cue, live: &Arc<AtomicUsize>) -> Self {
+    fn new(packet: Packet, cue: &Cue, live: &Arc<AtomicUsize>, spares: &Spares) -> Self {
         live.fetch_add(1, Ordering::Relaxed);
         Self {
-            samples,
+            samples: packet.samples,
+            at: 0,
+            channels: packet.channels,
+            rate: packet.rate,
             born: cue.generation.load(Ordering::Relaxed),
             generation: cue.generation.clone(),
             played: cue.played.clone(),
             live: live.clone(),
-            queued: Some(Instant::now()),
+            spares: spares.clone(),
         }
     }
 }
@@ -179,47 +224,43 @@ impl Iterator for Chunk {
         if self.generation.load(Ordering::Relaxed) != self.born {
             return None;
         }
-        let sample = self.samples.next()?;
+        let sample = *self.samples.get(self.at)?;
+        self.at += 1;
         self.played.fetch_add(1, Ordering::Relaxed);
-        // TEMPORARY, remove before merging
-        if let Some(queued) = self.queued.take()
-            && QUEUE_SAMPLED
-                .fetch_add(1, Ordering::Relaxed)
-                .is_multiple_of(QUEUE_SAMPLE)
-        {
-            let length = self.samples.total_duration().unwrap_or_default();
-            log::debug!(
-                "sink: packet waited {:.1} ms in the queue ({} queued, {:.1} ms each)",
-                queued.elapsed().as_secs_f64() * 1000.,
-                self.live.load(Ordering::Relaxed),
-                length.as_secs_f64() * 1000.,
-            );
-        }
         Some(sample)
     }
 }
 
 impl Source for Chunk {
+    /// The whole packet until its last sample is out, then nothing, the way a rodio
+    /// `SamplesBuffer` answers.
     fn current_span_len(&self) -> Option<usize> {
-        self.samples.current_span_len()
+        match self.at >= self.samples.len() {
+            true => Some(0),
+            false => Some(self.samples.len()),
+        }
     }
 
     fn channels(&self) -> ChannelCount {
-        self.samples.channels()
+        self.channels
     }
 
     fn sample_rate(&self) -> SampleRate {
-        self.samples.sample_rate()
+        self.rate
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        self.samples.total_duration()
+        let nanos = 1_000_000_000u64.checked_mul(self.samples.len() as u64)?
+            / u64::from(self.rate.get())
+            / u64::from(self.channels.get());
+        Some(Duration::from_nanos(nanos))
     }
 }
 
 impl Drop for Chunk {
     fn drop(&mut self) {
         self.live.fetch_sub(1, Ordering::Relaxed);
+        self.spares.keep(std::mem::take(&mut self.samples));
     }
 }
 
@@ -235,6 +276,7 @@ pub struct Paced {
     cue: Cue,
     /// Chunks appended and not yet played out or retired.
     live: Arc<AtomicUsize>,
+    spares: Spares,
     changed: UnboundedSender<()>,
     /// ardftsrc at its good preset, for every writer. `None` when it would not start, which
     /// leaves the conversion to the mixer.
@@ -267,6 +309,7 @@ impl Paced {
             output,
             cue,
             live: Arc::default(),
+            spares: Spares::new(),
             changed,
             resampler,
             generation,
@@ -289,6 +332,13 @@ impl Paced {
         self.output.set_volume(gain);
     }
 
+    /// An empty sample buffer with room for `wanted` samples, for the next packet. It is one
+    /// that has played out when there is one, so filling the queue in step with the output
+    /// allocates nothing.
+    pub fn buffer(&self, wanted: usize) -> Vec<f32> {
+        self.spares.take(wanted)
+    }
+
     /// Queues one packet. A packet the cue refuses is dropped, so a decoder that has been
     /// retired makes no sound while it winds down. This never blocks: a caller with nothing
     /// else to do waits through `drain`, one with commands to answer waits through `full`.
@@ -296,38 +346,44 @@ impl Paced {
     /// Returns how many samples, at the device's rate, it added to the queue. Resampling holds
     /// some audio back until more is written or `flush` lets it out, so that is not always the
     /// packet's length.
-    pub fn write(&mut self, samples: SamplesBuffer) -> Result<usize, Gone> {
+    pub fn write(&mut self, packet: Packet) -> Result<usize, Gone> {
         if self.output.failed() {
             return Err(self.disconnected());
         }
         if !self.cue.admit() {
+            self.spares.keep(packet.samples);
             return Ok(0);
         }
 
         self.forget_cleared();
         let device = self.rate();
-        let rate = samples.sample_rate().get();
+        let rate = packet.rate.get();
         let Some(resampler) = self.resampler.as_mut().filter(|_| rate != device) else {
             // after whatever the resampler still holds, so the order is kept
-            return Ok(self.flush() + self.append(samples));
+            return Ok(self.flush() + self.append(packet));
         };
 
-        let channels = samples.channels().get();
-        if resampler.input_sample_rate() != rate as usize
-            || resampler.input_channels() != usize::from(channels)
+        let channels = usize::from(packet.channels.get());
+        if resampler.input_sample_rate() != rate as usize || resampler.input_channels() != channels
         {
             log::info!("sink: resampling {rate} Hz to {device} Hz as it is written");
         }
         // pieces about as long as the packet, so a converted queue paces like the packets did
-        let frames = samples.len() / usize::from(channels);
+        let frames = packet.samples.len() / channels;
         let piece = (frames as u64 * u64::from(device)).div_ceil(u64::from(rate)) as usize;
-        if let Err(error) = resampler.write_rodio_buffer(samples) {
+        let written = resampler.write_span(
+            rate as usize,
+            channels,
+            packet.samples.iter().map(|&sample| f64::from(sample)),
+        );
+        // the resampler has copied what it needs, so the buffer goes round for the next packet
+        self.spares.keep(packet.samples);
+        if let Err(error) = written {
             log::error!("sink: cannot resample a packet: {error}");
             resampler.reset();
             return Ok(0);
         }
-        let pieces = ready(resampler, piece);
-        Ok(pieces.into_iter().map(|piece| self.append(piece)).sum())
+        Ok(self.queue_ready(piece))
     }
 
     /// Queues whatever the resampler still holds, as when the writer stops or a track ends, so
@@ -352,8 +408,30 @@ impl Paced {
             resampler.reset();
             return 0;
         }
-        let pieces = ready(resampler, TAIL_FRAMES);
-        pieces.into_iter().map(|piece| self.append(piece)).sum()
+        self.queue_ready(TAIL_FRAMES)
+    }
+
+    /// Queues everything the resampler has ready, in pieces of `frames` frames with the short
+    /// rest at the end of a stream or a format change, each in a spare buffer, and returns how
+    /// many samples that added.
+    fn queue_ready(&mut self, frames: usize) -> usize {
+        let Some(resampler) = &mut self.resampler else {
+            return 0;
+        };
+        let mut queued = 0;
+        while let Some(span) = resampler.read_span(frames) {
+            let (channels, rate) = (span.channels() as u16, span.sample_rate() as u32);
+            let mut samples = self.spares.take(span.len());
+            samples.extend(span.map(|sample| sample as f32));
+            let Some(packet) = packet(samples, channels, rate) else {
+                continue;
+            };
+            queued += packet.samples.len();
+            self.output
+                .sink()
+                .append(Chunk::new(packet, &self.cue, &self.live, &self.spares));
+        }
+        queued
     }
 
     /// Drops what the resampler holds once the cue has moved on a generation, since that is the
@@ -369,12 +447,12 @@ impl Paced {
         }
     }
 
-    /// Queues `samples` and returns how many there were.
-    fn append(&self, samples: SamplesBuffer) -> usize {
-        let queued = samples.len();
+    /// Queues `packet` and returns how many samples it held.
+    fn append(&self, packet: Packet) -> usize {
+        let queued = packet.samples.len();
         self.output
             .sink()
-            .append(Chunk::new(samples, &self.cue, &self.live));
+            .append(Chunk::new(packet, &self.cue, &self.live, &self.spares));
         queued
     }
 
@@ -418,11 +496,16 @@ impl Paced {
 /// device has gone, a Bluetooth headset that dropped its link, has nothing to reopen on and
 /// nothing else asks the system again, so without the watch playback stays silent until the app
 /// restarts. The watch ends when the engine listening on `notify` is gone.
+///
+/// A device that is present is not enough: ALSA always names a default one, and without the
+/// sound server's plugin it never opens. Reporting it anyway would restart the engine every poll,
+/// and dropping librespot's player joins its thread on the main one, so the watch waits until a
+/// stream actually opens.
 pub fn watch_for_output(notify: UnboundedSender<()>) {
     std::thread::spawn(move || {
         while !notify.is_closed() {
             std::thread::sleep(WATCH_POLL);
-            if !output::output_available() {
+            if !output::output_openable() {
                 continue;
             }
             log::info!("sink: an output device is available again, reopening");
@@ -432,17 +515,12 @@ pub fn watch_for_output(notify: UnboundedSender<()>) {
     });
 }
 
-/// A packet of interleaved samples at one rate, ready for the queue.
-pub fn packet(samples: &[f32], channels: u16, rate: u32) -> Option<SamplesBuffer> {
-    Some(SamplesBuffer::new(
-        NonZero::new(channels)?,
-        NonZero::new(rate)?,
+/// A packet of interleaved samples at one rate, ready for the queue. It takes the buffer over
+/// rather than copying it, so a buffer from [`Paced::buffer`] goes round without allocating.
+pub fn packet(samples: Vec<f32>, channels: u16, rate: u32) -> Option<Packet> {
+    Some(Packet {
         samples,
-    ))
-}
-
-/// Everything `resampler` has ready, in pieces of `frames` frames, with the short rest at the end
-/// of a stream or a format change.
-fn ready(resampler: &mut RealtimeResampler, frames: usize) -> Vec<SamplesBuffer> {
-    std::iter::from_fn(|| resampler.read_rodio_buffer(frames)).collect()
+        channels: NonZero::new(channels)?,
+        rate: NonZero::new(rate)?,
+    })
 }
