@@ -1,6 +1,6 @@
 //! librespot's `Sink` over the shared paced output. librespot decodes on its own thread, so
 //! every write here is finished audio; the pacing lives in `crate::sink` and the device watch in
-//! `crate::audio`.
+//! `crate::output`.
 
 use std::time::Duration;
 

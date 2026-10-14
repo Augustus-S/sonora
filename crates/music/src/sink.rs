@@ -14,7 +14,8 @@ use rodio::buffer::SamplesBuffer;
 use rodio::{ChannelCount, SampleRate, Source};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::audio::{Chain, Output};
+use crate::audio::Chain;
+use crate::output::{self, Output};
 
 /// How many packets stay queued before a write blocks. This is what paces the decoder to real
 /// time; deeper rides out network hiccups, but the decoder's position runs this far ahead of
@@ -480,7 +481,7 @@ pub fn watch_for_output(notify: UnboundedSender<()>) {
     std::thread::spawn(move || {
         while !notify.is_closed() {
             std::thread::sleep(WATCH_POLL);
-            if !crate::audio::available() {
+            if !output::output_available() {
                 continue;
             }
             log::info!("sink: an output device is available again, reopening");

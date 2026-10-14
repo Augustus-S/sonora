@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::audio::{Chain, Volume, resampled};
+use crate::audio::{Chain, Volume};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
@@ -694,26 +694,34 @@ fn spawn<F: Fetch>(
 
 /// The track the audio thread is decoding, and where its samples land in real time.
 struct Playing<F: Fetch> {
+    /// The track's id, as the provider knows it and the engine's events report it.
     id: String,
+
     /// Kept so a seek can open a second decoder over the same download.
     loaded: F::Loaded,
+
+    // The underlying source, converted to the device's rate.
     source: RodioResampler<F::Source>,
+
+    /// The number of channels the source has.
     channels: u16,
-    /// The rate the samples reach the queue at, which is the device's.
+
+    /// The device's rate, which the samples reach the queue at.
     rate: u32,
+
+    /// Where in the track decoding started: the open, or the last seek.
     base: Duration,
+
     /// Samples queued before this track's first one. On a gapless join the one before it is
     /// still being heard, so its own position only starts once the count passes this.
     offset: u64,
+
     /// The track's normalisation gain, applied to every sample as it is decoded. Each track
     /// carries its own, so a gapless join changes it on the first sample of the next one.
     gain: f32,
 }
 
 impl<F: Fetch> Playing<F> {
-    /// Opens a decoder for one track, resampled to `rate`, the device's, which passes it through
-    /// untouched when that is its own. `None` means it cannot be played, or the resampler failed
-    /// after taking the decoder.
     fn open(
         fetch: &F,
         id: &str,
@@ -725,13 +733,27 @@ impl<F: Fetch> Playing<F> {
     ) -> Option<Self> {
         let source = fetch.open(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
-        let source = match resampled(source, rate) {
+        let source_sample_rate = source.sample_rate().get();
+
+        // Convert the source to the device's rate using ardftsrc's high preset.
+        // When rates match, the source passes through untouched.
+        let config = ardftsrc::PRESET_HIGH
+            .with_input_rate(source_sample_rate as usize)
+            .with_output_rate(rate as usize)
+            .with_channels(usize::from(source.channels().get()))
+            .with_rodio_fast_start(true);
+        if source_sample_rate != rate {
+            log::info!("playback: resampling {id} from {source_sample_rate} Hz to {rate} Hz");
+        }
+        let source = match RodioResampler::new(source, config) {
             Ok(source) => source,
             Err(error) => {
                 log::error!("playback: cannot resample {id}: {error:#}");
                 return None;
             }
         };
+
+        // Return the converted source.
         Some(Self {
             id: id.to_owned(),
             channels: source.channels().get(),

@@ -2,14 +2,17 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{Context, Entity, Task};
-use music::output::{self, Device, Failure, Opened, Status};
+use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened};
 
 use crate::{AppSettings, Io, Playback, join};
 
 /// How long a newly picked device holds the picker before it is let go, whether or not it has
 /// answered. CoreAudio takes about ten seconds to give up on a device that will not start.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// How long a picked device's stream is kept open for the restarted engines to join it.
+/// TODO: Investigate if we should use a signal instead of a duration.
+/// Perhaps rearchitect SHARED
 const HANDOVER: Duration = Duration::from_secs(2);
 
 /// The output devices the system offers, the one chosen, and what the stream Sonora plays into
@@ -20,10 +23,10 @@ const HANDOVER: Duration = Duration::from_secs(2);
 pub struct Outputs {
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
-    devices: Vec<Device>,
+    devices: Vec<DeviceOption>,
     /// Whether `devices` has been read at least once, so an empty list means none.
     listed: bool,
-    status: Option<Status>,
+    active: Option<DeviceInfo>,
     failure: Option<Failure>,
     /// The device chosen, by cpal id, or `None` to follow the system's default.
     selected: Option<String>,
@@ -50,14 +53,14 @@ impl Outputs {
         cx: &mut Context<Self>,
     ) -> Self {
         let selected = settings.read(cx).output_device().map(str::to_owned);
-        output::choose(selected.clone());
+        output::choose_device(selected.clone());
 
-        let mut changes = output::changes();
+        let mut changes = output::watch_device_changes();
         let watch = cx.spawn(async move |this, cx| {
             while changes.changed().await.is_ok() {
                 let updated = this.update(cx, |this, cx| {
-                    this.status = output::status();
-                    this.failure = output::failure();
+                    this.active = output::active_device_info();
+                    this.failure = output::latest_device_failure();
                     this.forget_broken(cx);
                     this.refresh(cx);
                     cx.notify();
@@ -73,8 +76,8 @@ impl Outputs {
             playback,
             devices: Vec::new(),
             listed: false,
-            status: output::status(),
-            failure: output::failure(),
+            active: output::active_device_info(),
+            failure: output::latest_device_failure(),
             selected,
             trying: None,
             rejected: None,
@@ -88,7 +91,7 @@ impl Outputs {
         outputs
     }
 
-    pub fn devices(&self) -> &[Device] {
+    pub fn devices(&self) -> &[DeviceOption] {
         &self.devices
     }
 
@@ -97,14 +100,14 @@ impl Outputs {
         self.listed
     }
 
-    /// The stream Sonora plays into, or `None` while none is open.
-    pub fn status(&self) -> Option<&Status> {
-        self.status.as_ref()
+    /// The device Sonora plays on, or `None` while no stream is open.
+    pub fn active(&self) -> Option<&DeviceInfo> {
+        self.active.as_ref()
     }
 
     /// Why nothing plays, when the device to play on would not open and nothing took its place.
     pub fn failure(&self) -> Option<&Failure> {
-        self.failure.as_ref().filter(|_| self.status.is_none())
+        self.failure.as_ref().filter(|_| self.active.is_none())
     }
 
     /// The device playing or being tried, or `None` when Sonora follows the system's default.
@@ -175,7 +178,7 @@ impl Outputs {
             }
         };
         self.selected = id.clone();
-        output::choose(id.clone());
+        output::choose_device(id.clone());
         self.save(id, cx);
         self.playback
             .update(cx, |playback, cx| playback.restart_outputs(cx));
@@ -203,7 +206,7 @@ impl Outputs {
         );
         self.selected = None;
         self.save(None, cx);
-        output::choose(None);
+        output::choose_device(None);
     }
 
     fn save(&self, id: Option<String>, cx: &mut Context<Self>) {

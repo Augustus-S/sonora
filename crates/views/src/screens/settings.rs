@@ -2308,7 +2308,7 @@ impl SettingsView {
             Some(id) => match devices.iter().find(|device| &device.id == id) {
                 Some(device) => device.name.clone().into(),
                 // until the list is read, the open stream is the one place the name is known
-                None if !outputs.listed() => match outputs.status().filter(|open| &open.id == id) {
+                None if !outputs.listed() => match outputs.active().filter(|open| &open.id == id) {
                     Some(open) => open.name.clone().into(),
                     None => t!("settings-output-device-loading"),
                 },
@@ -2406,12 +2406,12 @@ impl SettingsView {
         let outputs = self.outputs.read(cx);
         // while another device is being tried, the open stream is not the one that will play
         let rate = outputs
-            .status()
+            .active()
             .filter(|_| !outputs.switching())
-            .map(|status| {
+            .map(|active| {
                 t!(
                     "settings-sample-rate-value",
-                    khz = f64::from(status.rate) / 1_000.
+                    khz = f64::from(active.rate) / 1_000.
                 )
             })
             .unwrap_or_else(|| match outputs.switching() {
@@ -2429,14 +2429,14 @@ impl SettingsView {
                 .items_center()
                 .gap_2()
                 .child(rate)
-                .when_some(music::output::settings(), |row, url| {
+                .when_some(music::output::system_audio_settings_uri(), |row, uri| {
                     row.child(
                         Button::new("sample-rate-change")
                             .label(t!("settings-sample-rate-change"))
                             .small()
                             .outline()
                             .icon("icons/link.svg")
-                            .on_click(move |_, _, cx| cx.open_url(url)),
+                            .on_click(move |_, _, cx| cx.open_url(uri)),
                     )
                 })
                 .into_any_element(),
@@ -2448,13 +2448,13 @@ impl SettingsView {
         let theme = *cx.theme();
         let outputs = self.outputs.read(cx);
         let buffer = outputs
-            .status()
+            .active()
             .filter(|_| !outputs.switching())
-            .map(|status| {
-                let ms = f64::from(status.buffer) * 1_000. / f64::from(status.rate.max(1));
+            .map(|active| {
+                let ms = f64::from(active.buffer) * 1_000. / f64::from(active.rate.max(1));
                 t!(
                     "settings-buffer-value",
-                    frames = status.buffer,
+                    frames = active.buffer,
                     ms = ms.round() as i64
                 )
             })
