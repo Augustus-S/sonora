@@ -278,9 +278,8 @@ pub struct Paced {
     live: Arc<AtomicUsize>,
     spares: Spares,
     changed: UnboundedSender<()>,
-    /// ardftsrc at its good preset, for every writer. `None` when it would not start, which
-    /// leaves the conversion to the mixer.
-    resampler: Option<RealtimeResampler>,
+    /// ardftsrc at its good preset, for every writer.
+    resampler: RealtimeResampler,
     /// The cue generation the audio the resampler holds belongs to.
     generation: u32,
 }
@@ -297,13 +296,9 @@ impl Paced {
             .with_input_rate(rate)
             .with_output_rate(rate)
             .with_channels(2);
+        // rodio refuses a zero rate when the output opens, so the config is always valid
         let resampler = RealtimeResampler::new(config)
-            .inspect_err(|error| {
-                log::error!(
-                    "sink: cannot start the resampler, leaving the conversion to the mixer: {error}"
-                )
-            })
-            .ok();
+            .expect("PRESET_GOOD at the device's non-zero rate, in stereo, is a valid config");
         let generation = cue.generation.load(Ordering::Relaxed);
         Ok(Self {
             output,
@@ -358,17 +353,15 @@ impl Paced {
         self.forget_cleared();
         let device = self.rate();
         let rate = packet.rate.get();
-        let Some(resampler) = self.resampler.as_mut().filter(|_| rate != device) else {
+        if rate == device {
             // after whatever the resampler still holds, so the order is kept
             return Ok(self.flush() + self.append(packet));
-        };
+        }
+        let resampler = &mut self.resampler;
 
         let channels = usize::from(packet.channels.get());
-        if resampler.input_sample_rate() != rate as usize || resampler.input_channels() != channels
-        {
-            log::info!("sink: resampling {rate} Hz to {device} Hz as it is written");
-        }
-        // pieces about as long as the packet, so a converted queue paces like the packets did
+
+        // pieces about as long as the packet, so a resampled queue paces like the packets did
         let frames = packet.samples.len() / channels;
         let piece = (frames as u64 * u64::from(device)).div_ceil(u64::from(rate)) as usize;
         let written = resampler.write_span(
@@ -392,13 +385,10 @@ impl Paced {
     /// before a clear is dropped instead.
     pub fn flush(&mut self) -> usize {
         self.forget_cleared();
-        let Some(resampler) = self
-            .resampler
-            .as_mut()
-            .filter(|resampler| !resampler.is_empty())
-        else {
+        let resampler = &mut self.resampler;
+        if resampler.is_empty() {
             return 0;
-        };
+        }
         if self.cue.cleared() {
             resampler.reset();
             return 0;
@@ -415,11 +405,8 @@ impl Paced {
     /// rest at the end of a stream or a format change, each in a spare buffer, and returns how
     /// many samples that added.
     fn queue_ready(&mut self, frames: usize) -> usize {
-        let Some(resampler) = &mut self.resampler else {
-            return 0;
-        };
         let mut queued = 0;
-        while let Some(span) = resampler.read_span(frames) {
+        while let Some(span) = self.resampler.read_span(frames) {
             let (channels, rate) = (span.channels() as u16, span.sample_rate() as u32);
             let mut samples = self.spares.take(span.len());
             samples.extend(span.map(|sample| sample as f32));
@@ -442,9 +429,7 @@ impl Paced {
             return;
         }
         self.generation = generation;
-        if let Some(resampler) = &mut self.resampler {
-            resampler.reset();
-        }
+        self.resampler.reset();
     }
 
     /// Queues `packet` and returns how many samples it held.
