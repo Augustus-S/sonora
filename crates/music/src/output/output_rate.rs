@@ -44,17 +44,15 @@ pub(crate) fn config(
     device: &cpal::Device,
     default: SupportedStreamConfig,
 ) -> SupportedStreamConfig {
-    let ranges = device.supported_output_configs();
+    let Ok(ranges) = device.supported_output_configs() else {
+        return default;
+    };
     ranges
-        .ok()
-        .and_then(|mut ranges| {
-            ranges.find_map(|range| {
-                (range.channels() == default.channels()
-                    && range.sample_format() == default.sample_format())
-                .then(|| range.try_with_sample_rate(SERVER_RATE))
-                .flatten()
-            })
+        .filter(|range| {
+            range.channels() == default.channels()
+                && range.sample_format() == default.sample_format()
         })
+        .find_map(|range| range.try_with_sample_rate(SERVER_RATE))
         .unwrap_or(default)
 }
 
