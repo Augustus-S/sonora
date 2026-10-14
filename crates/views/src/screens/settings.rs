@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::shared::confirm::{Confirm, Kind};
@@ -2659,8 +2660,8 @@ impl SettingsView {
         )
     }
 
-    /// The About row that opens the current log file in whatever the system reads text with.
-    /// The button is disabled when the platform names no state or cache folder to log into.
+    /// The About row that opens a copy of the current log file in whatever the system reads text
+    /// with. The button is disabled when the platform names no state or cache folder to log into.
     fn log_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let path = state::log_file();
@@ -2677,7 +2678,7 @@ impl SettingsView {
                 .disabled(path.is_none())
                 .on_click(move |_, _, _| {
                     let Some(path) = &path else { return };
-                    if let Err(error) = open_path(path) {
+                    if let Err(error) = snapshot(path).and_then(|copy| open_path(&copy)) {
                         log::warn!("settings: cannot open {}: {error}", path.display());
                     }
                 })
@@ -4567,20 +4568,17 @@ fn wrapped_lines(text: SharedString, size: Pixels, width: Pixels, window: &Windo
 }
 
 /// Hands a file to the system's default application for it, without waiting on that program.
-fn open_path(path: &Path) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .spawn()?;
+fn open_path(path: &Path) -> io::Result<()> {
+    open::that_detached(path)
+}
 
-    #[cfg(target_os = "macos")]
-    Command::new("open").arg(path).spawn()?;
-
-    #[cfg(target_os = "linux")]
-    Command::new("xdg-open").arg(path).spawn()?;
-
-    Ok(())
+/// Copies the log to the temp folder. Notepad refuses a file that another process has open for
+/// writing, and Sonora keeps its log open until it quits. `File::open` shares write access, where
+/// `fs::copy` goes through `CopyFileExW`, whose share mode is not documented.
+fn snapshot(log: &Path) -> io::Result<PathBuf> {
+    let copy = std::env::temp_dir().join("sonora.log");
+    io::copy(&mut File::open(log)?, &mut File::create(&copy)?)?;
+    Ok(copy)
 }
 
 impl Render for DraggedSource {
