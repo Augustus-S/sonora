@@ -232,12 +232,18 @@ impl Iterator for Chunk {
 }
 
 impl Source for Chunk {
-    /// The whole packet until its last sample is out, then nothing, the way a rodio
-    /// `SamplesBuffer` answers.
+    /// What is left of the packet, and nothing once a clear has retired it. rodio reads the
+    /// format again only where a span ends, so a span that ran on past this packet would play
+    /// the next one in this one's channel count.
+    ///
+    /// Note a rodio bug: rodio's trait docs ask for the whole span, but its queue and mixer
+    /// read this as what is left, so thats what we do here.
+    ///
+    /// TODO: When updating rodio, check if this behavior changed, and adjust this code accordingly.
     fn current_span_len(&self) -> Option<usize> {
-        match self.at >= self.samples.len() {
-            true => Some(0),
-            false => Some(self.samples.len()),
+        match self.generation.load(Ordering::Relaxed) == self.born {
+            true => Some(self.samples.len() - self.at),
+            false => Some(0),
         }
     }
 
