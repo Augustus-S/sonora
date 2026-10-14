@@ -59,19 +59,19 @@ pub struct DeviceOption {
 
     /// The name the system shows for the device in full.
     pub name: String,
- 
+
     /// The sound card the device belongs to, when the system names devices "card, device" as
     /// ALSA does, so a card's many devices can be shown together.
     pub card: Option<String>,
- 
+
     /// The name without its card, which tells the device apart among its card's devices. It is
     /// the whole name when there is no card.
     pub label: String,
- 
+
     /// What else the system says about the device beyond its name, such as which outputs an
     /// ALSA device drives. It comes from the system untranslated.
     pub detail: Option<String>,
- 
+
     /// Whether it is the system's default output right now. No device in the list is when the
     /// default is not a device of its own, as on ALSA, where it is left out of the list.
     pub system: bool,

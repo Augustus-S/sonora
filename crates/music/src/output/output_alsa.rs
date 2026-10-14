@@ -3,7 +3,7 @@
 use super::{DeviceOption, Server};
 
 /// ALSA devices the device list leaves out. `default` is the device "System default" opens, and
-/// `null` plays nothing. 
+/// `null` plays nothing.
 const HIDDEN_PCMS: [&str; 2] = ["default", "null"];
 
 /// Whether `host` is ALSA, whose devices need what this module does.
