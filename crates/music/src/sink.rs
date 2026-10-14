@@ -353,10 +353,14 @@ impl Paced {
         self.forget_cleared();
         let device = self.rate();
         let rate = packet.rate.get();
+
+        // If the rates are the same, we don't need to resample at all. 
+        // In this case, flush whatever was in the resampler (no-op if empty) and directly append the packet.
         if rate == device {
-            // after whatever the resampler still holds, so the order is kept
             return Ok(self.flush() + self.append(packet));
         }
+
+        // We need to resample the packet.
         let resampler = &mut self.resampler;
 
         let channels = usize::from(packet.channels.get());
@@ -379,10 +383,7 @@ impl Paced {
         Ok(self.queue_ready(piece))
     }
 
-    /// Queues whatever the resampler still holds, as when the writer stops or a track ends, so
-    /// the last of it is heard, and returns how many samples that added. The next write starts
-    /// a fresh stream, so what follows is a splice rather than a seamless join. What it holds from
-    /// before a clear is dropped instead.
+    /// Flush the resampler. This happens every time the incoming rate changes.
     pub fn flush(&mut self) -> usize {
         self.forget_cleared();
         let resampler = &mut self.resampler;
