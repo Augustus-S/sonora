@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use crate::chrome::OutputPicker;
 use crate::shared::confirm::{Confirm, Kind};
 use crate::shared::effects;
 use crate::shared::local;
@@ -29,8 +30,8 @@ use ui::{ActiveTheme as _, Deck, LEADING, Scrollbar, Scroller, eyebrow, snapped}
 use ui::{
     Avatar, Button, Dismiss, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE,
     MAX_TRANSPARENCY, MIN_FONT, MIN_LYRICS_SCALE, MenuItem, Modal, Pace, Picker, Popovers, Radio,
-    Rounding, Saver, Scrubber, ScrubberState, Separator, Skeleton, Spinner, Stillness, Switch,
-    TabBar, Text, Theme, ThemeKind, Vacancy, VisualizerStyle,
+    Rounding, Saver, Scrubber, ScrubberState, Separator, Skeleton, Stillness, Switch, TabBar, Text,
+    Theme, ThemeKind, Vacancy, VisualizerStyle,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -77,7 +78,6 @@ const PACE: &str = "pace";
 const SAVER: &str = "saver";
 const SLEEP: &str = "sleep";
 const EQUALIZER_PRESETS: &str = "equalizer-presets";
-const OUTPUT_DEVICES: &str = "output-devices";
 // the step a dragged band snaps to, in decibels
 const EQUALIZER_STEP: f32 = 0.5;
 const SLEEP_MAX_MINUTES: u64 = 120;
@@ -306,6 +306,7 @@ pub struct SettingsView {
     drm: Entity<Drm>,
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
+    output_picker: Entity<OutputPicker>,
     tab: SettingsTab,
     search: Entity<Input>,
     /// The search field's text, trimmed. Empty means the page shows one category.
@@ -412,12 +413,16 @@ impl SettingsView {
         })
         .detach();
 
+        let popovers = Popovers::default();
+        let output_picker = cx.new(|cx| OutputPicker::new(outputs.clone(), popovers.clone(), cx));
+
         Self {
             session,
             playback,
             drm,
             settings,
             outputs,
+            output_picker,
             tab: SettingsTab::General,
             search,
             query: String::new(),
@@ -431,7 +436,7 @@ impl SettingsView {
                 .map(|band| ScrubberState::new(format!("equalizer-band-{band}")))
                 .collect(),
             pending_sleep: None,
-            popovers: Popovers::default(),
+            popovers,
             server: cx.new(|cx| Input::new("login-server-hint", cx)),
             username: cx.new(|cx| Input::new("login-username-hint", cx)),
             password: cx.new(|cx| Input::new("login-password-hint", cx).masked()),
@@ -638,7 +643,7 @@ impl SettingsView {
                 }
                 slots.extend([Slot::Title("settings-group-devices"), Slot::OutputDevice]);
                 let outputs = self.outputs.read(cx);
-                if outputs.rejected().is_some() || outputs.failure().is_some() {
+                if outputs.failure().is_some() {
                     slots.push(Slot::OutputFailure);
                 }
                 // with nothing open there is no rate or buffer to show
@@ -2329,72 +2334,20 @@ impl SettingsView {
         )
     }
 
-    /// The device picker. "System default" follows whatever the system plays on, and a saved
-    /// device that is unplugged stays chosen, so it is clear why the default plays meanwhile.
+    /// The device picker, whose "System default" follows whatever the system plays on.
     fn output_device_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-        let outputs = self.outputs.read(cx);
-        let chosen = outputs.chosen().map(str::to_owned);
-        let switching = outputs.switching();
-        let devices = outputs.devices().to_vec();
-        let system = devices.iter().find(|device| device.system).cloned();
-        let label = match &chosen {
-            None => t!("settings-output-device-system"),
-            Some(id) => match devices.iter().find(|device| &device.id == id) {
-                Some(device) => device.name.clone().into(),
-                // until the list is read, the open stream is the one place the name is known
-                None if !outputs.listed() => match outputs.active().filter(|open| &open.id == id) {
-                    Some(open) => open.name.clone().into(),
-                    None => t!("settings-output-device-loading"),
-                },
-                None => t!("settings-output-device-missing"),
-            },
-        };
-
-        let default = MenuItem::new("output-system", t!("settings-output-device-system"))
-            .selected(chosen.is_none())
-            .when_some(system, |item, device| {
-                item.detail(div().text_color(muted).text_size(small).child(device.name))
-            })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.outputs
-                    .update(cx, |outputs, cx| outputs.choose(None, cx));
-            }));
-        let picker = Picker::new(OUTPUT_DEVICES, &self.popovers, label)
-            .width(Picker::WIDE)
-            .disabled(switching)
-            .item(default)
-            .items(devices.into_iter().enumerate().map(|(index, device)| {
-                let selected = chosen.as_deref() == Some(device.id.as_str());
-                let id = device.id;
-                MenuItem::new(("output-device", index), device.name)
-                    .selected(selected)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let id = id.clone();
-                        this.outputs
-                            .update(cx, |outputs, cx| outputs.choose(Some(id), cx));
-                    }))
-            }));
-
         self.row(
             t!("settings-output-device"),
             t!("settings-output-device-detail"),
-            muted,
-            small,
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .when(switching, |row| row.child(Spinner::new("output-switching")))
-                .child(picker)
-                .into_any_element(),
+            theme.muted_foreground,
+            theme.text(Text::Small),
+            self.output_picker.clone().into_any_element(),
         )
     }
 
-    /// Why a pick was not taken, or, with nothing picked, why nothing plays: the device to play
-    /// on would not open. The latter stands in for the rate and buffer rows.
+    /// Why nothing plays: the device to play on would not open. It stands in for the rate and
+    /// buffer rows.
     fn output_failure_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let (title, detail) = self.output_failure(cx);
@@ -2411,21 +2364,6 @@ impl SettingsView {
     /// The failure row's title and detail.
     fn output_failure(&self, cx: &App) -> (SharedString, SharedString) {
         let outputs = self.outputs.read(cx);
-        if let Some((id, error)) = outputs.rejected() {
-            let name = match id {
-                None => t!("settings-output-device-system"),
-                Some(id) => outputs
-                    .devices()
-                    .iter()
-                    .find(|device| device.id == id)
-                    .map(|device| SharedString::from(device.name.clone()))
-                    .unwrap_or_else(|| SharedString::from(id.to_owned())),
-            };
-            return (
-                t!("settings-output-select-failed", name = name.to_string()),
-                t!("settings-output-failed-detail", error = error),
-            );
-        }
         let error = outputs
             .failure()
             .map(|failure| failure.error.clone())

@@ -4,7 +4,7 @@ use anyhow::Result;
 use gpui::{Context, Entity, Task};
 use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened};
 
-use crate::{AppSettings, Io, Playback, join};
+use crate::{AppSettings, Io, Outcome, Playback, Toasts, join};
 
 /// How long a newly picked device holds the picker before it is let go, whether or not it has
 /// answered. CoreAudio takes about ten seconds to give up on a device that will not start.
@@ -19,7 +19,7 @@ const HANDOVER: Duration = Duration::from_secs(2);
 /// runs at. The list is read off the main thread, since that opens devices on some platforms, and
 /// both are read again whenever a stream opens or closes. A device picked here is opened first
 /// and only moved onto, and saved, once it has; one that will not open leaves everything as it
-/// was.
+/// was and says so in a toast.
 pub struct Outputs {
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
@@ -34,8 +34,6 @@ pub struct Outputs {
     selected: Option<String>,
     /// A device picked and being opened, shown as chosen until it answers.
     trying: Option<Option<String>>,
-    /// The last pick that would not open, with why.
-    rejected: Option<(Option<String>, String)>,
     /// Opens the picked device off the main thread. Dropping it drops the pick.
     opening: Option<Task<()>>,
     /// Runs out `SWITCH_TIMEOUT` after a pick. While it is set the picker is held.
@@ -84,7 +82,6 @@ impl Outputs {
             failing: output::failing(),
             selected,
             trying: None,
-            rejected: None,
             opening: None,
             holding: None,
             handover: None,
@@ -129,14 +126,6 @@ impl Outputs {
         }
     }
 
-    /// The last pick that would not open, as its device id, `None` for the system's default, and
-    /// the error. It stays until the next pick.
-    pub fn rejected(&self) -> Option<(Option<&str>, &str)> {
-        self.rejected
-            .as_ref()
-            .map(|(id, error)| (id.as_deref(), error.as_str()))
-    }
-
     /// Whether a device was just picked and has not answered yet, so no other can be picked.
     pub fn switching(&self) -> bool {
         self.holding.is_some()
@@ -144,16 +133,15 @@ impl Outputs {
 
     /// Opens `id`, or the system's default when `None`, and once it opens moves playback onto
     /// it, paused or not, and saves it. A device that will not open leaves playback and the saved
-    /// device as they were, with `rejected` saying why.
+    /// device as they were, with a toast saying so.
     pub fn choose(&mut self, id: Option<String>, cx: &mut Context<Self>) {
         if self.switching() {
             return;
         }
         // the same device again, with nothing wrong, would only cut the sound for a moment
-        if id == self.selected && self.failure.is_none() && self.rejected.is_none() {
+        if id == self.selected && self.failure.is_none() {
             return;
         }
-        self.rejected = None;
         self.trying = Some(id.clone());
         let io = Io::global(cx);
         let wanted = id.clone();
@@ -173,7 +161,7 @@ impl Outputs {
     }
 
     /// Takes the answer to a pick: moves playback onto a device that opened and saves it, or
-    /// keeps why it would not.
+    /// toasts that it would not.
     fn picked(&mut self, id: Option<String>, opened: Result<Opened>, cx: &mut Context<Self>) {
         self.opening = None;
         self.holding = None;
@@ -182,7 +170,7 @@ impl Outputs {
             Ok(opened) => opened,
             Err(error) => {
                 log::warn!("playback: cannot select the output device: {error:#}");
-                self.rejected = Some((id, format!("{error:#}")));
+                self.toast_rejected(id.as_deref(), &error, cx);
                 cx.notify();
                 return;
             }
@@ -217,6 +205,36 @@ impl Outputs {
         self.selected = None;
         self.save(None, cx);
         output::choose_device(None);
+    }
+
+    /// Says in a toast that the pick `id`, or the system's default when `None`, would not open,
+    /// with the error below.
+    fn toast_rejected(&self, id: Option<&str>, error: &anyhow::Error, cx: &mut Context<Self>) {
+        let error = format!("{error:#}");
+        let Some(id) = id else {
+            Toasts::with_detail(
+                Outcome::Failed,
+                "toast-output-default-failed",
+                None,
+                error,
+                cx,
+            );
+            return;
+        };
+        let name = self
+            .devices
+            .iter()
+            .find(|device| device.id == id)
+            .map_or(id, |device| device.name.as_str())
+            .to_owned();
+        let name = Some(name.into());
+        Toasts::with_detail(
+            Outcome::Failed,
+            "toast-output-select-failed",
+            name,
+            error,
+            cx,
+        );
     }
 
     fn save(&self, id: Option<String>, cx: &mut Context<Self>) {

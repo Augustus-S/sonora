@@ -11,6 +11,8 @@
 //! A device the system no longer lists is gone, which is not a failure: the default plays in its
 //! place without trying it, and it is played on again once it is back.
 
+#[cfg(target_os = "linux")]
+mod output_alsa;
 mod output_rate;
 #[cfg(target_os = "macos")]
 mod output_rate_macos;
@@ -54,8 +56,24 @@ static DEVICE_CHANGES: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::Sen
 pub struct DeviceOption {
     /// cpal's id for the device, which is what `choose_device` takes and what settings store.
     pub id: String,
+
+    /// The name the system shows for the device in full.
     pub name: String,
-    /// Whether it is the system's default output right now.
+ 
+    /// The sound card the device belongs to, when the system names devices "card, device" as
+    /// ALSA does, so a card's many devices can be shown together.
+    pub card: Option<String>,
+ 
+    /// The name without its card, which tells the device apart among its card's devices. It is
+    /// the whole name when there is no card.
+    pub label: String,
+ 
+    /// What else the system says about the device beyond its name, such as which outputs an
+    /// ALSA device drives. It comes from the system untranslated.
+    pub detail: Option<String>,
+ 
+    /// Whether it is the system's default output right now. No device in the list is when the
+    /// default is not a device of its own, as on ALSA, where it is left out of the list.
     pub system: bool,
 }
 
@@ -292,7 +310,7 @@ impl Device {
             .default_output_config()
             .map_err(|error| anyhow::anyhow!("cannot read the output config: {error}"))?;
         let config = output_rate::config(&device, default);
-        let name = cpal_device_name(&device);
+        let (name, _) = cpal_describe(&device);
         let failed = Arc::new(AtomicBool::new(false));
         let (stream, buffer) = open_stream(device, &id, &config, &failed)?;
         Ok(Self {
@@ -419,14 +437,26 @@ pub fn devices() -> Vec<DeviceOption> {
     let Ok(devices) = host.output_devices() else {
         return Vec::new();
     };
+    #[cfg(target_os = "linux")]
+    let alsa = output_alsa::is_alsa(&host);
     devices
         .filter_map(|device| {
             let id = device.id().ok()?;
-            Some(DeviceOption {
+            let (name, detail) = cpal_describe(&device);
+            let option = DeviceOption {
                 system: system.as_ref() == Some(&id),
                 id: id.to_string(),
-                name: cpal_device_name(&device),
-            })
+                card: None,
+                label: name.clone(),
+                name,
+                detail,
+            };
+            #[cfg(target_os = "linux")]
+            let option = match alsa {
+                true => output_alsa::tidy(&id.1, option)?,
+                false => option,
+            };
+            Some(option)
         })
         .collect()
 }
@@ -579,18 +609,8 @@ pub fn failing() -> bool {
     DeviceSelection::lock().failing
 }
 
-/// The sound server this session runs when ALSA has no plugin routing to it. Sonora then opens
-/// the card the server already holds and plays nothing, which `pipewire-alsa` or
-/// `pulseaudio-alsa` fixes. Only ALSA's configuration is read, no device is opened.
 #[cfg(target_os = "linux")]
-pub fn missing_bridge() -> Option<Server> {
-    let server = server()?;
-    let hints = alsa::device_name::HintIter::new_str(None, "pcm").ok()?;
-    let bridged = hints
-        .filter_map(|hint| hint.name)
-        .any(|name| name == "pipewire" || name == "pulse");
-    (!bridged).then_some(server)
-}
+pub use output_alsa::missing_bridge;
 
 #[cfg(not(target_os = "linux"))]
 pub fn missing_bridge() -> Option<Server> {
@@ -622,15 +642,28 @@ fn cpal_ident(device: &cpal::Device) -> Option<String> {
     device.id().ok().map(|id| id.to_string())
 }
 
-/// The name the system shows for `device`, or its id when it has none.
-fn cpal_device_name(device: &cpal::Device) -> String {
-    match device.description() {
-        Ok(description) => description.name().to_owned(),
-        Err(_) => device
+/// The name the system shows for `device`, or its id when it has none, and the lines of its
+/// description that do not repeat the name, joined.
+fn cpal_describe(device: &cpal::Device) -> (String, Option<String>) {
+    let Ok(description) = device.description() else {
+        let name = device
             .id()
             .map(|id| id.to_string())
-            .unwrap_or_else(|_| "unknown".to_owned()),
-    }
+            .unwrap_or_else(|_| "unknown".to_owned());
+        return (name, None);
+    };
+    let name = description.name();
+    let lines: Vec<&str> = description
+        .extended()
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && *line != name)
+        .collect();
+    let detail = match lines.is_empty() {
+        true => None,
+        false => Some(lines.join(" · ")),
+    };
+    (name.to_owned(), detail)
 }
 
 /// Opens the stream on `device` in `config`, flagging `failed` when the device reports an error.
@@ -694,16 +727,4 @@ fn spawn_watcher(device: Weak<Device>) {
     if let Err(error) = spawned {
         log::warn!("output: cannot watch the output device: {error}");
     }
-}
-
-/// The sound server whose socket this session has, PipeWire first since it also answers on the
-/// PulseAudio socket.
-#[cfg(target_os = "linux")]
-fn server() -> Option<Server> {
-    let runtime = std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
-    if runtime.join("pipewire-0").exists() {
-        return Some(Server::PipeWire);
-    }
-    let pulse = std::env::var_os("PULSE_SERVER").is_some() || runtime.join("pulse/native").exists();
-    pulse.then_some(Server::PulseAudio)
 }
