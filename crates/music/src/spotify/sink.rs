@@ -15,6 +15,8 @@ use crate::sink::{Cue, Paced, packet, watch_for_output};
 
 pub struct OutputSink {
     paced: Paced,
+    /// Set once the output has to reopen, so that is logged once rather than for every packet.
+    reopening: bool,
 }
 
 impl OutputSink {
@@ -22,7 +24,10 @@ impl OutputSink {
     /// one, so playback state still moves.
     pub fn boxed(cue: Cue, chain: Chain, changed: UnboundedSender<()>) -> Box<dyn Sink> {
         match Paced::open(cue.clone(), chain, changed.clone()) {
-            Ok(paced) => Box::new(Self { paced }),
+            Ok(paced) => Box::new(Self {
+                paced,
+                reopening: false,
+            }),
             Err(error) => {
                 log::error!("sink: cannot open an output device: {error:#}");
                 watch_for_output(changed);
@@ -30,13 +35,23 @@ impl OutputSink {
             }
         }
     }
+
+    /// Notes that the output has to reopen. `Paced` has told the engine already, which rebuilds
+    /// the player on the new output, so librespot is not handed an error: it would log one and
+    /// pause, for what is a device change rather than a failure.
+    fn reopen(&mut self) {
+        if !std::mem::replace(&mut self.reopening, true) {
+            log::info!("sink: the audio output changed, waiting for the player to be rebuilt");
+        }
+    }
 }
 
 impl Sink for OutputSink {
     fn start(&mut self) -> SinkResult<()> {
-        self.paced
-            .play()
-            .map_err(|error| SinkError::OnWrite(error.to_string()))
+        if self.paced.play().is_err() {
+            self.reopen();
+        }
+        Ok(())
     }
 
     /// librespot stops the sink for a pause and at the end of playback alike, so what the
@@ -53,15 +68,24 @@ impl Sink for OutputSink {
         let samples = packeted
             .samples()
             .map_err(|error| SinkError::OnWrite(error.to_string()))?;
-        let mut narrowed = self.paced.buffer(samples.len());
+        let count = samples.len();
+        let mut narrowed = self.paced.buffer(count);
         narrowed.extend(samples.iter().map(|sample| *sample as f32));
         let Some(samples) = packet(narrowed, NUM_CHANNELS as u16, SAMPLE_RATE) else {
             return Ok(());
         };
-        self.paced
+        if self
+            .paced
             .write(samples)
             .and_then(|_| self.paced.drain())
-            .map_err(|error| SinkError::OnWrite(error.to_string()))
+            .is_err()
+        {
+            self.reopen();
+            // the queue no longer paces the player, which would run the track out before the
+            // engine retires it
+            std::thread::sleep(lasts(count));
+        }
+        Ok(())
     }
 }
 
