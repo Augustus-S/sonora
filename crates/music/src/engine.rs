@@ -986,10 +986,6 @@ fn audio_loop<F: Fetch>(
         let Some(samples) = held.take(CHUNK) else {
             // the decoder is done, but its last samples are still queued. Letting out what the
             // resampler holds puts all of it in the queue, so the join below lands exactly.
-            // TODO: Investigate filling ardftsrc's pre() and post() edge context across a gapless
-            // join, so each track's edge is resampled from the neighbouring track's real samples
-            // instead of extrapolated, through RealtimeResampler::pre/post. post() needs the next
-            // track's head decoded before this one is finalized.
             written += paced.flush() as u64;
             let ended = current.take().map(|held| held.id).unwrap_or_default();
             let next = queued.take().and_then(|(id, loaded)| {
