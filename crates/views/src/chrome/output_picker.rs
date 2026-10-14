@@ -162,7 +162,11 @@ impl Render for OutputPicker {
             .w(MENU_WIDTH)
             .max_h(MENU_HEIGHT)
             .scrollbar(self.scrollbar.clone());
+        // a device plugged in since the list was read is only found by asking again
         let picker = Picker::new(OUTPUT_DEVICES, &self.popovers, label)
+            .on_open(cx.listener(|this, _, _, cx| {
+                this.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
+            }))
             .menu(menu)
             .disabled(switching)
             .item(default)

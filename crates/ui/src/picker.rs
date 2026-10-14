@@ -1,9 +1,9 @@
 use gpui::prelude::*;
-use gpui::{App, Hsla, Pixels, SharedString, StyleRefinement, Window, px};
+use gpui::{App, ClickEvent, Hsla, Pixels, SharedString, StyleRefinement, Window, px};
 
 use crate::button::Button;
 use crate::menu::{Menu, MenuItem, TRIGGER_GAP};
-use crate::popover::{Popover, Popovers};
+use crate::popover::{Open, Popover, Popovers};
 use crate::theme::ActiveTheme as _;
 
 enum Face {
@@ -29,6 +29,7 @@ pub struct Picker {
     disabled: bool,
     items: Vec<MenuItem>,
     menu: Option<Menu>,
+    on_open: Option<Open>,
 }
 
 impl Picker {
@@ -53,6 +54,7 @@ impl Picker {
             disabled: false,
             items: Vec::new(),
             menu: None,
+            on_open: None,
         }
     }
 
@@ -129,6 +131,15 @@ impl Picker {
         self
     }
 
+    /// Runs `handler` when a click opens the menu, as for reading afresh what it lists.
+    pub fn on_open(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open = Some(Box::new(handler));
+        self
+    }
+
     pub fn menu(mut self, menu: Menu) -> Self {
         self.menu = Some(menu);
         self
@@ -159,6 +170,7 @@ impl RenderOnce for Picker {
             disabled,
             items,
             menu,
+            on_open,
         } = self;
 
         let theme = *cx.theme();
@@ -198,7 +210,8 @@ impl RenderOnce for Picker {
             .button(button)
             .selected(selected)
             .menu(menu)
-            .when(!sticky, Popover::commands);
+            .when(!sticky, Popover::commands)
+            .when_some(on_open, |popover, on_open| popover.on_open(on_open));
         *popover.style() = style;
         popover
     }
