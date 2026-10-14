@@ -1839,7 +1839,7 @@ impl SettingsView {
                     .on_click(move |_, _, cx| {
                         let path =
                             settings.update(cx, |settings, _| settings.ensure_themes_directory());
-                        if let Err(error) = open_path(&path) {
+                        if let Err(error) = open::that_detached(&path) {
                             log::warn!("settings: cannot open {}: {error}", path.display());
                         }
                     }),
@@ -2678,8 +2678,11 @@ impl SettingsView {
                 .disabled(path.is_none())
                 .on_click(move |_, _, _| {
                     let Some(path) = &path else { return };
-                    if let Err(error) = snapshot(path).and_then(|copy| open_path(&copy)) {
-                        log::warn!("settings: cannot open {}: {error}", path.display());
+                    if let Err(error) = snapshot(path).and_then(open::that_detached) {
+                        log::warn!(
+                            "settings: cannot open a copy of {}: {error}",
+                            path.display()
+                        );
                     }
                 })
                 .into_any_element(),
@@ -4567,16 +4570,10 @@ fn wrapped_lines(text: SharedString, size: Pixels, width: Pixels, window: &Windo
         .unwrap_or(1)
 }
 
-/// Hands a file to the system's default application for it, without waiting on that program.
-fn open_path(path: &Path) -> io::Result<()> {
-    open::that_detached(path)
-}
-
-/// Copies the log to the temp folder. Notepad refuses a file that another process has open for
-/// writing, and Sonora keeps its log open until it quits. `File::open` shares write access, where
-/// `fs::copy` goes through `CopyFileExW`, whose share mode is not documented.
+/// Notepad on Windows refuses a file that Sonora still writes to, so the button opens a copy
+/// `File::open` shares write access, `fs::copy` documents no share mode
 fn snapshot(log: &Path) -> io::Result<PathBuf> {
-    let copy = std::env::temp_dir().join("sonora.log");
+    let copy = log.with_file_name("sonora.copy.log");
     io::copy(&mut File::open(log)?, &mut File::create(&copy)?)?;
     Ok(copy)
 }
