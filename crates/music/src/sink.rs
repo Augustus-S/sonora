@@ -248,6 +248,7 @@ impl Paced {
     pub fn open(cue: Cue, chain: Chain, changed: UnboundedSender<()>) -> Result<Self> {
         let output = Output::open(chain, changed.clone())?;
         output.sink().pause();
+
         // the input format is a placeholder: each packet starts a span in its own
         let rate = output.rate() as usize;
         let config = ardftsrc::PRESET_GOOD
@@ -288,11 +289,13 @@ impl Paced {
         self.output.set_volume(gain);
     }
 
-    /// Queues one packet and returns how many samples, at the device's rate, it added to the
-    /// queue. Resampling holds some audio back until more is written or `flush` lets it out, so
-    /// that is not always the packet's length. A packet the cue refuses is dropped, so a decoder
-    /// that has been retired makes no sound while it winds down. This never blocks: a caller with
-    /// nothing else to do waits through `drain`, one with commands to answer waits through `full`.
+    /// Queues one packet. A packet the cue refuses is dropped, so a decoder that has been
+    /// retired makes no sound while it winds down. This never blocks: a caller with nothing
+    /// else to do waits through `drain`, one with commands to answer waits through `full`.
+    ///
+    /// Returns how many samples, at the device's rate, it added to the queue. Resampling holds
+    /// some audio back until more is written or `flush` lets it out, so that is not always the
+    /// packet's length.
     pub fn write(&mut self, samples: SamplesBuffer) -> Result<usize, Gone> {
         if self.output.failed() {
             return Err(self.disconnected());
@@ -300,6 +303,7 @@ impl Paced {
         if !self.cue.admit() {
             return Ok(0);
         }
+
         self.forget_cleared();
         let device = self.rate();
         let rate = samples.sample_rate().get();

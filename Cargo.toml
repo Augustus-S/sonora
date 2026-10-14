@@ -23,7 +23,7 @@ webview = { path = "crates/webview" }
 widevine = { path = "crates/widevine" }
 
 anyhow = "1.0"
-ardftsrc = { version = "0.4.1", features = ["rodio"] }
+ardftsrc = { version = "0.4.2", features = ["rodio"] }
 async-trait = "0.1"
 base64 = "0.22"
 blowfish = "0.9"
@@ -188,8 +188,6 @@ tokio = { version = "1.53", features = [
 time = { version = "0.3.55", features = ["parsing"] }
 
 [patch.crates-io]
-# TEMPORARY: drop once ardftsrc 0.4.2 is published, and bump ardftsrc to it
-ardftsrc = { path = "../ardftsrc/ardftsrc" }
 librespot-audio = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
 librespot-core = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
 librespot-metadata = { git = "https://github.com/sonorahq/librespot", rev = "d16b7fa014aef21c0786a68f07c685c30df5b646" }
