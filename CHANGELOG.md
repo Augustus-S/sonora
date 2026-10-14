@@ -17,6 +17,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Sonora now plays at your device's own sample rate and converts each track to it with the
   higher-quality ardftsrc resampler, rather than switching the device's rate between tracks.
+  Gapless albums play back as one continuous signal through the conversion.
 
 ## [0.43.0] - 2026-10-13
 

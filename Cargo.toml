@@ -24,7 +24,7 @@ widevine = { path = "crates/widevine" }
 
 alsa = "0.10"
 anyhow = "1.0"
-ardftsrc = { version = "0.4.3", features = ["rodio"] }
+ardftsrc = { version = "0.4.4", features = ["rodio"] }
 async-trait = "0.1"
 base64 = "0.22"
 blowfish = "0.9"

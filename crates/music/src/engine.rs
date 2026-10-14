@@ -714,7 +714,8 @@ struct Playing<F: Fetch> {
     base: Duration,
 
     /// Samples queued before this track's first one. On a gapless join the one before it is
-    /// still being heard, so its own position only starts once the count passes this.
+    /// still being heard, so its own position only starts once the count passes this. The end
+    /// of that one may still be in the resampler then, so this counts what it will add too.
     offset: u64,
 
     /// The track's normalisation gain, applied to every sample as it is decoded. Each track
@@ -1029,9 +1030,7 @@ fn audio_loop<F: Fetch>(
 
         let buffer = paced.buffer(held.samples(CHUNK));
         let Some(samples) = held.take(CHUNK, buffer) else {
-            // the decoder is done, but its last samples are still queued. Letting out what the
-            // resampler holds puts all of it in the queue, so the join below lands exactly.
-            written += paced.flush() as u64;
+            // the decoder is done, but its last samples are still queued
             let Some(Playing {
                 id: ended, loaded, ..
             }) = current.take()
@@ -1040,22 +1039,29 @@ fn audio_loop<F: Fetch>(
             };
             let next = queued.take().and_then(|(id, loaded)| {
                 let duration = fetch.length(&loaded);
-                current = Playing::open(
-                    fetch.as_ref(),
-                    &id,
-                    loaded,
-                    Duration::ZERO,
-                    written,
-                    normalise,
-                );
+                current = Playing::open(fetch.as_ref(), &id, loaded, Duration::ZERO, 0, normalise);
                 current.as_ref().map(|_| (id, duration))
             });
+            // A track that follows is written straight in behind this one, so the resampler
+            // carries on across the join, as one signal at the same format or a new span at
+            // another, and says where it lands. With nothing to follow, what it holds is let out
+            // so the end is heard.
+            let at = match &mut current {
+                Some(following) => {
+                    following.offset = written + paced.held_back() as u64;
+                    following.offset
+                }
+                None => {
+                    written += paced.flush() as u64;
+                    written
+                }
+            };
             // both events wait for the queue to reach here, so the join lands on the sample
             joining = Some(Join {
                 ended,
                 loaded,
                 next,
-                at: written,
+                at,
             });
             continue;
         };

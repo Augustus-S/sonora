@@ -268,9 +268,10 @@ impl Drop for Chunk {
 /// queued, which keeps a decoder in step with playback. A write on an output that has to reopen
 /// reports it gone; the output also says so on `changed` itself, playing or not.
 ///
-/// A packet at any rate other than the device's is resampled as it is written, so everything
-/// queued is at the device's rate already and a pause or a clear acts on it at once. A packet at
-/// the device's rate goes in as it is.
+/// Every packet goes through the resampler as it is written, so everything queued is at the
+/// device's rate already and a pause or a clear acts on it at once. A packet at the device's rate
+/// is copied through as it is, and a change of rate or channels starts a new span, which keeps
+/// the order of what is written without a flush.
 pub struct Paced {
     output: Output,
     cue: Cue,
@@ -353,16 +354,7 @@ impl Paced {
         self.forget_cleared();
         let device = self.rate();
         let rate = packet.rate.get();
-
-        // If the rates are the same, we don't need to resample at all. 
-        // In this case, flush whatever was in the resampler (no-op if empty) and directly append the packet.
-        if rate == device {
-            return Ok(self.flush() + self.append(packet));
-        }
-
-        // We need to resample the packet.
         let resampler = &mut self.resampler;
-
         let channels = usize::from(packet.channels.get());
 
         // pieces about as long as the packet, so a resampled queue paces like the packets did
@@ -383,7 +375,8 @@ impl Paced {
         Ok(self.queue_ready(piece))
     }
 
-    /// Flush the resampler. This happens every time the incoming rate changes.
+    /// Flush the resampler. This ends the stream, so it is for when nothing follows: the end of
+    /// the queue, or a writer that stops.
     pub fn flush(&mut self) -> usize {
         self.forget_cleared();
         let resampler = &mut self.resampler;
@@ -402,9 +395,15 @@ impl Paced {
         self.queue_ready(TAIL_FRAMES)
     }
 
-    /// Queues everything the resampler has ready, in pieces of `frames` frames with the short
-    /// rest at the end of a stream or a format change, each in a spare buffer, and returns how
-    /// many samples that added.
+    /// Samples already written that the resampler has yet to queue, at the device's rate. Added
+    /// to what the writes returned, it is where the next write starts, to within a frame.
+    pub fn held_back(&self) -> usize {
+        self.resampler.samples_outstanding()
+    }
+
+    /// Queues what the resampler has ready in pieces of `frames` frames, and returns how many
+    /// samples that added. A partial piece waits for the next write (except the tail of a span,
+    /// which is queued as it is). 
     fn queue_ready(&mut self, frames: usize) -> usize {
         let mut queued = 0;
         while let Some(span) = self.resampler.read_span(frames) {
@@ -431,15 +430,6 @@ impl Paced {
         }
         self.generation = generation;
         self.resampler.reset();
-    }
-
-    /// Queues `packet` and returns how many samples it held.
-    fn append(&self, packet: Packet) -> usize {
-        let queued = packet.samples.len();
-        self.output
-            .sink()
-            .append(Chunk::new(packet, &self.cue, &self.live, &self.spares));
-        queued
     }
 
     /// Whether the queue holds all it should, so the next packet can wait.
