@@ -21,7 +21,6 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
-use ardftsrc::RodioResampler;
 use async_trait::async_trait;
 use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -700,13 +699,13 @@ struct Playing<F: Fetch> {
     /// Kept so a seek can open a second decoder over the same download.
     loaded: F::Loaded,
 
-    // The underlying source, converted to the device's rate.
-    source: RodioResampler<F::Source>,
+    /// The decoder. `Paced` resamples what it decodes to the device's rate.
+    source: F::Source,
 
     /// The number of channels the source has.
     channels: u16,
 
-    /// The device's rate, which the samples reach the queue at.
+    /// The source's rate, which its packets are written at.
     rate: u32,
 
     /// Where in the track decoding started: the open, or the last seek.
@@ -729,31 +728,9 @@ impl<F: Fetch> Playing<F> {
         at: Duration,
         offset: u64,
         normalise: bool,
-        rate: u32,
     ) -> Option<Self> {
         let source = fetch.open(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
-        let source_sample_rate = source.sample_rate().get();
-
-        // Convert the source to the device's rate using ardftsrc's high preset.
-        // When rates match, the source passes through untouched.
-        let config = ardftsrc::PRESET_HIGH
-            .with_input_rate(source_sample_rate as usize)
-            .with_output_rate(rate as usize)
-            .with_channels(usize::from(source.channels().get()))
-            .with_rodio_fast_start(true);
-        if source_sample_rate != rate {
-            log::info!("playback: resampling {id} from {source_sample_rate} Hz to {rate} Hz");
-        }
-        let source = match RodioResampler::new(source, config) {
-            Ok(source) => source,
-            Err(error) => {
-                log::error!("playback: cannot resample {id}: {error:#}");
-                return None;
-            }
-        };
-
-        // Return the converted source.
         Some(Self {
             id: id.to_owned(),
             channels: source.channels().get(),
@@ -766,11 +743,13 @@ impl<F: Fetch> Playing<F> {
         })
     }
 
-    fn mark(&self) -> Mark {
+    /// Where this track's sound is read from, given `rate`, the device's, which is what the queue
+    /// counts samples at.
+    fn mark(&self, rate: u32) -> Mark {
         Mark {
             id: self.id.clone(),
             channels: self.channels,
-            rate: self.rate,
+            rate,
             base: self.base,
             offset: self.offset,
         }
@@ -869,7 +848,7 @@ fn audio_loop<F: Fetch>(
         {
             let Join { ended, next, .. } = joining.take().unwrap_or_else(|| unreachable!());
             events.send(PlaybackEvent::Ended { id: Some(ended) }).ok();
-            heard = current.as_ref().map(Playing::mark);
+            heard = current.as_ref().map(|held| held.mark(paced.rate()));
             match next {
                 Some((id, duration)) => {
                     announce_length(&events, &id, duration);
@@ -910,9 +889,8 @@ fn audio_loop<F: Fetch>(
                     queued = None;
                     joining = None;
                     written = 0;
-                    current =
-                        Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise, paced.rate());
-                    heard = current.as_ref().map(Playing::mark);
+                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise);
+                    heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     playing = start && current.is_some();
                     match playing {
                         true if paced.play().is_err() => return,
@@ -973,16 +951,8 @@ fn audio_loop<F: Fetch>(
                         // has moved.
                         true => {
                             let (id, loaded) = (held.id.clone(), held.loaded.clone());
-                            let rate = paced.rate();
-                            match Playing::open(
-                                fetch.as_ref(),
-                                &id,
-                                loaded,
-                                position,
-                                0,
-                                normalise,
-                                rate,
-                            ) {
+                            match Playing::open(fetch.as_ref(), &id, loaded, position, 0, normalise)
+                            {
                                 Some(fresh) => current = Some(fresh),
                                 None => {
                                     log::warn!("playback: cannot seek {id}");
@@ -1000,7 +970,7 @@ fn audio_loop<F: Fetch>(
                     }
                     joining = None;
                     written = 0;
-                    heard = current.as_ref().map(Playing::mark);
+                    heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     cue.arm();
                 }
                 Job::Gain(level) => paced.set_volume(level),
@@ -1014,7 +984,13 @@ fn audio_loop<F: Fetch>(
         let Some(held) = &mut current else { continue };
 
         let Some(samples) = held.take(CHUNK) else {
-            // the decoder is done, but its last samples are still queued
+            // the decoder is done, but its last samples are still queued. Letting out what the
+            // resampler holds puts all of it in the queue, so the join below lands exactly.
+            // TODO: Investigate filling ardftsrc's pre() and post() edge context across a gapless
+            // join, so each track's edge is resampled from the neighbouring track's real samples
+            // instead of extrapolated, through RealtimeResampler::pre/post. post() needs the next
+            // track's head decoded before this one is finalized.
+            written += paced.flush() as u64;
             let ended = current.take().map(|held| held.id).unwrap_or_default();
             let next = queued.take().and_then(|(id, loaded)| {
                 let duration = fetch.length(&loaded);
@@ -1025,7 +1001,6 @@ fn audio_loop<F: Fetch>(
                     Duration::ZERO,
                     written,
                     normalise,
-                    paced.rate(),
                 );
                 current.as_ref().map(|_| (id, duration))
             });
@@ -1047,10 +1022,10 @@ fn audio_loop<F: Fetch>(
         let Some(chunk) = packet(&samples, held.channels, held.rate) else {
             continue;
         };
-        if paced.write(chunk).is_err() {
-            return;
+        match paced.write(chunk) {
+            Ok(queued) => written += queued as u64,
+            Err(_) => return,
         }
-        written += samples.len() as u64;
     }
 }
 

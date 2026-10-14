@@ -292,8 +292,6 @@ checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 [[package]]
 name = "ardftsrc"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b54aec8ab69b7ecd6cf9ec01062bb550e78f5db1360635bc4fa1a01460fa6400"
 dependencies = [
  "num-traits",
  "realfft",

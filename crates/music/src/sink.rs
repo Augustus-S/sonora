@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use ardftsrc::RealtimeResampler;
 use rodio::buffer::SamplesBuffer;
 use rodio::{ChannelCount, SampleRate, Source};
@@ -21,9 +21,8 @@ use crate::output::{self, Output};
 /// time; deeper rides out network hiccups, but the decoder's position runs this far ahead of
 /// what is heard.
 const QUEUED_CHUNKS: usize = 26;
-/// About how many frames a resampled packet comes out as, before conversion, so a converted queue
-/// paces like one of the packets that went in.
-const PIECE_FRAMES: u64 = 1024;
+/// How many frames each piece of a flushed resampler tail is queued in.
+const TAIL_FRAMES: usize = 1024;
 /// How long a blocked write sleeps between looks at the queue.
 const DRAIN_POLL: Duration = Duration::from_millis(10);
 /// How often a watch looks for an output device to come back once none could be opened.
@@ -227,60 +226,50 @@ impl Drop for Chunk {
 /// The shared rodio output with a paced queue in front of it. A write blocks once enough is
 /// queued, which keeps a decoder in step with playback. A write on an output that has to reopen
 /// reports it gone; the output also says so on `changed` itself, playing or not.
+///
+/// A packet at any rate other than the device's is resampled as it is written, so everything
+/// queued is at the device's rate already and a pause or a clear acts on it at once. A packet at
+/// the device's rate goes in as it is.
 pub struct Paced {
     output: Output,
     cue: Cue,
     /// Chunks appended and not yet played out or retired.
     live: Arc<AtomicUsize>,
     changed: UnboundedSender<()>,
-    /// Resamples packets as they are written, for a writer whose packets keep a rate of their
-    /// own while the device runs at another.
-    converter: Option<Converter>,
+    /// ardftsrc at its good preset, for every writer. `None` when it would not start, which
+    /// leaves the conversion to the mixer.
+    resampler: Option<RealtimeResampler>,
+    /// The cue generation the audio the resampler holds belongs to.
+    generation: u32,
 }
 
 impl Paced {
-    /// Claims the output device, paused until the caller starts it, for packets the caller
-    /// resamples to its `rate`.
+    /// Claims the output device, paused until the caller starts it.
     pub fn open(cue: Cue, chain: Chain, changed: UnboundedSender<()>) -> Result<Self> {
         let output = Output::open(chain, changed.clone())?;
-        Ok(Self::paused(output, cue, changed))
-    }
-
-    /// Claims the output device for packets that keep `rate` and `channels` of their own, which
-    /// are resampled as they are written when the device runs at another rate. A resampler that
-    /// cannot start leaves the conversion to the mixer.
-    pub fn converting(
-        cue: Cue,
-        chain: Chain,
-        changed: UnboundedSender<()>,
-        rate: u32,
-        channels: u16,
-    ) -> Result<Self> {
-        let output = Output::open(chain, changed.clone())?;
-        let mut paced = Self::paused(output, cue, changed);
-        let device = paced.rate();
-        if rate != device {
-            let generation = paced.cue.generation.load(Ordering::Relaxed);
-            match Converter::new(rate, device, channels, generation) {
-                Ok(converter) => {
-                    log::info!("sink: resampling {rate} Hz to {device} Hz as it is written");
-                    paced.converter = Some(converter);
-                }
-                Err(error) => log::error!("sink: {error:#}, leaving the conversion to the mixer"),
-            }
-        }
-        Ok(paced)
-    }
-
-    fn paused(output: Output, cue: Cue, changed: UnboundedSender<()>) -> Self {
         output.sink().pause();
-        Self {
+        // the input format is a placeholder: each packet starts a span in its own
+        let rate = output.rate() as usize;
+        let config = ardftsrc::PRESET_GOOD
+            .with_input_rate(rate)
+            .with_output_rate(rate)
+            .with_channels(2);
+        let resampler = RealtimeResampler::new(config)
+            .inspect_err(|error| {
+                log::error!(
+                    "sink: cannot start the resampler, leaving the conversion to the mixer: {error}"
+                )
+            })
+            .ok();
+        let generation = cue.generation.load(Ordering::Relaxed);
+        Ok(Self {
             output,
             cue,
             live: Arc::default(),
             changed,
-            converter: None,
-        }
+            resampler,
+            generation,
+        })
     }
 
     pub fn play(&mut self) -> Result<(), Gone> {
@@ -299,53 +288,90 @@ impl Paced {
         self.output.set_volume(gain);
     }
 
-    /// Queues one packet. A packet the cue refuses is dropped, so a decoder that has been
-    /// retired makes no sound while it winds down. This never blocks: a caller with nothing
-    /// else to do waits through `drain`, one with commands to answer waits through `full`.
-    pub fn write(&mut self, samples: SamplesBuffer) -> Result<(), Gone> {
+    /// Queues one packet and returns how many samples, at the device's rate, it added to the
+    /// queue. Resampling holds some audio back until more is written or `flush` lets it out, so
+    /// that is not always the packet's length. A packet the cue refuses is dropped, so a decoder
+    /// that has been retired makes no sound while it winds down. This never blocks: a caller with
+    /// nothing else to do waits through `drain`, one with commands to answer waits through `full`.
+    pub fn write(&mut self, samples: SamplesBuffer) -> Result<usize, Gone> {
         if self.output.failed() {
             return Err(self.disconnected());
         }
         if !self.cue.admit() {
-            return Ok(());
+            return Ok(0);
         }
-        let Some(converter) = &mut self.converter else {
-            self.append(samples);
-            return Ok(());
+        self.forget_cleared();
+        let device = self.rate();
+        let rate = samples.sample_rate().get();
+        let Some(resampler) = self.resampler.as_mut().filter(|_| rate != device) else {
+            // after whatever the resampler still holds, so the order is kept
+            return Ok(self.flush() + self.append(samples));
         };
 
-        // what it holds from before a clear is the old position, which is not heard
-        let generation = self.cue.generation.load(Ordering::Relaxed);
-        if converter.generation != generation {
-            converter.reset(generation);
+        let channels = samples.channels().get();
+        if resampler.input_sample_rate() != rate as usize
+            || resampler.input_channels() != usize::from(channels)
+        {
+            log::info!("sink: resampling {rate} Hz to {device} Hz as it is written");
         }
-        for piece in converter.push(samples) {
-            self.append(piece);
+        // pieces about as long as the packet, so a converted queue paces like the packets did
+        let frames = samples.len() / usize::from(channels);
+        let piece = (frames as u64 * u64::from(device)).div_ceil(u64::from(rate)) as usize;
+        if let Err(error) = resampler.write_rodio_buffer(samples) {
+            log::error!("sink: cannot resample a packet: {error}");
+            resampler.reset();
+            return Ok(0);
         }
-        Ok(())
+        let pieces = ready(resampler, piece);
+        Ok(pieces.into_iter().map(|piece| self.append(piece)).sum())
     }
 
-    /// Queues whatever the resampler still holds, as when the writer stops, so the last of it is
-    /// heard. The next write primes it afresh, so a resume is a splice rather than a seamless
-    /// join. What it holds from before a clear is dropped instead.
-    pub fn flush(&mut self) {
-        let Some(converter) = &mut self.converter else {
-            return;
+    /// Queues whatever the resampler still holds, as when the writer stops or a track ends, so
+    /// the last of it is heard, and returns how many samples that added. The next write starts
+    /// a fresh stream, so what follows is a splice rather than a seamless join. What it holds from
+    /// before a clear is dropped instead.
+    pub fn flush(&mut self) -> usize {
+        self.forget_cleared();
+        let Some(resampler) = self
+            .resampler
+            .as_mut()
+            .filter(|resampler| !resampler.is_empty())
+        else {
+            return 0;
         };
+        if self.cue.cleared() {
+            resampler.reset();
+            return 0;
+        }
+        if let Err(error) = resampler.finalize() {
+            log::error!("sink: cannot flush the resampler: {error}");
+            resampler.reset();
+            return 0;
+        }
+        let pieces = ready(resampler, TAIL_FRAMES);
+        pieces.into_iter().map(|piece| self.append(piece)).sum()
+    }
+
+    /// Drops what the resampler holds once the cue has moved on a generation, since that is the
+    /// old position, which is not heard.
+    fn forget_cleared(&mut self) {
         let generation = self.cue.generation.load(Ordering::Relaxed);
-        if self.cue.cleared() || converter.generation != generation {
-            converter.reset(generation);
+        if generation == self.generation {
             return;
         }
-        for piece in converter.flush() {
-            self.append(piece);
+        self.generation = generation;
+        if let Some(resampler) = &mut self.resampler {
+            resampler.reset();
         }
     }
 
-    fn append(&self, samples: SamplesBuffer) {
+    /// Queues `samples` and returns how many there were.
+    fn append(&self, samples: SamplesBuffer) -> usize {
+        let queued = samples.len();
         self.output
             .sink()
             .append(Chunk::new(samples, &self.cue, &self.live));
+        queued
     }
 
     /// Whether the queue holds all it should, so the next packet can wait.
@@ -382,95 +408,6 @@ impl Paced {
     }
 }
 
-/// Packets resampled to the device's rate as they are written, for a writer whose packets keep a
-/// rate of their own, which is Spotify's. librespot decodes faster than real time, so the resampler
-/// primes from real audio within a few packets, and everything queued is at the device's rate
-/// already: a pause or a clear acts on it at once. It uses ardftsrc's good preset, which holds less
-/// than high's, since what it holds is how far librespot's position runs ahead of the sound.
-struct Converter {
-    resampler: RealtimeResampler,
-    channels: u16,
-    rate: u32,
-    /// Samples per queued piece.
-    piece: usize,
-    /// The cue generation the audio it holds belongs to.
-    generation: u32,
-    input: Vec<f64>,
-    output: Vec<f64>,
-}
-
-impl Converter {
-    fn new(from: u32, to: u32, channels: u16, generation: u32) -> Result<Self> {
-        let config = ardftsrc::PRESET_GOOD
-            .with_input_rate(from as usize)
-            .with_output_rate(to as usize)
-            .with_channels(usize::from(channels));
-        let resampler = RealtimeResampler::new(config).context("cannot start the resampler")?;
-        let frames = (PIECE_FRAMES * u64::from(to)).div_ceil(u64::from(from.max(1)));
-        Ok(Self {
-            resampler,
-            channels,
-            rate: to,
-            piece: frames as usize * usize::from(channels),
-            generation,
-            input: Vec::new(),
-            output: Vec::new(),
-        })
-    }
-
-    /// Takes one packet in and hands back what is ready, in pieces about a packet long. The rest
-    /// waits for more input or `flush`.
-    fn push(&mut self, samples: SamplesBuffer) -> Vec<SamplesBuffer> {
-        self.input.clear();
-        self.input.extend(samples.map(f64::from));
-        if let Err(error) = self.resampler.write_samples(&self.input) {
-            log::error!("sink: cannot resample a packet: {error}");
-            self.resampler.reset();
-            return Vec::new();
-        }
-        self.read(false)
-    }
-
-    /// Ends the stream so far and hands back everything it held, then starts afresh.
-    fn flush(&mut self) -> Vec<SamplesBuffer> {
-        let pieces = match self.resampler.finalize() {
-            Ok(()) => self.read(true),
-            Err(error) => {
-                log::error!("sink: cannot flush the resampler: {error}");
-                Vec::new()
-            }
-        };
-        self.resampler.reset();
-        pieces
-    }
-
-    /// Drops what it holds, which belongs to an older `generation`.
-    fn reset(&mut self, generation: u32) {
-        self.resampler.reset();
-        self.generation = generation;
-    }
-
-    /// Reads whole pieces, and with `all` the short one left at the end too.
-    fn read(&mut self, all: bool) -> Vec<SamplesBuffer> {
-        let mut pieces = Vec::new();
-        loop {
-            let ready = self.resampler.num_samples_ready();
-            if ready == 0 || (ready < self.piece && !all) {
-                return pieces;
-            }
-            self.output.resize(ready.min(self.piece), 0.);
-            let read = match self.resampler.read_samples(&mut self.output) {
-                Some(read) if read > 0 => read,
-                _ => return pieces,
-            };
-            let samples: Vec<f32> = self.output[..read].iter().map(|&s| s as f32).collect();
-            if let Some(piece) = packet(&samples, self.channels, self.rate) {
-                pieces.push(piece);
-            }
-        }
-    }
-}
-
 /// Waits for an output device to come back and then tells `notify`, which the engine takes the
 /// way it takes the device changing: it reopens the output and reloads where it was.
 /// This is what an engine that could not open a device at all waits on. A machine whose only
@@ -498,4 +435,10 @@ pub fn packet(samples: &[f32], channels: u16, rate: u32) -> Option<SamplesBuffer
         NonZero::new(rate)?,
         samples,
     ))
+}
+
+/// Everything `resampler` has ready, in pieces of `frames` frames, with the short rest at the end
+/// of a stream or a format change.
+fn ready(resampler: &mut RealtimeResampler, frames: usize) -> Vec<SamplesBuffer> {
+    std::iter::from_fn(|| resampler.read_rodio_buffer(frames)).collect()
 }

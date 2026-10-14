@@ -21,14 +21,7 @@ impl OutputSink {
     /// The sink librespot's player builder asks for. Without an output device it gets a silent
     /// one, so playback state still moves.
     pub fn boxed(cue: Cue, chain: Chain, changed: UnboundedSender<()>) -> Box<dyn Sink> {
-        let opened = Paced::converting(
-            cue.clone(),
-            chain,
-            changed.clone(),
-            SAMPLE_RATE,
-            NUM_CHANNELS as u16,
-        );
-        match opened {
+        match Paced::open(cue.clone(), chain, changed.clone()) {
             Ok(paced) => Box::new(Self { paced }),
             Err(error) => {
                 log::error!("sink: cannot open an output device: {error:#}");
@@ -64,7 +57,7 @@ impl Sink for OutputSink {
         };
         self.paced
             .write(samples)
-            .and_then(|()| self.paced.drain())
+            .and_then(|_| self.paced.drain())
             .map_err(|error| SinkError::OnWrite(error.to_string()))
     }
 }
