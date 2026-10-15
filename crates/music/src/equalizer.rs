@@ -11,6 +11,8 @@ use std::time::Duration;
 use rodio::Source;
 use rodio::source::SeekError;
 
+use crate::audio::{Format, Frames};
+
 /// How many bands the equalizer has, one per octave from 31 Hz to 16 kHz.
 pub const BANDS: usize = 10;
 /// The centre frequency of each band, in hertz.
@@ -267,16 +269,14 @@ pub struct Equalized<I> {
     /// Whether any coefficient is doing work, so a flat chain is skipped whole.
     active: bool,
 
-    channel: usize,
-    channels: usize,
-    rate: u32,
+    frames: Frames,
 }
 
 impl<I: Source> Equalized<I> {
-    pub fn new(input: I, equalizer: Equalizer) -> Self {
+    pub(crate) fn new(input: I, equalizer: Equalizer, format: Format) -> Self {
         let current = equalizer.effective();
         let seen = equalizer.generation();
-        let mut this = Self {
+        Self {
             input,
             equalizer,
             seen,
@@ -288,25 +288,15 @@ impl<I: Source> Equalized<I> {
             coefficients: [Biquad::identity(); BANDS],
             delays: Vec::new(),
             active: false,
-            channel: 0,
-            channels: 0,
-            rate: 0,
-        };
-        this.resync();
-        this
+            frames: Frames::new(format),
+        }
     }
 
-    /// Follows the source's rate and channel count. A change resets the delay lines, since
-    /// what they hold belongs to another rate, and recomputes every coefficient.
+    /// Takes up a new rate and channel count. The delay lines reset, since what they hold
+    /// belongs to another format, and every coefficient is recomputed.
     fn resync(&mut self) {
-        let channels = self.input.channels().get() as usize;
-        let rate = self.input.sample_rate().get();
-        if channels == self.channels && rate == self.rate {
-            return;
-        }
-
-        self.channels = channels;
-        self.rate = rate;
+        let channels = usize::from(self.frames.channels());
+        let rate = self.frames.rate();
         self.ramp_frames = (RAMP.as_secs_f64() * rate as f64).round().max(1.) as u32;
         self.frames_left = self.frames_left.min(self.ramp_frames);
         self.delays = vec![[Delay::default(); BANDS]; channels];
@@ -314,7 +304,7 @@ impl<I: Source> Equalized<I> {
     }
 
     fn recompute(&mut self) {
-        let rate = self.rate as f32;
+        let rate = self.frames.rate() as f32;
         for (band, coefficients) in self.coefficients.iter_mut().enumerate() {
             *coefficients = Biquad::peaking(FREQUENCIES[band], self.current[band], rate);
         }
@@ -356,16 +346,21 @@ impl<I: Source> Iterator for Equalized<I> {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let sample = self.input.next()?;
+        let (sample, place) = self.frames.pull(&mut self.input)?;
+        let Some(place) = place else {
+            return Some(sample);
+        };
 
-        if self.channel == 0 {
+        if place.changed {
             self.resync();
+        }
+        if place.channel == 0 {
             self.advance();
         }
 
         let output = match self.active {
             true => {
-                let delays = &mut self.delays[self.channel];
+                let delays = &mut self.delays[usize::from(place.channel)];
                 self.coefficients
                     .iter()
                     .zip(delays.iter_mut())
@@ -375,11 +370,6 @@ impl<I: Source> Iterator for Equalized<I> {
             }
             false => sample,
         };
-
-        self.channel += 1;
-        if self.channel >= self.channels {
-            self.channel = 0;
-        }
 
         Some(output)
     }

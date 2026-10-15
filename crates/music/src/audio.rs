@@ -1,10 +1,10 @@
 use std::num::NonZero;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-use rodio::Source;
 use rodio::source::SeekError;
+use rodio::{ChannelCount, SampleRate, Source};
 
 use crate::equalizer::{Equalized, Equalizer};
 use crate::spectrum::{Spectrum, Tap};
@@ -27,6 +27,80 @@ impl Volume {
     }
 }
 
+/// The rate and channel count of what one player is playing, published by each chunk as it
+/// yields its first sample. The queue's own answer depends on how the previous chunk ended, so
+/// the chain follows this instead. Zero means no chunk has played yet.
+#[derive(Clone, Default)]
+pub(crate) struct Format(Arc<AtomicU64>);
+
+impl Format {
+    pub(crate) fn publish(&self, rate: SampleRate, channels: ChannelCount) {
+        let word = u64::from(rate.get()) << 16 | u64::from(channels.get());
+        self.0.store(word, Ordering::Relaxed);
+    }
+}
+
+/// Which channel of its frame each sample a chain stage pulls belongs to, counted from the
+/// format the playing chunk published. A change of format starts a new frame.
+pub(crate) struct Frames {
+    format: Format,
+    /// The word last read, so a change is noticed on the sample that brings it.
+    seen: u64,
+    channel: u16,
+}
+
+/// Where the sample just pulled sits in its frame.
+pub(crate) struct Place {
+    pub channel: u16,
+    /// Whether this sample brought a new format, which the stage takes up before using it.
+    pub changed: bool,
+}
+
+impl Frames {
+    pub(crate) fn new(format: Format) -> Self {
+        Self {
+            format,
+            seen: 0,
+            channel: 0,
+        }
+    }
+
+    /// Pulls the next sample from `input` and places it in its frame. The place is `None` until a
+    /// chunk has published a format, and the stage passes those samples through untouched.
+    pub(crate) fn pull(
+        &mut self,
+        input: &mut impl Iterator<Item = f32>,
+    ) -> Option<(f32, Option<Place>)> {
+        let sample = input.next()?;
+        // The chunk publishes during the pull, so the word is read after it.
+        let word = self.format.0.load(Ordering::Relaxed);
+        let changed = word != self.seen;
+        if changed {
+            self.seen = word;
+            self.channel = 0;
+        }
+        let channels = self.channels();
+        if channels == 0 {
+            return Some((sample, None));
+        }
+
+        let channel = self.channel;
+        self.channel += 1;
+        if self.channel >= channels {
+            self.channel = 0;
+        }
+        Some((sample, Some(Place { channel, changed })))
+    }
+
+    pub(crate) fn rate(&self) -> u32 {
+        (self.seen >> 16) as u32
+    }
+
+    pub(crate) fn channels(&self) -> u16 {
+        self.seen as u16
+    }
+}
+
 /// What sits between the queue and the device: the equalizer, then the volume ramp, with the
 /// spectrum tap listening at the end. Every engine builds one and hands it to the output.
 pub struct Chain {
@@ -37,12 +111,12 @@ pub struct Chain {
 
 impl Chain {
     /// `source` run through the equalizer and then the volume ramp, with the spectrum tap at the
-    /// end, ready for the mixer.
-    pub(crate) fn apply<S: Source>(&self, source: S) -> SmoothGain<Equalized<S>> {
+    /// end, ready for the mixer. Every chunk queued on `source` publishes into `format`.
+    pub(crate) fn apply<S: Source>(&self, source: S, format: Format) -> SmoothGain<Equalized<S>> {
         let applied = self.volume.get();
         let tap = self.spectrum.attach();
-        let equalized = Equalized::new(source, self.equalizer.clone());
-        SmoothGain::new(equalized, self.volume.clone(), applied, RAMP).with_tap(tap)
+        let equalized = Equalized::new(source, self.equalizer.clone(), format.clone());
+        SmoothGain::new(equalized, self.volume.clone(), applied, RAMP, format).with_tap(tap)
     }
 }
 
@@ -62,13 +136,17 @@ pub struct SmoothGain<I> {
     frames_left: u32,
     ramp_frames: u32,
 
-    channel: u16,
-    channels: u16,
-    rate: u32,
+    frames: Frames,
 }
 
 impl<I: Source> SmoothGain<I> {
-    pub fn new(input: I, volume: Volume, initial: f32, ramp: Duration) -> Self {
+    pub(crate) fn new(
+        input: I,
+        volume: Volume,
+        initial: f32,
+        ramp: Duration,
+        format: Format,
+    ) -> Self {
         Self {
             input,
             volume,
@@ -80,9 +158,7 @@ impl<I: Source> SmoothGain<I> {
             ramp,
             frames_left: 0,
             ramp_frames: 1,
-            channel: 0,
-            channels: 0,
-            rate: 0,
+            frames: Frames::new(format),
         }
     }
 
@@ -91,15 +167,10 @@ impl<I: Source> SmoothGain<I> {
         self
     }
 
+    /// Takes up a new format. The tap learns it, and the ramp keeps its length in time.
     fn resync(&mut self) {
-        let channels = self.input.channels().get();
-        let rate = self.input.sample_rate().get();
-        if channels == self.channels && rate == self.rate {
-            return;
-        }
-
-        self.channels = channels;
-        self.rate = rate;
+        let rate = self.frames.rate();
+        let channels = self.frames.channels();
         if let Some(tap) = &self.tap {
             tap.format(rate, channels);
         }
@@ -112,10 +183,15 @@ impl<I: Source> Iterator for SmoothGain<I> {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let sample = self.input.next()?;
+        let (sample, place) = self.frames.pull(&mut self.input)?;
+        let Some(place) = place else {
+            return Some(sample);
+        };
 
-        if self.channel == 0 {
+        if place.changed {
             self.resync();
+        }
+        if place.channel == 0 {
             self.unscaled = self.tap.as_ref().is_some_and(Tap::absolute);
             let requested = self.volume.get().max(0.0);
 
@@ -141,11 +217,6 @@ impl<I: Source> Iterator for SmoothGain<I> {
                 true => sample,
                 false => output,
             });
-        }
-
-        self.channel += 1;
-        if self.channel >= self.channels {
-            self.channel = 0;
         }
 
         Some(output)

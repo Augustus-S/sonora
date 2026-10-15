@@ -13,7 +13,7 @@ use ardftsrc::RealtimeResampler;
 use rodio::{ChannelCount, SampleRate, Source};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::audio::Chain;
+use crate::audio::{Chain, Format};
 use crate::output::{self, Output};
 
 /// How many packets stay queued before a write blocks. This is what paces the decoder to real
@@ -193,6 +193,8 @@ struct Chunk {
     at: usize,
     channels: ChannelCount,
     rate: SampleRate,
+    /// Where the chunk announces its format to the chain as it starts playing.
+    format: Format,
     born: u32,
     generation: Arc<AtomicU32>,
     played: Arc<AtomicU64>,
@@ -201,13 +203,20 @@ struct Chunk {
 }
 
 impl Chunk {
-    fn new(packet: Packet, cue: &Cue, live: &Arc<AtomicUsize>, spares: &Spares) -> Self {
+    fn new(
+        packet: Packet,
+        format: &Format,
+        cue: &Cue,
+        live: &Arc<AtomicUsize>,
+        spares: &Spares,
+    ) -> Self {
         live.fetch_add(1, Ordering::Relaxed);
         Self {
             samples: packet.samples,
             at: 0,
             channels: packet.channels,
             rate: packet.rate,
+            format: format.clone(),
             born: cue.generation.load(Ordering::Relaxed),
             generation: cue.generation.clone(),
             played: cue.played.clone(),
@@ -225,6 +234,9 @@ impl Iterator for Chunk {
             return None;
         }
         let sample = *self.samples.get(self.at)?;
+        if self.at == 0 {
+            self.format.publish(self.rate, self.channels);
+        }
         self.at += 1;
         self.played.fetch_add(1, Ordering::Relaxed);
         Some(sample)
@@ -453,9 +465,9 @@ impl Paced {
                 continue;
             };
             queued += packet.samples.len();
-            self.output
-                .sink()
-                .append(Chunk::new(packet, &self.cue, &self.live, &self.spares));
+            let format = self.output.format();
+            let chunk = Chunk::new(packet, format, &self.cue, &self.live, &self.spares);
+            self.output.sink().append(chunk);
         }
         queued
     }
@@ -505,4 +517,67 @@ pub fn packet(samples: Vec<f32>, channels: u16, rate: u32) -> Option<Packet> {
         channels: NonZero::new(channels)?,
         rate: NonZero::new(rate)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::Volume;
+    use crate::equalizer::{BANDS, Equalizer};
+    use crate::spectrum::Spectrum;
+
+    /// A stereo track comes out the same whichever way the mono one before it stopped: on its
+    /// own, or cut short by a skip with more of its packets still queued. A sample counted into
+    /// the wrong frame carries the mono track's filter state into the stereo one.
+    #[test]
+    fn a_new_track_starts_on_a_fresh_frame() {
+        let (cue, _) = Cue::new();
+        let (live, spares) = (Arc::default(), Spares::new());
+        let append = |player: &rodio::Player, format: &Format, samples: &[f32], channels| {
+            let packet = packet(samples.to_vec(), channels, 48_000).unwrap();
+            player.append(Chunk::new(packet, format, &cue, &live, &spares));
+        };
+        let tone = |i: usize| (i as f32 * 0.05).sin();
+        let mono: Vec<f32> = (0..256).map(tone).collect();
+        let stereo: Vec<f32> = (1..1_025).flat_map(|i| [tone(i), 0.]).collect();
+
+        let (player, chain, format) = open();
+        append(&player, &format, &stereo, 2);
+        let alone: Vec<f32> = chain.take(stereo.len()).collect();
+
+        let (player, chain, format) = open();
+        append(&player, &format, &mono[..3], 1);
+        append(&player, &format, &stereo, 2);
+        let ended: Vec<f32> = chain.skip(3).take(stereo.len()).collect();
+
+        let (player, mut chain, format) = open();
+        for _ in 0..3 {
+            append(&player, &format, &mono, 1);
+        }
+        chain.by_ref().take(32).for_each(drop);
+        cue.clear();
+        append(&player, &format, &stereo, 2);
+        let skipped: Vec<f32> = chain.take(stereo.len()).collect();
+
+        for (case, heard) in [("ended", ended), ("skipped", skipped)] {
+            assert!(
+                heard == alone,
+                "{case}: {:?} for {:?}",
+                &heard[..6],
+                &alone[..6]
+            );
+        }
+    }
+
+    /// A player and the chain its queue plays through, as an output opens them.
+    fn open() -> (rodio::Player, impl Iterator<Item = f32>, Format) {
+        let (player, queue) = rodio::Player::new();
+        let format = Format::default();
+        let chain = Chain {
+            volume: Volume::new(0.5),
+            equalizer: Equalizer::new(true, &[12.; BANDS]),
+            spectrum: Spectrum::new(),
+        };
+        (player, chain.apply(queue, format.clone()), format)
+    }
 }

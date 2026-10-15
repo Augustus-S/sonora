@@ -33,7 +33,7 @@ use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
-use crate::audio::Chain;
+use crate::audio::{Chain, Format};
 #[cfg(target_os = "linux")]
 use output_host::host;
 
@@ -432,6 +432,8 @@ impl Drop for Device {
 pub(crate) struct Output {
     chain: Chain,
     sink: Arc<rodio::Player>,
+    /// What every chunk appended to `sink` publishes its format into.
+    format: Format,
     device: Arc<Device>,
 }
 
@@ -443,16 +445,23 @@ impl Output {
         let device = Device::acquire()?;
         device.listen(changed);
         let (sink, source) = rodio::Player::new();
-        device.add(chain.apply(source));
+        let format = Format::default();
+        device.add(chain.apply(source, format.clone()));
         Ok(Self {
             chain,
             sink: Arc::new(sink),
+            format,
             device,
         })
     }
 
     pub fn sink(&self) -> &Arc<rodio::Player> {
         &self.sink
+    }
+
+    /// Where a chunk appended to `sink` publishes its format, so the chain knows what it plays.
+    pub fn format(&self) -> &Format {
+        &self.format
     }
 
     /// The rate the device runs at, which every packet is resampled to before it is heard.
