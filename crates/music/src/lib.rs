@@ -26,6 +26,7 @@ mod spectrum;
 pub mod spotify;
 mod stream;
 pub mod subsonic;
+pub mod tidal;
 mod trim;
 pub mod trouble;
 pub mod youtube;
