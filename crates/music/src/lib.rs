@@ -2,6 +2,7 @@ pub mod apple;
 pub mod artwork;
 mod audio;
 pub mod binimum;
+mod calendar;
 pub mod credentials;
 pub mod deezer;
 pub mod drm;
