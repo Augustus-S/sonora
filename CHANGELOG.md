@@ -96,6 +96,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unavailable in your library and playlists.
 - On Windows, maximizing Sonora on a monitor bigger than your main one fills the whole screen
   instead of stopping at the main monitor's size.
+- Songs on YouTube Music and Apple Music no longer sometimes play with left and right swapped
+  after you seek or pick up partway through.
 
 ## [0.43.0] - 2026-10-13
 
