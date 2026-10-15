@@ -36,6 +36,7 @@ mod scrubber;
 mod separator;
 mod shield;
 mod skeleton;
+mod spinner;
 mod switch;
 mod table;
 mod tabs;
@@ -81,9 +82,9 @@ pub use menu::{MENU_CONTEXT, Menu, MenuItem, MenuSearch, SubmenuState};
 pub use metrics::{LEADING, Metrics, Rounding, Text, snapped, tucked};
 pub use modal::Modal;
 pub use motion::{
-    Entrance, Fading, Motion, Motioned, Pace, Rising, Saver, Springs, Stillness, ease_in_out_cubic,
-    ease_in_out_expo, ease_out_cubic, ease_out_expo, ease_out_quad, entering, entrance_span, mix,
-    veiled,
+    Entrance, Fading, Motion, Motioned, Pace, Rising, Saver, Springs, Stillness, css_ease,
+    css_ease_out, ease_in_out_cubic, ease_in_out_expo, ease_out_cubic, ease_out_expo,
+    ease_out_quad, entering, entrance_span, mix, paced, veiled,
 };
 pub use notice::Notice;
 pub use palette::{CoverPalette, palette, tint};
@@ -103,6 +104,7 @@ pub use scrubber::{Scrubber, ScrubberState};
 pub use separator::Separator;
 pub use shield::Shield;
 pub use skeleton::{Initials, Skeleton};
+pub use spinner::Spinner;
 pub use switch::Switch;
 pub use table::{
     Activate, Cell, ColumnSpec, Deselect, Layout, Listing, Pending, ROW_GROUP, Remove, SelectNext,

@@ -65,7 +65,7 @@ pub use settings::{
 };
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};
-pub use toast::{Outcome, Target, Toast, Toasts};
+pub use toast::{Outcome, Target, Toast, ToastAction, Toasts};
 pub use updates::{Release, UpdateState, Updates};
 pub use usage::Usage;
 pub use wake::Wake;
@@ -224,6 +224,13 @@ pub fn init(
         })
         .detach();
     });
+    // A toast can carry an Undo that acts on the account it was shown for, so none outlives it.
+    cx.subscribe(&session, |_, event, cx| {
+        if let SessionEvent::SignedOut = event {
+            Toasts::clear(cx);
+        }
+    })
+    .detach();
     let cache = storage::Cache::standard();
     let library = cx.new(|cx| Library::new(session.clone(), io.clone(), cache, cx));
     let queue = cx.new(|cx| Queue::new(session.clone(), settings.clone(), cx));
