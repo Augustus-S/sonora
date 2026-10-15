@@ -9,10 +9,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- You can undo clearing the queue or removing songs from it. Press Undo on the toast that
+  appears.
+- Adding a whole album, playlist or artist to the queue shows that it is on its way, and
+  queueing several selected songs tells you how many went in.
+- Sonora tells you when the sleep timer ends, when a radio cannot start, and when a file you
+  opened with it cannot be played.
+- You can undo taking songs, albums or artists out of your favorites or library, removing
+  songs from a playlist, removing a playlist from your library, and unpinning. Press Undo on the
+  toast that appears.
+- You can undo removing a play from your history or a music folder.
+- Copy link tells you it worked. Where there is no link to copy, the entry is greyed out and
+  says why.
+- Sonora tells you when a library scan you started has finished.
+
+### Changed
+
+- Toasts have a new look. New ones pile up in front of older ones, and pointing at the pile
+  spreads it out and keeps every toast on screen until you move away. Drag a toast to the right
+  to dismiss it.
+
+### Fixed
+
+- Removing several playlists from your library at once no longer stops after the first one.
+- Sonora now tells you when your settings could not be saved, or when downloading, installing
+  or removing Widevine fails. Both used to fail without a word.
+
+## [0.43.0] - 2026-10-13
+
+### Added
+
 - On macOS, you can pick how rounded the window's corners are in Settings, using the corner
   sizes macOS gives its own windows. You can also hide the close, minimize and zoom buttons.
 - Songs in your history show a heart when you hover them, so you can save one to your library
   straight from there.
+- Ctrl and + or - make the text bigger or smaller, and Ctrl+0 puts it back to the default
+  size. On macOS it is Cmd. The size is saved just like the one in Settings.
 
 ### Changed
 
@@ -26,14 +58,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is missing, or when browser sign-in needs webkit2gtk-4.1, and names what to install.
 - Every notice in the corner, the update one included, has a Don't show again button. On the
   update notice it turns off Check for updates.
-- `UpdateNotice` now is common `AppNotice`.
 
 ### Fixed
 
 - YouTube Music and Apple Music artist pages now list the artist's whole discography instead
   of stopping at ten albums and ten singles, and Deezer artist pages no longer stop at 50.
 - Apple Music artist pages now list the artist's live albums and compilations, which were
-  missing even though they opened fine from search.
+  missing even though they opened fine from search. Every edition of an album shows up too,
+  such as the standard and deluxe releases side by side, newest first.
 - Albums on YouTube Music and Deezer artist pages now name the artist, and a card with no
   artist to show no longer ends its line in a stray dot.
 - Artist names on Apple Music album cards now open the artist, in search, charts, home, the
@@ -49,6 +81,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Signing in to Spotify on Windows on ARM no longer fails with "Spotify turned down the
   sign-in".
 - Spotify and Deezer accounts now show profile picture in Settings instead of initials.
+- Spotify playlists that someone else owns but lets you edit can now be edited in Sonora, so
+  you can add and remove their songs.
+- A song no longer gets stuck on plain lyrics because a lyrics source was down the first time
+  it played. Sources that failed are asked again on the next play, and turning a source off
+  no longer looks the song up again.
 
 ## [0.42.2] - 2026-10-07
 
@@ -2058,7 +2095,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/sonorahq/sonora/compare/v0.42.2...HEAD
+[unreleased]: https://github.com/sonorahq/sonora/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/sonorahq/sonora/compare/v0.42.2...v0.43.0
 [0.42.2]: https://github.com/sonorahq/sonora/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/sonorahq/sonora/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/sonorahq/sonora/compare/v0.41.0...v0.42.0

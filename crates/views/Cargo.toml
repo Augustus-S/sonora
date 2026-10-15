@@ -16,3 +16,5 @@ ui.workspace = true
 state.workspace = true
 log.workspace = true
 unicode-bidi.workspace = true
+[dev-dependencies]
+gpui_platform.workspace = true
