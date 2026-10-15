@@ -9007,6 +9007,7 @@ name = "views"
 version = "0.43.0"
 dependencies = [
  "gpui",
+ "gpui_platform",
  "i18n",
  "icons",
  "input",
