@@ -27,6 +27,7 @@ use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
+use crate::route::{Encoding, Normalisation, Route, TrackSignal};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
 use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
@@ -96,6 +97,11 @@ pub trait Fetch: Send + Sync + 'static {
         None
     }
 
+    /// How the track is encoded, when the fetch learned it. The signal path shows it.
+    fn encoding(&self, _loaded: &Self::Loaded) -> Option<Encoding> {
+        None
+    }
+
     /// Whether a failed load means the listener has to sign in. The engine reports that as
     /// gated rather than as the track being unavailable.
     fn gated(&self, _error: &anyhow::Error) -> bool {
@@ -140,16 +146,21 @@ pub fn start<F: Fetch>(
     let (commands, command_rx) = unbounded_channel();
     let (events, event_rx) = unbounded_channel();
     let spectrum = Spectrum::new();
-    let engine_spectrum = spectrum.clone();
+    let route = Route::default();
+    let output = (spectrum.clone(), route.clone());
     let name = fetch.name();
     let spawned = std::thread::Builder::new()
         .name(format!("{name}-playback"))
-        .spawn(move || run(Arc::new(fetch), config, command_rx, events, engine_spectrum));
+        .spawn(move || run(Arc::new(fetch), config, command_rx, events, output));
     if let Err(error) = spawned {
         log::error!("playback: cannot spawn the {name} engine thread: {error}");
     }
     (
-        Box::new(Handle { commands, spectrum }),
+        Box::new(Handle {
+            commands,
+            spectrum,
+            route,
+        }),
         Box::new(Events(event_rx)),
     )
 }
@@ -199,6 +210,7 @@ enum Job<F: Fetch> {
 struct Handle {
     commands: UnboundedSender<Command>,
     spectrum: Spectrum,
+    route: Route,
 }
 
 impl Player for Handle {
@@ -252,6 +264,10 @@ impl Player for Handle {
     fn spectrum(&self) -> Option<Spectrum> {
         Some(self.spectrum.clone())
     }
+
+    fn route(&self) -> Option<Route> {
+        Some(self.route.clone())
+    }
 }
 
 struct Events(UnboundedReceiver<PlaybackEvent>);
@@ -294,7 +310,7 @@ fn run<F: Fetch>(
     config: PlaybackConfig,
     commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
-    spectrum: Spectrum,
+    output: (Spectrum, Route),
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -306,7 +322,7 @@ fn run<F: Fetch>(
             return;
         }
     };
-    runtime.block_on(engine_loop(fetch, config, commands, events, spectrum));
+    runtime.block_on(engine_loop(fetch, config, commands, events, output));
 }
 
 async fn engine_loop<F: Fetch>(
@@ -314,7 +330,7 @@ async fn engine_loop<F: Fetch>(
     config: PlaybackConfig,
     mut commands: UnboundedReceiver<Command>,
     events: UnboundedSender<PlaybackEvent>,
-    spectrum: Spectrum,
+    (spectrum, route): (Spectrum, Route),
 ) {
     let (cue, mut written) = Cue::new();
     let (changed, mut gone) = unbounded_channel();
@@ -340,6 +356,7 @@ async fn engine_loop<F: Fetch>(
                 job_rx,
                 audio_cue,
                 chain,
+                route,
                 changed,
                 joins,
                 audio_events,
@@ -744,13 +761,27 @@ impl<F: Fetch> Playing<F> {
         at: Duration,
         offset: u64,
         normalise: bool,
+        route: &Route,
     ) -> Option<Self> {
         let (source, base) = fetch.open_near(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
+        let (channels, rate) = (source.channels().get(), source.sample_rate().get());
+        route.learn(
+            id,
+            TrackSignal {
+                encoding: fetch.encoding(&loaded),
+                rate,
+                channels,
+                normalisation: match normalise {
+                    true => Normalisation::Gain(20. * gain.log10()),
+                    false => Normalisation::Off,
+                },
+            },
+        );
         Some(Self {
             id: id.to_owned(),
-            channels: source.channels().get(),
-            rate: source.sample_rate().get(),
+            channels,
+            rate,
             loaded,
             source,
             base,
@@ -824,6 +855,7 @@ fn audio_loop<F: Fetch>(
     jobs: Receiver<Job<F>>,
     cue: Cue,
     chain: Chain,
+    route: Route,
     changed: UnboundedSender<()>,
     joins: UnboundedSender<Joined>,
     events: UnboundedSender<PlaybackEvent>,
@@ -918,7 +950,7 @@ fn audio_loop<F: Fetch>(
                     queued = None;
                     joining = None;
                     written = 0;
-                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise);
+                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise, &route);
                     heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     playing = start && current.is_some();
                     match playing {
@@ -987,6 +1019,7 @@ fn audio_loop<F: Fetch>(
                         position,
                         0,
                         normalise,
+                        &route,
                     );
                     if current.is_none() {
                         log::warn!("playback: cannot seek {}", join.ended);
@@ -1009,8 +1042,15 @@ fn audio_loop<F: Fetch>(
                         // has moved.
                         true => {
                             let (id, loaded) = (held.id.clone(), held.loaded.clone());
-                            match Playing::open(fetch.as_ref(), &id, loaded, position, 0, normalise)
-                            {
+                            match Playing::open(
+                                fetch.as_ref(),
+                                &id,
+                                loaded,
+                                position,
+                                0,
+                                normalise,
+                                &route,
+                            ) {
                                 Some(fresh) => current = Some(fresh),
                                 None => {
                                     log::warn!("playback: cannot seek {id}");
@@ -1052,7 +1092,15 @@ fn audio_loop<F: Fetch>(
             };
             let next = queued.take().and_then(|(id, loaded)| {
                 let duration = fetch.length(&loaded);
-                current = Playing::open(fetch.as_ref(), &id, loaded, Duration::ZERO, 0, normalise);
+                current = Playing::open(
+                    fetch.as_ref(),
+                    &id,
+                    loaded,
+                    Duration::ZERO,
+                    0,
+                    normalise,
+                    &route,
+                );
                 current.as_ref().map(|_| (id, duration))
             });
             // A track that follows is written straight in behind this one, so the resampler

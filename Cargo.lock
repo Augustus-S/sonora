@@ -4282,6 +4282,7 @@ dependencies = [
  "opensubsonic",
  "percent-encoding",
  "protobuf",
+ "pulseaudio",
  "reqwest 0.13.4",
  "rodio",
  "roxmltree 0.21.1",

@@ -20,6 +20,8 @@ mod output_alsa;
 #[cfg(target_os = "linux")]
 mod output_host;
 mod output_rate;
+#[cfg(target_os = "linux")]
+mod output_server;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,7 +35,7 @@ use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
-use crate::audio::{Chain, Format};
+use crate::audio::{self, Chain};
 #[cfg(target_os = "linux")]
 use output_host::host;
 
@@ -94,7 +96,32 @@ pub struct DeviceOption {
     pub direct: bool,
 }
 
-/// How a stream takes each sample.
+/// The sink a sound server plays Sonora's stream on, as the server names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sink {
+    /// The sink's name and its active port: stable across restarts and unique on this machine.
+    pub id: String,
+    /// What the user knows it as.
+    pub name: String,
+    /// The port that plays, such as headphones or speakers on one card, when it has more than
+    /// one.
+    pub port: Option<String>,
+    /// The format the server runs it at, when it says.
+    pub format: Option<Format>,
+    /// The device Sonora's stream was open on when the server said, or `None` for the server's
+    /// default standing in before Sonora has had a stream.
+    pub device: Option<String>,
+}
+
+/// A rate, a channel count and a sample format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Format {
+    pub rate: u32,
+    pub channels: u16,
+    pub sample: Sample,
+}
+
+/// How each sample is written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sample {
     Integer(u8),
@@ -235,6 +262,9 @@ pub struct DeviceInfo {
     /// The buffer Sonora asks the device for, in frames.
     pub buffer: u32,
 
+    /// How many channels the stream carries. The mixer remixes a track with others to these.
+    pub channels: u16,
+
     /// How the stream takes each sample. Integer samples wrap past full scale where floats clip.
     pub sample: Sample,
 
@@ -372,6 +402,7 @@ impl Device {
                 name,
                 rate: config.sample_rate(),
                 buffer,
+                channels: config.channels(),
                 sample: Sample::of(config.sample_format()),
                 rates,
                 buffers,
@@ -462,7 +493,7 @@ pub(crate) struct Output {
     chain: Chain,
     sink: Arc<rodio::Player>,
     /// What every chunk appended to `sink` publishes its format into.
-    format: Format,
+    format: audio::Format,
     device: Arc<Device>,
 }
 
@@ -474,7 +505,7 @@ impl Output {
         let device = Device::acquire()?;
         device.listen(changed);
         let (sink, source) = rodio::Player::new();
-        let format = Format::default();
+        let format = audio::Format::default();
         let integer = matches!(device.info.sample, Sample::Integer(_));
         device.add(chain.apply(source, format.clone(), integer));
         Ok(Self {
@@ -490,7 +521,7 @@ impl Output {
     }
 
     /// Where a chunk appended to `sink` publishes its format, so the chain knows what it plays.
-    pub fn format(&self) -> &Format {
+    pub fn format(&self) -> &audio::Format {
         &self.format
     }
 
@@ -755,6 +786,8 @@ pub fn failing() -> bool {
 
 #[cfg(target_os = "linux")]
 pub use output_alsa::missing_bridge;
+#[cfg(target_os = "linux")]
+pub use output_server::follow;
 
 #[cfg(not(target_os = "linux"))]
 pub fn missing_bridge() -> Option<Server> {

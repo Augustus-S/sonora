@@ -7,9 +7,11 @@ use librespot_core::{Session, SpotifyUri};
 use librespot_playback::config::{Bitrate, PlayerConfig};
 use librespot_playback::mixer::NoOpVolume;
 use librespot_playback::player::{Player, PlayerEvent};
+use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
+use crate::route::{Codec, Encoding, Normalisation, Route, TrackSignal};
 use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
@@ -129,7 +131,9 @@ pub struct Engine {
     volume: Volume,
     cue: Cue,
     spectrum: Spectrum,
+    route: Route,
     gapless: bool,
+    normalisation: bool,
 }
 
 impl Engine {
@@ -137,6 +141,7 @@ impl Engine {
         let volume = Volume::new(config.gain);
         let (cue, written) = Cue::new();
         let spectrum = Spectrum::new();
+        let route = Route::default();
 
         let player_config = PlayerConfig {
             bitrate: bitrate(config.quality),
@@ -171,7 +176,9 @@ impl Engine {
             volume,
             cue,
             spectrum,
+            route,
             gapless: config.gapless,
+            normalisation: config.normalisation,
         };
         (engine, events)
     }
@@ -182,6 +189,7 @@ impl Engine {
         if !seamless || !self.gapless {
             self.cue.clear();
         }
+        self.learn(track_id);
         self.player.load(uri, true, at.as_millis() as u32);
         Ok(())
     }
@@ -190,6 +198,7 @@ impl Engine {
         let uri = track_uri(track_id)?;
 
         self.cue.clear();
+        self.learn(track_id);
         self.player.load(uri, false, at.as_millis() as u32);
         Ok(())
     }
@@ -218,6 +227,28 @@ impl Engine {
 
     fn spectrum(&self) -> Spectrum {
         self.spectrum.clone()
+    }
+
+    /// Notes what every Spotify track is: Ogg Vorbis, decoded by librespot to 44.1 kHz stereo
+    /// and normalised there.
+    fn learn(&self, track_id: &str) {
+        let encoding = Encoding {
+            codec: Codec::Vorbis,
+            bits: None,
+            kbps: None,
+        };
+        self.route.learn(
+            track_id,
+            TrackSignal {
+                encoding: Some(encoding),
+                rate: SAMPLE_RATE,
+                channels: NUM_CHANNELS.into(),
+                normalisation: match self.normalisation {
+                    true => Normalisation::Limited,
+                    false => Normalisation::Off,
+                },
+            },
+        );
     }
 }
 
@@ -252,6 +283,10 @@ impl MusicPlayer for Engine {
 
     fn spectrum(&self) -> Option<Spectrum> {
         Some(self.spectrum())
+    }
+
+    fn route(&self) -> Option<Route> {
+        Some(self.route.clone())
     }
 }
 

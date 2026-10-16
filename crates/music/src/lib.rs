@@ -22,6 +22,7 @@ pub mod netease;
 pub mod output;
 pub mod potoken;
 pub mod progress;
+mod route;
 pub mod scrobble;
 mod sink;
 mod spectrum;
@@ -55,6 +56,7 @@ pub use models::{
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use output::{Server as SoundServer, missing_bridge};
+pub use route::{Codec, Encoding, Normalisation, Route, TrackSignal};
 pub use spectrum::{Analyzer, Level, Spectrum, Watch};
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
@@ -574,6 +576,11 @@ pub trait Player: Send + Sync {
     fn set_gain(&self, gain: f32);
 
     fn spectrum(&self) -> Option<Spectrum> {
+        None
+    }
+
+    /// What the engine knows about the sound it plays, for the signal path.
+    fn route(&self) -> Option<Route> {
         None
     }
 }
