@@ -19,6 +19,7 @@ use graph::Graph;
 use rows::{Row, figure};
 
 mod graph;
+mod outputs;
 mod rows;
 mod transfer;
 
@@ -467,6 +468,7 @@ impl Render for EqualizerView {
                     .child(self.header(cx))
                     .child(self.graph(room, cx))
                     .child(self.profiles(cx))
+                    .children(self.outputs(cx))
                     .child(
                         div()
                             .key_context(FORM_CONTEXT)

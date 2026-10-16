@@ -90,8 +90,8 @@ use crate::queue::Queue;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppSettings, Io, Network, Outcome, Reloaded, Session, SessionEvent, Sonora, Target, Toast,
-    Toasts, join,
+    AppSettings, BoundOutput, Io, Network, Outcome, Reloaded, Session, SessionEvent, Sonora,
+    Target, Toast, Toasts, join,
 };
 
 const POSITION_INTERVAL: Duration = Duration::from_millis(500);
@@ -414,6 +414,9 @@ pub struct Playback {
     overload: Overload,
     /// Stores a glided curve in the settings once the edits pause.
     glide_store: Option<Task<()>>,
+    /// The id of the output played on as `Outputs` last handed it over, so a binding edit can
+    /// play what that output asks for and the same output again is not a move.
+    output: Option<String>,
     repeat: Repeat,
     radio: bool,
     /// The track the current similar-tracks suggestions were drawn from.
@@ -553,6 +556,7 @@ impl Playback {
             meter: Meter::default(),
             overload: Overload::default(),
             glide_store: None,
+            output: None,
             repeat,
             radio,
             seeded: None,
@@ -2247,6 +2251,63 @@ impl Playback {
         }
     }
 
+    /// Takes in output `id` as the one played on, and plays the profile it asks for when it is
+    /// another output than the last one.
+    pub fn follow_output(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.output.as_deref() == Some(id) {
+            return;
+        }
+        self.output = Some(id.to_owned());
+        self.play_output_profile(cx);
+    }
+
+    /// Plays the profile the output played on asks for, when one is bound to it or set for
+    /// other outputs and it is not playing already.
+    fn play_output_profile(&mut self, cx: &mut Context<Self>) {
+        let settings = self.settings.read(cx);
+        let Some(index) = self
+            .output
+            .as_deref()
+            .and_then(|id| settings.equalizer_profile_for_output(id))
+        else {
+            return;
+        };
+        if index != settings.equalizer_profile() {
+            log::info!("equalizer: playing profile {index}, the one for the output played on");
+            self.select_equalizer_profile(index, cx);
+        }
+    }
+
+    /// Binds `output`, the one played on now, to profile `index`, or unbinds it with `None`,
+    /// and plays the profile the output then asks for.
+    pub fn bind_equalizer_output(
+        &mut self,
+        output: &BoundOutput,
+        index: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.update(cx, |settings, cx| {
+            settings.bind_equalizer_output(output.clone(), index, cx)
+        });
+        self.play_output_profile(cx);
+    }
+
+    /// Makes profile `index` the one for outputs no profile is bound to, or none with `None`,
+    /// and plays it when the output played on is one of those.
+    pub fn set_equalizer_other_outputs(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        self.settings.update(cx, |settings, cx| {
+            settings.set_equalizer_other_outputs(index, cx)
+        });
+        let settings = self.settings.read(cx);
+        let unbound = self
+            .output
+            .as_deref()
+            .is_some_and(|id| settings.equalizer_profile_bound_to(id).is_none());
+        if unbound {
+            self.play_output_profile(cx);
+        }
+    }
+
     /// Plays equalizer profile `index`, cross-fading to its curve.
     pub fn select_equalizer_profile(&mut self, index: usize, cx: &mut Context<Self>) {
         self.store_glided(cx);
@@ -2267,13 +2328,17 @@ impl Playback {
     }
 
     /// Removes profile `index` while it is still the one named `name`, unless it is the only
-    /// one, and plays the profile that `AppSettings` picks in its place.
+    /// one. When it was playing, the output's own profile plays, else the one `AppSettings` picks.
     pub fn remove_equalizer_profile(&mut self, index: usize, name: &str, cx: &mut Context<Self>) {
         self.store_glided(cx);
+        let playing = self.settings.read(cx).equalizer_profile() == index;
         self.settings.update(cx, |settings, cx| {
             settings.remove_equalizer_profile(index, name, cx)
         });
         self.follow_equalizer(cx);
+        if playing {
+            self.play_output_profile(cx);
+        }
     }
 
     /// Reads an Equalizer APO or AutoEQ text into a new profile named after `name` and plays
