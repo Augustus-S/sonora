@@ -146,12 +146,22 @@ const METER_TICK: Duration = Duration::from_millis(100);
 /// How long after the last glided edit the curve is stored, so a drag or a run of wheel steps
 /// reaches the settings once, when it pauses.
 const GLIDE_STORE: Duration = Duration::from_millis(300);
+/// How many equalizer edits can be undone.
+const UNDO_STEPS: usize = 50;
 
 /// A track the engine was asked to fetch ahead, and whether it was also lined up to follow the
 /// current one gaplessly.
 struct Preloaded {
     id: String,
     segue: bool,
+}
+
+/// The playing profile's curves from before each edit and from before each undo, newest last.
+/// It is kept in memory only and emptied when another profile plays.
+#[derive(Default)]
+struct History {
+    undo: Vec<Curve>,
+    redo: Vec<Curve>,
 }
 
 /// The position shown between the engine's reports. It runs on wall time from `reset` and is
@@ -164,6 +174,31 @@ struct LiveClock {
     correction: f64,
     /// Seconds over which the correction is folded in.
     settle: f64,
+}
+
+impl History {
+    /// Remembers `curve`, the one an edit is about to replace, and forgets what was undone.
+    fn record(&mut self, curve: &Curve) {
+        if self.undo.len() == UNDO_STEPS {
+            self.undo.remove(0);
+        }
+        self.undo.push(curve.clone());
+        self.redo.clear();
+    }
+
+    /// Steps back from `current` and returns the curve to play instead.
+    fn undo(&mut self, current: &Curve) -> Option<Curve> {
+        let curve = self.undo.pop()?;
+        self.redo.push(current.clone());
+        Some(curve)
+    }
+
+    /// Steps forward from `current` again and returns the curve to play instead.
+    fn redo(&mut self, current: &Curve) -> Option<Curve> {
+        let curve = self.redo.pop()?;
+        self.undo.push(current.clone());
+        Some(curve)
+    }
 }
 
 impl LiveClock {
@@ -414,6 +449,7 @@ pub struct Playback {
     overload: Overload,
     /// Stores a glided curve in the settings once the edits pause.
     glide_store: Option<Task<()>>,
+    history: History,
     /// The id of the output played on as `Outputs` last handed it over, so a binding edit can
     /// play what that output asks for and the same output again is not a move.
     output: Option<String>,
@@ -556,6 +592,7 @@ impl Playback {
             meter: Meter::default(),
             overload: Overload::default(),
             glide_store: None,
+            history: History::default(),
             output: None,
             repeat,
             radio,
@@ -2180,6 +2217,30 @@ impl Playback {
         if curve == *self.equalizer.curve() {
             return;
         }
+        self.history.record(self.equalizer.curve());
+        self.replace_equalizer_curve(curve, cx);
+    }
+
+    /// Whether there is an edit to undo, and whether there is an undo to redo.
+    pub fn equalizer_history(&self) -> (bool, bool) {
+        (!self.history.undo.is_empty(), !self.history.redo.is_empty())
+    }
+
+    /// Plays the curve from before the last edit, cross-fading to it.
+    pub fn undo_equalizer(&mut self, cx: &mut Context<Self>) {
+        if let Some(curve) = self.history.undo(self.equalizer.curve()) {
+            self.replace_equalizer_curve(curve, cx);
+        }
+    }
+
+    /// Plays the curve the last undo took away again.
+    pub fn redo_equalizer(&mut self, cx: &mut Context<Self>) {
+        if let Some(curve) = self.history.redo(self.equalizer.curve()) {
+            self.replace_equalizer_curve(curve, cx);
+        }
+    }
+
+    fn replace_equalizer_curve(&mut self, curve: Curve, cx: &mut Context<Self>) {
         self.equalizer.set_curve(curve, Edit::Replace);
         self.overload.settle(Instant::now());
         self.save_equalizer_curve(cx);
@@ -2190,6 +2251,10 @@ impl Playback {
     pub fn glide_equalizer_curve(&mut self, curve: Curve, cx: &mut Context<Self>) {
         if curve == *self.equalizer.curve() {
             return;
+        }
+        // A glide waiting to be stored belongs to the gesture that started it.
+        if self.glide_store.is_none() {
+            self.history.record(self.equalizer.curve());
         }
         self.equalizer.set_curve(curve, Edit::Glide);
         self.overload.settle(Instant::now());
@@ -2376,6 +2441,7 @@ impl Playback {
     fn follow_equalizer(&mut self, cx: &mut Context<Self>) {
         let settings = self.settings.read(cx);
         let (on, curve) = (settings.equalizer(), settings.equalizer_curve());
+        self.history = History::default();
         self.overload.settle(Instant::now());
         // Whichever change is heard goes last, so only one replace reaches the ear.
         match on {
