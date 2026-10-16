@@ -94,6 +94,15 @@ pub struct DeviceOption {
     pub direct: bool,
 }
 
+/// How a stream takes each sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sample {
+    Integer(u8),
+    Float(u8),
+    /// A format without a plain bit depth, such as a-law.
+    Other,
+}
+
 /// A device that would not open, and why.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
@@ -225,6 +234,9 @@ pub struct DeviceInfo {
 
     /// The buffer Sonora asks the device for, in frames.
     pub buffer: u32,
+
+    /// How the stream takes each sample. Integer samples wrap past full scale where floats clip.
+    pub sample: Sample,
 
     /// The rates `choose_rate` can open the device at, lowest first, `rate` among them. Only
     /// `rate` where the system sets the rate itself.
@@ -360,6 +372,7 @@ impl Device {
                 name,
                 rate: config.sample_rate(),
                 buffer,
+                sample: Sample::of(config.sample_format()),
                 rates,
                 buffers,
             },
@@ -421,6 +434,22 @@ impl Device {
     }
 }
 
+impl Sample {
+    fn of(format: cpal::SampleFormat) -> Self {
+        use cpal::SampleFormat::*;
+        match format {
+            I8 | U8 => Self::Integer(8),
+            I16 | U16 => Self::Integer(16),
+            I24 | U24 => Self::Integer(24),
+            I32 | U32 => Self::Integer(32),
+            I64 | U64 => Self::Integer(64),
+            F32 => Self::Float(32),
+            F64 => Self::Float(64),
+            _ => Self::Other,
+        }
+    }
+}
+
 impl Drop for Device {
     fn drop(&mut self) {
         announce_device_changes();
@@ -446,7 +475,8 @@ impl Output {
         device.listen(changed);
         let (sink, source) = rodio::Player::new();
         let format = Format::default();
-        device.add(chain.apply(source, format.clone()));
+        let integer = matches!(device.info.sample, Sample::Integer(_));
+        device.add(chain.apply(source, format.clone(), integer));
         Ok(Self {
             chain,
             sink: Arc::new(sink),

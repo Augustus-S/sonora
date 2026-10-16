@@ -10,6 +10,9 @@ use crate::equalizer::{Engine, Equalizer};
 use crate::spectrum::{Spectrum, Tap};
 
 pub const RAMP: Duration = Duration::from_millis(25);
+/// The loudest sample an integer device takes: the largest `f32` below one, since one itself
+/// overflows a 24-bit sample and wraps to the far end of the scale.
+const FULL_SCALE: f32 = 1. - f32::EPSILON / 2.;
 #[derive(Clone)]
 pub struct Volume(Arc<AtomicU32>);
 
@@ -111,14 +114,16 @@ pub struct Chain {
 
 impl Chain {
     /// `source` run through the equalizer and then the volume ramp, with the spectrum tap at the
-    /// end, ready for the mixer. Every chunk queued on `source` publishes into `format`.
-    pub(crate) fn apply<S: Source>(&self, source: S, format: Format) -> Chained<S> {
-        Chained::new(source, self, format)
+    /// end, ready for the mixer. Every chunk queued on `source` publishes into `format`, and
+    /// `clamped` holds it within full scale, for a device whose integer samples would wrap.
+    pub(crate) fn apply<S: Source>(&self, source: S, format: Format, clamped: bool) -> Chained<S> {
+        Chained::new(source, self, format, clamped)
     }
 }
 
 /// A player's queue run through its `Chain`: the equalizer filters it and the volume ramps it,
-/// then the tap hears it. One frame count places every sample for all of them.
+/// then the tap hears it, and an integer device gets it held within full scale. One frame count
+/// places every sample for all of them.
 pub(crate) struct Chained<I> {
     input: I,
     frames: Frames,
@@ -128,6 +133,9 @@ pub(crate) struct Chained<I> {
     /// Whether the tap hears the samples from before the gain. It is read once per frame so
     /// every channel of a frame agrees.
     unscaled: bool,
+    /// Whether the output is held within full scale, for a device whose integer samples would
+    /// wrap. The tap hears the sample before the clamp, so a meter can still see the over.
+    clamped: bool,
 
     current: f32,
     target: f32,
@@ -137,7 +145,7 @@ pub(crate) struct Chained<I> {
 }
 
 impl<I: Source> Chained<I> {
-    fn new(input: I, chain: &Chain, format: Format) -> Self {
+    fn new(input: I, chain: &Chain, format: Format, clamped: bool) -> Self {
         let gain = chain.volume.get();
         Self {
             input,
@@ -146,6 +154,7 @@ impl<I: Source> Chained<I> {
             volume: chain.volume.clone(),
             tap: chain.spectrum.attach(),
             unscaled: false,
+            clamped,
             current: gain,
             target: gain,
             step: 0.0,
@@ -206,7 +215,10 @@ impl<I: Source> Iterator for Chained<I> {
         };
         self.tap.push(heard);
 
-        Some(output)
+        Some(match self.clamped {
+            true => output.clamp(-1., FULL_SCALE),
+            false => output,
+        })
     }
 }
 

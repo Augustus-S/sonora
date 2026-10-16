@@ -579,6 +579,6 @@ mod tests {
             equalizer: writer.reader(),
             spectrum: Spectrum::new(),
         };
-        (player, chain.apply(queue, format.clone()), format)
+        (player, chain.apply(queue, format.clone(), false), format)
     }
 }
