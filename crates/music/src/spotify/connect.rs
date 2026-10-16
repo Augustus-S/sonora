@@ -751,6 +751,12 @@ impl Worker {
 
     fn request(&mut self, (request, reply): RequestReply) {
         self.last_command = (request.message_id, request.sent_by_device_id.clone());
+        if let Wire::Play(play) = request.command {
+            self.play(*play);
+            reply.send(Reply::Success).ok();
+            self.ack_at = Some(Instant::now() + ACK_DELAY);
+            return;
+        }
         let commands = self.translate(request.command);
         let verdict = match &commands {
             Some(_) => Reply::Success,
@@ -761,6 +767,35 @@ impl Worker {
         }
         reply.send(verdict).ok();
         self.ack_at = Some(Instant::now() + ACK_DELAY);
+    }
+
+    /// Starts what another device asked to play. A phone names the song by its uid alone and
+    /// sends no tracks along, so the playlist is read back first to find which song that is.
+    fn play(&self, mut play: PlayCommand) {
+        let uid = play
+            .options
+            .skip_to
+            .as_ref()
+            .filter(|skip| skip.track_uri.as_deref().is_none_or(str::is_empty))
+            .and_then(|skip| skip.track_uid.clone())
+            .filter(|uid| !uid.is_empty());
+        let uri = play.context.uri.clone();
+        let out = self.out.clone();
+        let session = self.session.clone();
+        let blind = play.context.pages.iter().all(|page| page.tracks.is_empty());
+        let (Some(_), Some(uri), true) = (uid, uri, blind) else {
+            out.send(Event::Command(Command::Start(started_by_play(&play))))
+                .ok();
+            return;
+        };
+        self.session.spawn(async move {
+            match session.spclient().get_context(&uri).await {
+                Ok(context) => play.context.pages = context.pages,
+                Err(error) => log::warn!("connect: cannot read {uri} back: {error}"),
+            }
+            out.send(Event::Command(Command::Start(started_by_play(&play))))
+                .ok();
+        });
     }
 
     /// What a command from Spotify asks of the app, or `None` for one this device does not
@@ -1108,6 +1143,12 @@ fn started_by_play(play: &PlayCommand) -> Start {
 
     // the same order librespot resolves a skip in: uri, then uid, then place
     let skip = play.options.skip_to.as_ref();
+    log::debug!(
+        "connect: play in {:?}, skip to {skip:?}, {} pages with {} tracks",
+        play.context.uri,
+        play.context.pages.len(),
+        listed.len(),
+    );
     let track = skip
         .and_then(|skip| skip.track_uri.as_deref())
         .and_then(track_id)
