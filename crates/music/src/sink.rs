@@ -522,7 +522,7 @@ pub fn packet(samples: Vec<f32>, channels: u16, rate: u32) -> Option<Packet> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::Volume;
+    use crate::audio::{Meter, Volume};
     use crate::equalizer::{Curve, EqualizerWriter};
     use crate::spectrum::Spectrum;
 
@@ -578,6 +578,7 @@ mod tests {
             volume: Volume::new(0.5),
             equalizer: writer.reader(),
             spectrum: Spectrum::new(),
+            meter: Meter::default(),
         };
         (player, chain.apply(queue, format.clone(), false), format)
     }

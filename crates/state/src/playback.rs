@@ -8,8 +8,8 @@ use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::equalizer::{Curve, Edit, EqualizerWriter, apo};
 use music::{
-    MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents, PlaybackFactory,
-    Player, Quality, Spectrum, Track, Transcode,
+    Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
+    PlaybackFactory, Player, Quality, Spectrum, Track, Transcode,
 };
 use ui::{Pin, PinKind};
 
@@ -403,6 +403,8 @@ pub struct Playback {
     /// Its reader is shared with every engine started here, so a change reaches the output
     /// without a restart.
     equalizer: EqualizerWriter,
+    /// Shared with every engine like the equalizer's reader, and read only while watched.
+    meter: Meter,
     repeat: Repeat,
     radio: bool,
     /// The track the current similar-tracks suggestions were drawn from.
@@ -537,6 +539,7 @@ impl Playback {
             transcode,
             quality,
             equalizer,
+            meter: Meter::default(),
             repeat,
             radio,
             seeded: None,
@@ -2390,6 +2393,7 @@ impl Playback {
             transcode: self.transcode,
             quality: self.quality,
             equalizer: self.equalizer.reader(),
+            meter: self.meter.clone(),
         };
         let (engine, events) = playback.start(config);
 
@@ -2414,6 +2418,7 @@ impl Playback {
             transcode: self.transcode,
             quality: self.quality,
             equalizer: self.equalizer.reader(),
+            meter: self.meter.clone(),
         };
         let (engine, events) = playback.start(config);
 

@@ -45,6 +45,7 @@ use time::format_description::well_known::Iso8601;
 use time::parsing::Parsed;
 use time::{Month, OffsetDateTime};
 
+pub use audio::Meter;
 pub use equalizer::Equalizer;
 pub use models::{
     Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, ArtistRef,
@@ -359,6 +360,8 @@ pub struct PlaybackConfig {
     pub equalizer: Equalizer,
     pub transcode: Transcode,
     pub quality: Quality,
+    /// Shared like `equalizer`: every output the engine opens reports its loudest sample here.
+    pub meter: Meter,
 }
 
 /// How good a stream to ask a streaming service for. Each provider lists the levels it serves in
