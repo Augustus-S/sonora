@@ -25,6 +25,8 @@ const WIDTH_STEP: f64 = 1. / 12.;
 /// How many significant figures a dragged frequency keeps, so the field reads 1230 rather than
 /// 1234.5678.
 const FREQUENCY_FIGURES: i32 = 3;
+/// The levels at the bottom and the top of the plot that the spectrum is drawn between, in dBFS.
+const SPECTRUM_SCALE: (f32, f32) = (-90., 0.);
 /// How tall the graph is in cover sizes, with the room of a wide window, and with less.
 const GRAPH_TALL: f32 = 2.8;
 const GRAPH_SHORT: f32 = 2.;
@@ -186,6 +188,17 @@ impl EqualizerView {
             .current()
             .map_or(IDLE_RATE, |device| device.rate);
         let preamp = playback.equalizer_preamp_db();
+        let spectrum: Vec<_> = self
+            .signal
+            .read(cx)
+            .levels()
+            .unwrap_or_default()
+            .iter()
+            .map(|level| ResponsePoint {
+                frequency_hz: level.frequency,
+                gain_db: level.dbfs,
+            })
+            .collect();
         let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
         let plotted = self.graph.plotted(&curve, rate);
         let nodes: Vec<_> = curve
@@ -219,8 +232,12 @@ impl EqualizerView {
             false => GRAPH_SHORT,
         };
 
+        let (bottom, top) = SPECTRUM_SCALE;
         ResponseGraph::new(&self.graph.state, axes)
             .h(theme.metrics.cover * height)
+            .when(!spectrum.is_empty(), |graph| {
+                graph.spectrum(spectrum, bottom..=top)
+            })
             .response(points)
             .nodes(nodes)
             .reference(
