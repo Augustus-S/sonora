@@ -1081,6 +1081,12 @@ fn started_by_play(play: &PlayCommand) -> Start {
 
     // the same order librespot resolves a skip in: uri, then uid, then place
     let skip = play.options.skip_to.as_ref();
+    log::debug!(
+        "connect: play in {:?}, skip to {skip:?}, {} pages with {} tracks",
+        play.context.uri,
+        play.context.pages.len(),
+        listed.len(),
+    );
     let track = skip
         .and_then(|skip| skip.track_uri.as_deref())
         .and_then(track_id)
