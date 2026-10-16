@@ -9,7 +9,7 @@ use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, apo};
 use music::{
     Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
-    PlaybackFactory, Player, Quality, Spectrum, Track, Transcode,
+    PlaybackFactory, Player, Quality, Route, Spectrum, Track, Transcode,
 };
 use ui::{Pin, PinKind};
 
@@ -621,6 +621,13 @@ impl Playback {
         let spectrum = self.active_engine()?.spectrum()?;
         spectrum.set_absolute(self.settings.read(cx).visualizer_absolute());
         Some(spectrum)
+    }
+
+    /// What the playing engine knows about the sound it plays, and the id of the track it
+    /// plays, for the signal path.
+    pub fn route(&self) -> Option<(Route, String)> {
+        let id = self.track.as_ref()?.id.clone()?;
+        Some((self.engine_for(&id)?.route()?, id))
     }
 
     /// Pauses the engine the new track does not belong to, so the two never sound at once.
@@ -2111,6 +2118,11 @@ impl Playback {
 
     pub fn volume(&self) -> f32 {
         self.level
+    }
+
+    /// The gain the volume applies, 1 at full volume.
+    pub fn volume_gain(&self) -> f32 {
+        gain(self.level)
     }
 
     pub fn set_volume(&mut self, level: f32, cx: &mut Context<Self>) {
