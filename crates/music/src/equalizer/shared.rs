@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
 
 use super::{Curve, Filter, Kind, MAX_CHANNELS, MAX_FILTERS, Width};
+use crate::spectrum::Analyzer;
 
 /// How a curve change should reach the ear. A glide is a permission rather than an order, since
 /// the reader replaces any move too big to glide, while a replace is never glided.
@@ -52,6 +53,8 @@ struct Shared {
     slots: [Slot; MAX_FILTERS],
     /// Set by an output that met more channels than it has state for and passed them through.
     unprocessed: AtomicBool,
+    /// What every output's equalizer hears ahead of its preamp and filters.
+    heard: Analyzer,
 }
 
 /// One filter's fields as atomics. `word` packs the kind, the width unit and whether it is on.
@@ -74,6 +77,7 @@ impl EqualizerWriter {
             preamp: AtomicU64::new(0f64.to_bits()),
             slots: std::array::from_fn(|_| Slot::default()),
             unprocessed: AtomicBool::new(false),
+            heard: Analyzer::default(),
         });
         let mut writer = Self {
             shared,
@@ -119,6 +123,11 @@ impl EqualizerWriter {
         self.curve = curve;
         self.place();
         self.publish(edit);
+    }
+
+    /// The spectrum of the music on its way into the equalizer, on every output.
+    pub fn heard(&self) -> &Analyzer {
+        &self.shared.heard
     }
 
     /// Gives every filter of the curve a slot. An unchanged filter stays where it is, so a
@@ -183,6 +192,10 @@ impl Equalizer {
         };
         fence(Ordering::Acquire);
         (shared.seq.load(Ordering::Relaxed) == start).then_some((start, snapshot))
+    }
+
+    pub(crate) fn heard(&self) -> &Analyzer {
+        &self.0.heard
     }
 
     pub(crate) fn flag_unprocessed(&self) {

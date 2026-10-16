@@ -7,7 +7,7 @@ use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 
 use crate::equalizer::{Engine, Equalizer};
-use crate::spectrum::{Spectrum, Tap};
+use crate::spectrum::{Probe, Spectrum, Tap};
 
 pub const RAMP: Duration = Duration::from_millis(25);
 /// The loudest sample an integer device takes: the largest `f32` below one, since one itself
@@ -146,12 +146,13 @@ impl Chain {
     }
 }
 
-/// A player's queue run through its `Chain`: the equalizer filters it and the volume ramps it,
-/// then the tap and the meter hear it, and an integer device gets it held within full scale.
-/// One frame count places every sample for all of them.
+/// A player's queue run through its `Chain`: the probe hears it, the equalizer filters it and
+/// the volume ramps it, then the tap and the meter hear it, and an integer device gets it held
+/// within full scale. One frame count places every sample for all of them.
 pub(crate) struct Chained<I> {
     input: I,
     frames: Frames,
+    probe: Probe,
     equalizer: Engine,
     volume: Volume,
     tap: Tap,
@@ -176,6 +177,7 @@ impl<I: Source> Chained<I> {
         Self {
             input,
             frames: Frames::new(format),
+            probe: chain.equalizer.heard().probe(),
             equalizer: Engine::new(chain.equalizer.clone()),
             volume: chain.volume.clone(),
             tap: chain.spectrum.attach(),
@@ -195,6 +197,7 @@ impl<I: Source> Chained<I> {
         let rate = self.frames.rate();
         let channels = self.frames.channels();
         self.equalizer.set_format(rate, channels);
+        self.probe.format(rate, channels);
         self.tap.format(rate, channels);
         self.ramp_frames = (RAMP.as_secs_f64() * rate as f64).round().max(1.0) as u32;
         self.frames_left = self.frames_left.min(self.ramp_frames);
@@ -213,6 +216,7 @@ impl<I: Source> Iterator for Chained<I> {
         if place.changed {
             self.resync();
         }
+        self.probe.hear(place.channel, sample);
         if place.channel == 0 {
             self.equalizer.begin();
             self.unscaled = self.tap.absolute();
