@@ -13,6 +13,7 @@ mod lyrics;
 mod mosaic;
 mod network;
 mod outputs;
+mod overload;
 mod pins;
 mod playback;
 mod potoken;
