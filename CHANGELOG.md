@@ -46,6 +46,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as ones embedded in the files, show for its tracks.
 - On Linux, Direct to hardware in the output picker plays straight to a sound card, past PipeWire
   or PulseAudio, for bit-perfect output.
+- The equalizer is now fully parametric, on its own screen: shape up to 20 filters of eight
+  kinds, keep several named profiles, and import an AutoEQ or Equalizer APO profile for your
+  headphones from a file or the clipboard. You can export a profile the same way.
 
 ### Changed
 
