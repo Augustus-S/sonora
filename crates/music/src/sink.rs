@@ -523,7 +523,7 @@ pub fn packet(samples: Vec<f32>, channels: u16, rate: u32) -> Option<Packet> {
 mod tests {
     use super::*;
     use crate::audio::Volume;
-    use crate::equalizer::{BANDS, Equalizer};
+    use crate::equalizer::{Curve, EqualizerWriter};
     use crate::spectrum::Spectrum;
 
     /// A stereo track comes out the same whichever way the mono one before it stopped: on its
@@ -573,9 +573,10 @@ mod tests {
     fn open() -> (rodio::Player, impl Iterator<Item = f32>, Format) {
         let (player, queue) = rodio::Player::new();
         let format = Format::default();
+        let writer = EqualizerWriter::new(true, Curve::bands(&[12.; 10]));
         let chain = Chain {
             volume: Volume::new(0.5),
-            equalizer: Equalizer::new(true, &[12.; BANDS]),
+            equalizer: writer.reader(),
             spectrum: Spectrum::new(),
         };
         (player, chain.apply(queue, format.clone()), format)
