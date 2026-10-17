@@ -77,7 +77,7 @@ impl Render for OutputPicker {
                         && !self.groups.contains_key(card)
                     {
                         let group = DeviceGroup {
-                            state: SubmenuState::default(),
+                            state: SubmenuState::instant(),
                             scrollbar: cx.new(|_| Scrollbar::inset().watching(me)),
                         };
                         self.groups.insert(card.clone(), group);

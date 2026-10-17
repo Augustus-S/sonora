@@ -95,9 +95,22 @@ pub struct SubmenuState {
     /// Keeps the submenu open after the pointer leaves, set while its search holds a query so
     /// the list does not vanish mid-typing.
     held: Rc<Cell<bool>>,
+    /// Closes the submenu as soon as the pointer is off both its item and its panel, rather than
+    /// after `SUBMENU_CLOSE_DELAY`.
+    instant: bool,
 }
 
 impl SubmenuState {
+    /// A submenu that closes the moment the pointer leaves it, for a menu of sibling submenus
+    /// where the delay would show the last one over the next. The pointer cannot cut across
+    /// other items on its way to the panel.
+    pub fn instant() -> Self {
+        Self {
+            instant: true,
+            ..Self::default()
+        }
+    }
+
     fn is_open(&self) -> bool {
         self.open.get()
     }
@@ -125,8 +138,14 @@ impl SubmenuState {
         }
 
         let state = self.clone();
+        let delay = match self.instant {
+            true => Duration::ZERO,
+            false => SUBMENU_CLOSE_DELAY,
+        };
         cx.spawn(async move |cx| {
-            cx.background_executor().timer(SUBMENU_CLOSE_DELAY).await;
+            // even with no delay this waits a turn, so a pointer moving from the item onto the
+            // gap or the panel is seen there before the submenu closes
+            cx.background_executor().timer(delay).await;
             let inside = cx.update(|cx| {
                 cx.update_window(window, |_, window, _| state.covers(window.mouse_position()))
                     .unwrap_or(false)
