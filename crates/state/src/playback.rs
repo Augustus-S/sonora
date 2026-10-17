@@ -104,6 +104,10 @@ const PRELOAD_BEFORE_END: Duration = Duration::from_secs(10);
 const SKIP_DEBOUNCE: Duration = Duration::from_millis(250);
 const RESTART_WINDOW: Duration = Duration::from_secs(3);
 const KEY_COOLDOWN: Duration = Duration::from_secs(1);
+/// How long after a play or pause press an engine event saying the opposite is taken for the
+/// echo of an earlier press rather than news. Past it the engine is believed again, so a pause
+/// the engine makes on its own is not lost for good.
+const ECHO_WINDOW: Duration = Duration::from_secs(2);
 /// How many loads in a row may fail before the queue stops moving on by itself and waits for
 /// play.
 const FAILURE_LIMIT: u8 = 3;
@@ -418,6 +422,10 @@ pub struct Playback {
     /// Where the last seek asked to go, until the engine reports where it landed.
     seek_target: Option<Duration>,
     intent: Intent,
+    /// When the user last pressed play or pause, until the engine reports the state they asked
+    /// for. Engines answer each press in order, so a quick pause and play gets a late `Paused`
+    /// after the play, which must not overwrite `intent`.
+    pressed: Option<Instant>,
     /// Whether the engine holds the restored track paused at `resume_at`, so play is instant.
     resume_ready: bool,
     /// Whether playback stopped on a stale session and continues once it reconnects.
@@ -517,6 +525,7 @@ impl Playback {
             stale_positions: 0,
             seek_target: None,
             intent: Intent::Pause,
+            pressed: None,
             resume_ready: false,
             awaiting_reconnect: false,
             stored: Duration::ZERO,
@@ -1666,6 +1675,7 @@ impl Playback {
     /// `STALE_PAUSE`, is loaded afresh at its position.
     pub fn resume(&mut self, cx: &mut Context<Self>) {
         self.intent = Intent::Play;
+        self.pressed = Some(Instant::now());
         if let Some(at) = self.resume_at {
             if !self.resume_ready {
                 return self.reload_and_seek(at, cx);
@@ -1774,6 +1784,7 @@ impl Playback {
 
     pub fn pause(&mut self, cx: &mut Context<Self>) {
         self.intent = Intent::Pause;
+        self.pressed = Some(Instant::now());
         if let Some(engine) = self.active_engine() {
             engine.pause();
             cx.notify();
@@ -1847,6 +1858,14 @@ impl Playback {
 
     /// Whether the user wants the current track playing, whatever the engine has managed so
     /// far. A transport control reads this; anything that follows the sound reads `state`.
+    /// Whether the engine reporting `reported` answers a press the user has since reversed.
+    fn overtaken(&self, reported: Intent) -> bool {
+        reported != self.intent
+            && self
+                .pressed
+                .is_some_and(|pressed| pressed.elapsed() < ECHO_WINDOW)
+    }
+
     pub fn wants_playing(&self) -> bool {
         self.intent == Intent::Play && self.track.is_some()
     }
@@ -2305,6 +2324,12 @@ impl Playback {
                 self.state = PlaybackState::Paused;
                 log::warn!("playback: cannot hold the restored track, waiting for play");
             }
+            BackendEvent::Playing { .. } if self.overtaken(Intent::Play) => {
+                log::debug!("playback: ignoring a play the user has since paused");
+            }
+            BackendEvent::Paused { .. } if self.overtaken(Intent::Pause) => {
+                log::debug!("playback: ignoring a pause the user has since undone");
+            }
             BackendEvent::Loading { at, .. } => {
                 self.state = PlaybackState::Loading;
                 self.position = at;
@@ -2314,6 +2339,7 @@ impl Playback {
                 let at = self.landed(at);
                 let started = self.state != PlaybackState::Playing;
                 self.intent = Intent::Play;
+                self.pressed = None;
                 self.state = PlaybackState::Playing;
                 self.paused_at = None;
                 self.failures = 0;
@@ -2327,6 +2353,7 @@ impl Playback {
             }
             BackendEvent::Paused { at, .. } => {
                 self.intent = Intent::Pause;
+                self.pressed = None;
                 self.state = PlaybackState::Paused;
                 self.paused_at = Some(SystemTime::now());
                 self.position = at;
