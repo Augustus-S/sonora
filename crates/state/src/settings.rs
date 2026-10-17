@@ -301,6 +301,16 @@ struct Values {
     discord_provider_button: bool,
     artwork_for_local_files: bool,
     lyrics_for_local_files: bool,
+    /// The output device to play on, as a cpal device id, or `None` to follow the system's
+    /// default. Kept while the device is gone, so playback returns to it, and cleared once it is
+    /// there but will not open.
+    output_device: Option<String>,
+    /// The sample rate to open the output device at, in hertz, or `None` for the rate it runs
+    /// at. A device that does not offer it opens at its own.
+    output_rate: Option<u32>,
+    /// The buffer to ask the output device for, in frames, or `None` for Sonora's own. A device
+    /// that does not allow it gets the nearest it does.
+    output_buffer: Option<u32>,
     /// Set once Local has been added to a list saved before it existed, so a user who turns it
     /// off afterwards is not given it back.
     local_lyrics_offered: bool,
@@ -460,6 +470,9 @@ impl Default for Values {
             discord_provider_button: true,
             artwork_for_local_files: true,
             lyrics_for_local_files: true,
+            output_device: None,
+            output_rate: None,
+            output_buffer: None,
             local_lyrics_offered: false,
             lyrics_provider_priority: lyrics_priority(&[]),
             // Kugou and NetEase, the last two, start switched off.
@@ -828,6 +841,18 @@ impl AppSettings {
 
     pub fn lyrics_for_local_files(&self) -> bool {
         self.values.lyrics_for_local_files
+    }
+
+    pub fn output_device(&self) -> Option<&str> {
+        self.values.output_device.as_deref()
+    }
+
+    pub fn output_rate(&self) -> Option<u32> {
+        self.values.output_rate
+    }
+
+    pub fn output_buffer(&self) -> Option<u32> {
+        self.values.output_buffer
     }
 
     pub fn lyrics_providers(&self) -> &[String] {
@@ -1262,6 +1287,21 @@ impl AppSettings {
 
     pub fn set_lyrics_for_local_files(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.values.lyrics_for_local_files = enabled;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_output_device(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        self.values.output_device = id;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_output_rate(&mut self, rate: Option<u32>, cx: &mut Context<Self>) {
+        self.values.output_rate = rate;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_output_buffer(&mut self, frames: Option<u32>, cx: &mut Context<Self>) {
+        self.values.output_buffer = frames;
         self.schedule_save(cx);
     }
 

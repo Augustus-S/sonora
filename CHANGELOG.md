@@ -26,6 +26,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Sonora tells you when a library scan you started has finished.
 - On macOS, you can move back and forward through history by swiping left or right with two
   or three fingers, depending on your gesture preferences.
+- Choose your audio output device in Settings → Playback → Devices. Sonora remembers it, plays on
+  your system's default while it is disconnected, forgets it if it stops working, and shows the
+  sample rate and buffer size it plays at, with a shortcut to your system's audio settings.
+- On Linux, pick the sample rate Sonora plays at in Settings → Playback → Devices, from 32 kHz up
+  to 192 kHz, with the − and + buttons beside it. Only rates your device offers are stepped through.
+- Pick the buffer size Sonora hands your audio device, from 128 to 4096 frames, the same way. A
+  bigger buffer stops crackles on a busy system, and a smaller one makes pause react faster.
 
 ### Changed
 
@@ -35,6 +42,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Toasts have a new look. New ones pile up in front of older ones, and pointing at the pile
   spreads it out and keeps every toast on screen until you move away. Drag a toast to the right
   to dismiss it.
+- Sonora now plays at your device's own sample rate and converts each track to it with the
+  higher-quality ardftsrc resampler, rather than switching the device's rate between tracks.
 
 ### Fixed
 
@@ -54,6 +63,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   console window flashes. Open theme folder no longer flashes one either.
 - Ctrl+F (Cmd+F on macOS) opens the page's filter again after you close it with Escape or the
   close button, and the other shortcuts keep working.
+- Pressing play and pause quickly several times in a row no longer leaves the music playing
+  while Sonora shows it paused.
 
 ## [0.43.0] - 2026-10-13
 
