@@ -608,10 +608,6 @@ settings-sample-rate-value = { $khz } kHz
 settings-sample-rate-change = Change
 settings-buffer = Buffer size
 settings-buffer-detail = How much audio Sonora hands the device at a time
-settings-buffer-value = { $frames ->
-    [one] { $frames } frame
-   *[other] { $frames } frames
-} · { $ms } ms
 settings-output-idle = Not playing
 settings-output-device-loading = Loading devices…
 settings-output-failed = Device not supported

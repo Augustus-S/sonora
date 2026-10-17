@@ -12,6 +12,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Choose your audio output device in Settings → Playback → Devices. Sonora remembers it, plays on
   your system's default while it is disconnected, forgets it if it stops working, and shows the
   sample rate and buffer size it plays at, with a shortcut to your system's audio settings.
+- On Linux, pick the sample rate Sonora plays at in Settings → Playback → Devices, from 32 kHz up
+  to 192 kHz, with the − and + buttons beside it. Only rates your device offers are stepped through.
+- Pick the buffer size Sonora hands your audio device, from 128 to 4096 frames, the same way. A
+  bigger buffer stops crackles on a busy system, and a smaller one makes pause react faster.
 
 ### Changed
 

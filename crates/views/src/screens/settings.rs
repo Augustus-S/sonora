@@ -2374,26 +2374,38 @@ impl SettingsView {
         )
     }
 
-    /// The rate the device runs at, with a way into the system's own settings to change it
-    /// where the system has one.
+    /// The rate the device runs at. Where Sonora can open the device at other rates it steps
+    /// through them, otherwise it offers a way into the system's own settings where there is one.
+    /// The row keeps its shape while the stream reopens, showing the rate it reopens at.
     fn sample_rate_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let outputs = self.outputs.read(cx);
+        let device = outputs.current();
+        let current = outputs.rate(cx);
+        let rates = device
+            .map(|device| device.rates.clone())
+            .unwrap_or_default();
         // while another device is being tried, the open stream is not the one that will play
-        let active = outputs.active().filter(|_| !outputs.switching());
-        let settings_uri =
-            music::output::system_audio_settings_uri(active.map(|active| active.id.as_str()));
-        let rate = active
-            .map(|active| {
-                t!(
-                    "settings-sample-rate-value",
-                    khz = f64::from(active.rate) / 1_000.
-                )
-            })
-            .unwrap_or_else(|| match outputs.switching() {
-                true => SharedString::default(),
-                false => t!("settings-output-idle"),
-            });
+        let locked = outputs.switching();
+        let settings_uri = match rates.len() > 1 {
+            true => None,
+            false => {
+                music::output::system_audio_settings_uri(device.map(|device| device.id.as_str()))
+            }
+        };
+        let rate = current
+            .map(|rate| t!("settings-sample-rate-value", khz = f64::from(rate) / 1_000.))
+            .unwrap_or_else(|| t!("settings-output-idle"));
+        let stepper = current.filter(|_| rates.len() > 1).map(|current| {
+            output_stepper(
+                "sample-rate",
+                current,
+                &rates,
+                locked,
+                Outputs::set_rate,
+                cx,
+            )
+        });
 
         self.row(
             t!("settings-sample-rate"),
@@ -2404,7 +2416,10 @@ impl SettingsView {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(rate)
+                .map(|row| match stepper {
+                    Some((lower, higher)) => row.child(lower).child(rate).child(higher),
+                    None => row.child(rate),
+                })
                 .when_some(settings_uri, |row, uri| {
                     row.child(
                         Button::new("sample-rate-change")
@@ -2419,32 +2434,39 @@ impl SettingsView {
         )
     }
 
-    /// The buffer Sonora asks the device for, in frames and in time at the device's rate.
+    /// The buffer Sonora asks the device for, in frames, with the buffers the device allows to
+    /// step through. The row keeps its shape while the stream reopens, showing the buffer it
+    /// reopens with.
     fn buffer_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let outputs = self.outputs.read(cx);
-        let buffer = outputs
-            .active()
-            .filter(|_| !outputs.switching())
-            .map(|active| {
-                let ms = f64::from(active.buffer) * 1_000. / f64::from(active.rate.max(1));
-                t!(
-                    "settings-buffer-value",
-                    frames = active.buffer,
-                    ms = ms.round() as i64
-                )
-            })
-            .unwrap_or_else(|| match outputs.switching() {
-                true => SharedString::default(),
-                false => t!("settings-output-idle"),
-            });
+        let current = outputs.buffer(cx);
+        let buffers = outputs
+            .current()
+            .map(|device| device.buffers.clone())
+            .unwrap_or_default();
+        let locked = outputs.switching();
+        let buffer = current
+            .map(|frames| SharedString::from(frames.to_string()))
+            .unwrap_or_else(|| t!("settings-output-idle"));
+        let stepper = current.filter(|_| buffers.len() > 1).map(|current| {
+            output_stepper("buffer", current, &buffers, locked, Outputs::set_buffer, cx)
+        });
 
         self.row(
             t!("settings-buffer"),
             t!("settings-buffer-detail"),
             theme.muted_foreground,
             theme.text(Text::Small),
-            div().child(buffer).into_any_element(),
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .map(|row| match stepper {
+                    Some((lower, higher)) => row.child(lower).child(buffer).child(higher),
+                    None => row.child(buffer),
+                })
+                .into_any_element(),
         )
     }
 
@@ -4529,6 +4551,41 @@ fn widevine_copy(state: &CdmState) -> (&'static str, &'static str) {
             ("settings-widevine-none", "settings-widevine-missing")
         }
     }
+}
+
+/// The minus and plus buttons beside an output setting's value, which `apply` the next lower or
+/// higher of `options` than `current`. A button with nothing further that way is disabled, and
+/// both are while `locked`.
+fn output_stepper(
+    id: &'static str,
+    current: u32,
+    options: &[u32],
+    locked: bool,
+    apply: fn(&mut Outputs, u32, &mut Context<Outputs>),
+    cx: &mut Context<SettingsView>,
+) -> (Button, Button) {
+    let lower = options
+        .iter()
+        .rev()
+        .find(|&&option| option < current)
+        .copied();
+    let higher = options.iter().find(|&&option| option > current).copied();
+    let step = |suffix: &'static str, label: &'static str, next: Option<u32>| {
+        Button::new(SharedString::from(format!("{id}-{suffix}")))
+            .label(label)
+            .small()
+            .outline()
+            .disabled(locked || next.is_none())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let Some(next) = next else { return };
+                this.outputs
+                    .update(cx, |outputs, cx| apply(outputs, next, cx));
+            }))
+    };
+    (
+        step("lower", "\u{2212}", lower),
+        step("higher", "+", higher),
+    )
 }
 
 /// How tall the Widevine row's top line stands: the title, or the small button beside it
