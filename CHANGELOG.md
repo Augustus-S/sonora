@@ -24,6 +24,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Copy link tells you it worked. Where there is no link to copy, the entry is greyed out and
   says why.
 - Sonora tells you when a library scan you started has finished.
+- On macOS, you can move back and forward through history by swiping left or right with two
+  or three fingers, depending on your gesture preferences.
 
 ### Changed
 
