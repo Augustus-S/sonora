@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui::{Context, Entity, Task};
+use gpui::{App, Context, Entity, Task};
 use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened};
 
 use crate::{AppSettings, Io, Outcome, Playback, Toasts, join};
@@ -27,6 +27,9 @@ pub struct Outputs {
     /// Whether `devices` has been read at least once, so an empty list means none.
     listed: bool,
     active: Option<DeviceInfo>,
+    /// The device a stream was last open on, kept while the stream reopens so what it offers
+    /// stays on screen.
+    known: Option<DeviceInfo>,
     failure: Option<Failure>,
     /// Whether nothing is heard because no stream would open.
     failing: bool,
@@ -45,8 +48,8 @@ pub struct Outputs {
 }
 
 impl Outputs {
-    /// Hands the device saved in settings to the engines, so call it before the first one
-    /// starts.
+    /// Hands the device, rate and buffer saved in settings to the engines, so call it before the
+    /// first one starts.
     pub fn new(
         settings: Entity<AppSettings>,
         playback: Entity<Playback>,
@@ -54,12 +57,17 @@ impl Outputs {
     ) -> Self {
         let selected = settings.read(cx).output_device().map(str::to_owned);
         output::choose_device(selected.clone());
+        output::choose_rate(settings.read(cx).output_rate());
+        output::choose_buffer(settings.read(cx).output_buffer());
 
         let mut changes = output::watch_device_changes();
         let watch = cx.spawn(async move |this, cx| {
             while changes.changed().await.is_ok() {
                 let updated = this.update(cx, |this, cx| {
                     this.active = output::active_device_info();
+                    if this.active.is_some() {
+                        this.known.clone_from(&this.active);
+                    }
                     this.failure = output::latest_device_failure();
                     this.failing = output::failing();
                     this.forget_broken(cx);
@@ -78,6 +86,7 @@ impl Outputs {
             devices: Vec::new(),
             listed: false,
             active: output::active_device_info(),
+            known: output::active_device_info(),
             failure: output::latest_device_failure(),
             failing: output::failing(),
             selected,
@@ -106,6 +115,11 @@ impl Outputs {
         self.active.as_ref()
     }
 
+    /// The device playing, or while its stream reopens, the one that last played.
+    pub fn current(&self) -> Option<&DeviceInfo> {
+        self.active.as_ref().or(self.known.as_ref())
+    }
+
     /// Why nothing plays, when the device to play on would not open and nothing took its place.
     pub fn failure(&self) -> Option<&Failure> {
         self.failure.as_ref().filter(|_| self.active.is_none())
@@ -124,6 +138,49 @@ impl Outputs {
             Some(trying) => trying.as_deref(),
             None => self.selected.as_deref(),
         }
+    }
+
+    /// The rate the device plays at, or is reopening at once a new one is chosen: the one saved in
+    /// settings when the device offers it, otherwise the one it runs at.
+    pub fn rate(&self, cx: &App) -> Option<u32> {
+        let active = self.current()?;
+        let wanted = self
+            .settings
+            .read(cx)
+            .output_rate()
+            .filter(|rate| active.rates.contains(rate));
+        Some(wanted.unwrap_or(active.rate))
+    }
+
+    /// Opens the device at `rate` from now on, and saves it. The engines reopen at it, paused or
+    /// not.
+    pub fn set_rate(&mut self, rate: u32, cx: &mut Context<Self>) {
+        self.settings
+            .update(cx, |settings, cx| settings.set_output_rate(Some(rate), cx));
+        output::choose_rate(Some(rate));
+        cx.notify();
+    }
+
+    /// The buffer the device plays with, in frames, or is reopening with once a new one is
+    /// chosen: the one saved in settings when the device allows it, otherwise the one it has.
+    pub fn buffer(&self, cx: &App) -> Option<u32> {
+        let active = self.current()?;
+        let wanted = self
+            .settings
+            .read(cx)
+            .output_buffer()
+            .filter(|frames| active.buffers.contains(frames));
+        Some(wanted.unwrap_or(active.buffer))
+    }
+
+    /// Asks the device for a buffer of `frames` from now on, and saves it. The engines reopen
+    /// with it, paused or not.
+    pub fn set_buffer(&mut self, frames: u32, cx: &mut Context<Self>) {
+        self.settings.update(cx, |settings, cx| {
+            settings.set_output_buffer(Some(frames), cx)
+        });
+        output::choose_buffer(Some(frames));
+        cx.notify();
     }
 
     /// Whether a device was just picked and has not answered yet, so no other can be picked.

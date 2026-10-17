@@ -30,8 +30,13 @@ use tokio::sync::watch;
 
 use crate::audio::Chain;
 
-/// The buffer asked of the device, in frames, as far as the device allows it.
+/// The buffer asked of the device, in frames, as far as the device allows it, when none is
+/// chosen in settings.
 const BUFFER_FRAMES: u32 = 1024;
+
+/// The buffers, in frames, that can be chosen in settings. Below the sound server's quantum the
+/// device underruns, and above it every pause and seek is heard late.
+const BUFFERS: [u32; 6] = [128, 256, 512, 1024, 2048, 4096];
 
 /// How often an open stream checks that its device is still the one `resolve_device` names and
 /// still runs at the stream's rate.
@@ -94,11 +99,16 @@ pub enum Server {
     PulseAudio,
 }
 
-/// Which device was chosen in settings, which devices would not open, and whether anything plays
-/// at all. One lock covers them, so a new choice and the failures it clears change together.
+/// Which device and rate were chosen in settings, which devices would not open, and whether
+/// anything plays at all. One lock covers them, so a new choice and the failures it clears change
+/// together.
 struct DeviceSelection {
     /// The chosen device's cpal id, or `None` to follow the system's default.
     chosen: Option<String>,
+    /// The rate to open a device at when it offers it, or `None` for the rate it runs at.
+    rate: Option<u32>,
+    /// The buffer to ask a device for, in frames, or `None` for `BUFFER_FRAMES`.
+    buffer: Option<u32>,
     /// The devices that would not open, most recent last.
     failed: Vec<Failure>,
     /// Whether the last attempt to get a stream to play on failed, so nothing is heard: every
@@ -110,6 +120,8 @@ impl DeviceSelection {
     const fn new() -> Self {
         Self {
             chosen: None,
+            rate: None,
+            buffer: None,
             failed: Vec::new(),
             failing: false,
         }
@@ -201,6 +213,14 @@ pub struct DeviceInfo {
 
     /// The buffer Sonora asks the device for, in frames.
     pub buffer: u32,
+
+    /// The rates `choose_rate` can open the device at, lowest first, `rate` among them. Only
+    /// `rate` where the system sets the rate itself.
+    pub rates: Vec<u32>,
+
+    /// The buffers `choose_buffer` can open the device with, in frames, lowest first, `buffer`
+    /// among them.
+    pub buffers: Vec<u32>,
 }
 
 /// One open stream on an output device, with the mixer the engines' chains play into.
@@ -303,22 +323,30 @@ impl Device {
         Ok(open)
     }
 
-    /// Opens the device at the rate it runs at, so nothing between here and the hardware
-    /// converts what Sonora plays.
+    /// Opens the device at the rate chosen in settings when it offers it, otherwise at the rate
+    /// it runs at, so nothing between here and the hardware converts what Sonora plays.
     fn open(device: cpal::Device, id: String) -> Result<Self> {
         let default = device
             .default_output_config()
             .map_err(|error| anyhow::anyhow!("cannot read the output config: {error}"))?;
-        let config = output_rate::config(&device, default);
+        let (wanted, frames) = {
+            let selection = DeviceSelection::lock();
+            (selection.rate, selection.buffer.unwrap_or(BUFFER_FRAMES))
+        };
+        let config = output_rate::config(&device, default, wanted);
+        let rates = output_rate::rates(&device, &config);
         let (name, _) = cpal_describe(&device);
         let failed = Arc::new(AtomicBool::new(false));
-        let (stream, buffer) = open_stream(device, &id, &config, &failed)?;
+        let (stream, buffer) = open_stream(device, &id, &config, frames, &failed)?;
+        let buffers = buffers(&config, buffer);
         Ok(Self {
             info: DeviceInfo {
                 id,
                 name,
                 rate: config.sample_rate(),
                 buffer,
+                rates,
+                buffers,
             },
             failed,
             stale: AtomicBool::new(false),
@@ -488,6 +516,43 @@ pub fn open(id: Option<&str>) -> Result<Opened> {
 pub fn choose_device(id: Option<String>) {
     DeviceSelection::lock().choose(id);
     announce_device_changes();
+}
+
+/// Opens devices at `rate` from now on where they offer it, or at the rate they run at when
+/// `None`. A stream open at another rate is retired, so every output on it reopens at the new one.
+pub fn choose_rate(rate: Option<u32>) {
+    DeviceSelection::lock().rate = rate;
+    let open = ACTIVE_DEVICE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .upgrade();
+    if let Some(rate) = rate
+        && let Some(open) = open
+        && rate != open.info.rate
+        && open.info.rates.contains(&rate)
+    {
+        log::info!("output: reopening {} at {rate} Hz", open.info.id);
+        open.retire();
+    }
+}
+
+/// Asks devices for a buffer of `frames` from now on, as far as they allow it, or for
+/// `BUFFER_FRAMES` when `None`. A stream open with another buffer is retired, so every output on
+/// it reopens with the new one.
+pub fn choose_buffer(frames: Option<u32>) {
+    DeviceSelection::lock().buffer = frames;
+    let open = ACTIVE_DEVICE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .upgrade();
+    if let Some(frames) = frames
+        && let Some(open) = open
+        && frames != open.info.buffer
+        && open.info.buffers.contains(&frames)
+    {
+        log::info!("output: reopening {} with {frames} frames", open.info.id);
+        open.retire();
+    }
 }
 
 /// The device every engine plays on, if a stream is open on one.
@@ -674,20 +739,40 @@ fn cpal_describe(device: &cpal::Device) -> (String, Option<String>) {
     (name.to_owned(), detail)
 }
 
-/// Opens the stream on `device` in `config`, flagging `failed` when the device reports an error.
-/// Returns the stream and the buffer it asked for, in frames.
+/// The buffers in `BUFFERS` that `config` allows, with `buffer`, the one the stream asked for,
+/// lowest first.
+fn buffers(config: &cpal::SupportedStreamConfig, buffer: u32) -> Vec<u32> {
+    let mut buffers: Vec<u32> = BUFFERS
+        .into_iter()
+        .filter(|frames| match *config.buffer_size() {
+            cpal::SupportedBufferSize::Range { min, max } => (min..=max).contains(frames),
+            cpal::SupportedBufferSize::Unknown => true,
+        })
+        .collect();
+    if !buffers.contains(&buffer) {
+        buffers.push(buffer);
+        buffers.sort_unstable();
+    }
+    buffers
+}
+
+/// Opens the stream on `device` in `config` with a buffer of `frames`, as far as the device
+/// allows it, flagging `failed` when the device reports an error. Returns the stream and the
+/// buffer it asked for, in frames.
 fn open_stream(
     device: cpal::Device,
     id: &str,
     config: &cpal::SupportedStreamConfig,
+    frames: u32,
     failed: &Arc<AtomicBool>,
 ) -> Result<(MixerDeviceSink, u32)> {
     let frames = match *config.buffer_size() {
-        cpal::SupportedBufferSize::Range { min, max } => BUFFER_FRAMES.clamp(min, max.max(min)),
-        cpal::SupportedBufferSize::Unknown => BUFFER_FRAMES,
+        cpal::SupportedBufferSize::Range { min, max } => frames.clamp(min, max.max(min)),
+        cpal::SupportedBufferSize::Unknown => frames,
     };
+    let latency = f64::from(frames) * 1_000. / f64::from(config.sample_rate().max(1));
     log::info!(
-        "output: using {} at {} Hz, {} channels, {}, {frames} frames",
+        "output: using {} at {} Hz, {} channels, {}, {frames} frames ({latency:.1} ms)",
         id,
         config.sample_rate(),
         config.channels(),
