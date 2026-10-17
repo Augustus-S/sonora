@@ -50,6 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The default package is still the release binary.
 - On Windows, Open log in Settings opens the log in Notepad while Sonora runs, and no
   console window flashes. Open theme folder no longer flashes one either.
+- Ctrl+F (Cmd+F on macOS) opens the page's filter again after you close it with Escape or the
+  close button, and the other shortcuts keep working.
 
 ## [0.43.0] - 2026-10-13
 
