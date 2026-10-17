@@ -9,6 +9,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- You can rank your lyrics providers in Settings, by dragging them or with the arrows. When two
+  of them have equally good lyrics for a song, Sonora shows the one you ranked higher.
+- You can undo clearing the queue or removing songs from it. Press Undo on the toast that
+  appears.
+- Adding a whole album, playlist or artist to the queue shows that it is on its way, and
+  queueing several selected songs tells you how many went in.
+- Sonora tells you when the sleep timer ends, when a radio cannot start, and when a file you
+  opened with it cannot be played.
+- You can undo taking songs, albums or artists out of your favorites or library, removing
+  songs from a playlist, removing a playlist from your library, and unpinning. Press Undo on the
+  toast that appears.
+- You can undo removing a play from your history or a music folder.
+- Copy link tells you it worked. Where there is no link to copy, the entry is greyed out and
+  says why.
+- Sonora tells you when a library scan you started has finished.
+- On macOS, you can move back and forward through history by swiping left or right with two
+  or three fingers, depending on your gesture preferences.
 - Choose your audio output device in Settings → Playback → Devices. Sonora remembers it, plays on
   your system's default while it is disconnected, forgets it if it stops working, and shows the
   sample rate and buffer size it plays at, with a shortcut to your system's audio settings.
@@ -19,11 +36,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The Prefer local lyrics switch is gone. Lyrics in a file's own tags now compete with the
+  online providers, so synced lyrics found online beat plain ones in the file. Rank Local first
+  to have it win when both are equally good.
+- Toasts have a new look. New ones pile up in front of older ones, and pointing at the pile
+  spreads it out and keeps every toast on screen until you move away. Drag a toast to the right
+  to dismiss it.
 - Sonora now plays at your device's own sample rate and converts each track to it with the
   higher-quality ardftsrc resampler, rather than switching the device's rate between tracks.
 
 ### Fixed
 
+- The minimize, maximize and close buttons on Windows 10 show their icons again instead of empty
+  boxes.
+- On Windows, dragging the title bar, double-clicking it and the maximize button work every time
+  again, including in the fullscreen player.
+- Removing several playlists from your library at once no longer stops after the first one.
+- Sonora now tells you when your settings could not be saved, or when downloading, installing
+  or removing Widevine fails. Both used to fail without a word.
+- Show on Discord works with Discord Canary on Linux, including the Flatpak and running it next
+  to regular Discord.
+- On Linux, Sonora no longer closes on its own after playing for a while.
+- The Nix flake can build Sonora from source again, as `packages.<system>.sonora-src`.
+  The default package is still the release binary.
+- On Windows, Open log in Settings opens the log in Notepad while Sonora runs, and no
+  console window flashes. Open theme folder no longer flashes one either.
+- Ctrl+F (Cmd+F on macOS) opens the page's filter again after you close it with Escape or the
+  close button, and the other shortcuts keep working.
 - Pressing play and pause quickly several times in a row no longer leaves the music playing
   while Sonora shows it paused.
 
@@ -40,6 +79,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Autoplay of similar tracks is now on for new installs, so playback carries on with similar songs when a queue ends. You can still turn it off in the queue.
 - Fullscreen lyrics grow with a large window, up to twice their size, so they no longer look
   small on a big screen. Small windows keep the size they had.
 - On Windows, the minimize, maximize, restore and close buttons now use Windows' own icons, so

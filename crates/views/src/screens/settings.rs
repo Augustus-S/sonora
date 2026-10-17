@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::chrome::OutputPicker;
@@ -12,8 +13,9 @@ use crate::shared::popups::{AccountPicker, CookiePrompt, SearchPopup, matches_qu
 use crate::shared::text;
 use crate::shared::veil::{Edge, veil};
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, FocusHandle, FontWeight, MouseButton,
-    MouseUpEvent, Pixels, Render, SharedString, Task, Window, div, px, relative,
+    AnyElement, App, ClickEvent, Context, DragMoveEvent, Entity, FocusHandle, FontWeight,
+    MouseButton, MouseUpEvent, Pixels, Point, Render, SharedString, Task, Window, div, px,
+    relative,
 };
 use gpui::{ScrollHandle, prelude::*, svg};
 use i18n::{Language, t};
@@ -23,10 +25,14 @@ use music::scrobble::{Link, Secret};
 use music::{AccountChoice, SignIn, SignInPrompt, WritingSystem};
 use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
-    AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io, Outputs,
-    Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling, Session, SessionState, Sleep, Sonora,
+    AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io,
+    LYRICS_SOURCES, Outputs, Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling, Session,
+    SessionState, Sleep, Sonora,
 };
-use ui::{ActiveTheme as _, Deck, LEADING, Scrollbar, Scroller, eyebrow, snapped};
+use ui::{
+    ActiveTheme as _, Deck, Ghost, LEADING, Scrollbar, Scroller, drop_gap, drop_marker, eyebrow,
+    snapped, tabular,
+};
 use ui::{
     Avatar, Button, Dismiss, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE,
     MAX_TRANSPARENCY, MIN_FONT, MIN_LYRICS_SCALE, MenuItem, Modal, Pace, Picker, Popovers, Radio,
@@ -185,7 +191,7 @@ enum Slot {
     EqualizerPreset,
     EqualizerBands,
     LyricsProviders,
-    PreferLocalLyrics,
+    LyricsPriority,
     Karaoke,
     Romanized,
     LyricsForLocal,
@@ -300,6 +306,16 @@ const MEMBERS: [Member; 5] = [
     member!("imizgun", Role::Contributor),
 ];
 
+/// A lyrics source being dragged within the priority list. It draws as a chip under the cursor
+/// and changes the saved order only when dropped.
+#[derive(Clone)]
+struct DraggedSource {
+    provider: String,
+    label: SharedString,
+    /// Where the cursor grabbed the entry, so the chip starts under it.
+    position: Point<Pixels>,
+}
+
 pub struct SettingsView {
     session: Entity<Session>,
     playback: Entity<Playback>,
@@ -311,6 +327,9 @@ pub struct SettingsView {
     search: Entity<Input>,
     /// The search field's text, trimmed. Empty means the page shows one category.
     query: String,
+    /// Where a lyrics source dragged over the priority list would land, as a gap between the
+    /// enabled sources. `None` while the drop would leave the order as it is.
+    lyrics_drop_gap: Option<usize>,
     /// How tall the header floating over the page measured last, so the rows start beneath it.
     header_height: Pixels,
     /// Whether the header has measured itself at least once. Until then the height is a
@@ -426,6 +445,7 @@ impl SettingsView {
             tab: SettingsTab::General,
             search,
             query: String::new(),
+            lyrics_drop_gap: None,
             header_height: Pixels::ZERO,
             header_measured: false,
             column: None,
@@ -659,9 +679,11 @@ impl SettingsView {
                 if self
                     .settings
                     .read(cx)
-                    .lyrics_provider_enabled(music::lyrics::LOCAL)
+                    .enabled_lyrics_provider_priority()
+                    .len()
+                    > 1
                 {
-                    slots.push(Slot::PreferLocalLyrics);
+                    slots.push(Slot::LyricsPriority);
                 }
                 slots.extend([Slot::Karaoke, Slot::Romanized]);
                 slots
@@ -685,10 +707,14 @@ impl SettingsView {
                 Slot::Version,
                 Slot::Updates,
                 Slot::Log,
+            ]
+            .into_iter()
+            .chain([
                 Slot::Title("settings-group-project"),
                 Slot::License,
                 Slot::Source,
-            ],
+            ])
+            .collect(),
         }
     }
 
@@ -831,9 +857,9 @@ impl SettingsView {
                 t!("settings-lyrics-providers"),
                 t!("settings-lyrics-providers-detail"),
             ),
-            Slot::PreferLocalLyrics => (
-                t!("settings-prefer-local-lyrics"),
-                t!("settings-prefer-local-lyrics-detail"),
+            Slot::LyricsPriority => (
+                t!("settings-lyrics-priority"),
+                t!("settings-lyrics-priority-detail"),
             ),
             Slot::Karaoke => (
                 t!("settings-karaoke-lyrics"),
@@ -908,6 +934,7 @@ impl SettingsView {
             Slot::Sep => SEPARATOR_HEIGHT,
             Slot::Accounts => snapped(self.accounts_height(&theme, cx), window),
             Slot::LocalFolder => snapped(self.local_height(&theme, cx), window),
+            Slot::LyricsPriority => snapped(self.lyrics_priority_height(&theme, cx), window),
             Slot::EqualizerBands => snapped(
                 SECTION_GAP
                     + line(&theme, Text::Tiny)
@@ -965,6 +992,16 @@ impl SettingsView {
                 + BLOCK_GAP;
         }
         total
+    }
+
+    /// The lyrics priority block: the header over one entry per enabled source.
+    fn lyrics_priority_height(&self, theme: &Theme, cx: &App) -> Pixels {
+        let sources = self
+            .settings
+            .read(cx)
+            .enabled_lyrics_provider_priority()
+            .len();
+        standard_height(theme) + ROW_GAP + theme.metrics.row * sources as f32 + BLOCK_GAP
     }
 
     /// Builds the slot's row. Asked only for the rows in view, every frame they are.
@@ -1042,7 +1079,7 @@ impl SettingsView {
             Slot::EqualizerPreset => self.equalizer_preset_row(cx).element,
             Slot::EqualizerBands => self.equalizer_bands_row(cx).element,
             Slot::LyricsProviders => self.lyrics_providers_row(cx).element,
-            Slot::PreferLocalLyrics => self.prefer_local_lyrics_row(cx).element,
+            Slot::LyricsPriority => self.lyrics_priority_row(cx).element,
             Slot::Karaoke => self.karaoke_lyrics_row(cx).element,
             Slot::Romanized => self.romanized_lyrics_row(cx).element,
             Slot::LyricsForLocal => self.lyrics_for_local_files_row(cx).element,
@@ -1843,7 +1880,7 @@ impl SettingsView {
                     .on_click(move |_, _, cx| {
                         let path =
                             settings.update(cx, |settings, _| settings.ensure_themes_directory());
-                        if let Err(error) = open_path(&path) {
+                        if let Err(error) = open::that_detached(&path) {
                             log::warn!("settings: cannot open {}: {error}", path.display());
                         }
                     }),
@@ -2800,8 +2837,8 @@ impl SettingsView {
         )
     }
 
-    /// The About row that opens the current log file in whatever the system reads text with.
-    /// The button is disabled when the platform names no state or cache folder to log into.
+    /// The About row that opens a copy of the current log file in whatever the system reads text
+    /// with. The button is disabled when the platform names no state or cache folder to log into.
     fn log_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let path = state::log_file();
@@ -2818,8 +2855,11 @@ impl SettingsView {
                 .disabled(path.is_none())
                 .on_click(move |_, _, _| {
                     let Some(path) = &path else { return };
-                    if let Err(error) = open_path(path) {
-                        log::warn!("settings: cannot open {}: {error}", path.display());
+                    if let Err(error) = snapshot(path).and_then(open::that_detached) {
+                        log::warn!(
+                            "settings: cannot open a copy of {}: {error}",
+                            path.display()
+                        );
                     }
                 })
                 .into_any_element(),
@@ -3117,19 +3157,9 @@ impl SettingsView {
     fn lyrics_providers_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let settings = self.settings.read(cx);
-        let providers = [
-            (music::lyrics::LOCAL, "settings-lyrics-provider-local"),
-            ("Spotify", "settings-lyrics-provider-spotify"),
-            ("YouTube Music", "settings-lyrics-provider-youtube"),
-            ("Apple Music", "settings-lyrics-provider-apple-music"),
-            ("Musixmatch", "settings-lyrics-provider-musixmatch"),
-            ("LrcLib", "settings-lyrics-provider-lrclib"),
-            ("Kugou", "settings-lyrics-provider-kugou"),
-            ("NetEase", "settings-lyrics-provider-netease"),
-        ];
-        let count = providers
+        let count = LYRICS_SOURCES
             .iter()
-            .filter(|(provider, _)| settings.lyrics_provider_enabled(provider))
+            .filter(|provider| settings.lyrics_provider_enabled(provider))
             .count();
         let picker = Picker::new(
             "lyrics-providers",
@@ -3137,8 +3167,8 @@ impl SettingsView {
             t!("settings-lyrics-providers-selected", count = count),
         )
         .sticky()
-        .items(providers.map(|(provider, label)| {
-            MenuItem::new(label, i18n::lookup(label, None))
+        .items(LYRICS_SOURCES.map(|provider| {
+            MenuItem::new(provider, source_name(provider))
                 .selected(settings.lyrics_provider_enabled(provider))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -3156,24 +3186,166 @@ impl SettingsView {
         )
     }
 
-    fn prefer_local_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
+    /// The enabled lyrics sources in the order ties between them are settled. Each entry can be
+    /// dragged anywhere in the list or stepped with its arrows.
+    fn lyrics_priority_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-        let on = self.settings.read(cx).prefer_local_lyrics();
-
-        self.row(
-            t!("settings-prefer-local-lyrics"),
-            t!("settings-prefer-local-lyrics-detail"),
-            muted,
-            small,
-            Switch::new("prefer-local-lyrics", on)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings
-                        .update(cx, |settings, cx| settings.set_prefer_local_lyrics(!on, cx));
-                }))
+        let order = self.settings.read(cx).enabled_lyrics_provider_priority();
+        let count = order.len();
+        let entries: Vec<AnyElement> = order
+            .into_iter()
+            .enumerate()
+            .map(|(index, provider)| self.lyrics_source_entry(index, provider, count, cx))
+            .collect();
+        let Setting {
+            title,
+            detail,
+            element: header,
+        } = self.row(
+            t!("settings-lyrics-priority"),
+            t!("settings-lyrics-priority-detail"),
+            theme.muted_foreground,
+            theme.text(Text::Small),
+            div().into_any_element(),
+        );
+        let list = div()
+            .id("lyrics-priority")
+            .flex()
+            .flex_col()
+            .pb_2()
+            .children(entries)
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<DraggedSource>, _, cx| {
+                    if !event.bounds.contains(&event.event.position)
+                        && this.lyrics_drop_gap.take().is_some()
+                    {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drop(cx.listener(|this, dragged: &DraggedSource, _, cx| {
+                let Some(gap) = this.lyrics_drop_gap.take() else {
+                    return;
+                };
+                this.settings.update(cx, |settings, cx| {
+                    settings.place_lyrics_provider(&dragged.provider, gap, cx)
+                });
+                cx.notify();
+            }));
+        Setting {
+            title,
+            detail,
+            element: div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(header)
+                .child(list)
                 .into_any_element(),
-        )
+        }
+    }
+
+    /// One source in the priority list: its muted position, its name and the arrows that step it.
+    fn lyrics_source_entry(
+        &self,
+        index: usize,
+        provider: String,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.theme();
+        let name = source_name(&provider);
+        let edge = match self.lyrics_drop_gap {
+            Some(gap) if gap == index => Some(ui::Edge::Above),
+            Some(gap) if gap == count && index + 1 == count => Some(ui::Edge::Below),
+            _ => None,
+        };
+        let arrows = [true, false].map(|up| {
+            let moved = provider.clone();
+            let (id, icon, tooltip, blocked) = match up {
+                true => (
+                    "lyrics-priority-up",
+                    "icons/chevron-up.svg",
+                    "settings-lyrics-priority-up",
+                    index == 0,
+                ),
+                false => (
+                    "lyrics-priority-down",
+                    "icons/chevron-down.svg",
+                    "settings-lyrics-priority-down",
+                    index + 1 == count,
+                ),
+            };
+            Button::new((id, index))
+                .icon(icons::path(icon))
+                .small()
+                .ghost()
+                .tooltip(tooltip)
+                .disabled(blocked)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.update(cx, |settings, cx| {
+                        settings.move_lyrics_provider(&moved, up, cx)
+                    });
+                }))
+        });
+        let dragged = DraggedSource {
+            provider,
+            label: name.clone(),
+            position: Point::default(),
+        };
+        div()
+            .id(("lyrics-source", index))
+            .relative()
+            .h(theme.metrics.row)
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex_none()
+                    .font_features(tabular())
+                    .text_color(theme.muted_foreground)
+                    .child(SharedString::from((index + 1).to_string())),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(name))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .children(arrows),
+            )
+            .on_drag(dragged, |dragged, position, _, cx| {
+                cx.new(|_| DraggedSource {
+                    position,
+                    ..dragged.clone()
+                })
+            })
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<DraggedSource>, _, cx| {
+                    // The entries touch, so only the one under the cursor answers, and the list
+                    // clears the gap once the cursor leaves it.
+                    if !event.bounds.contains(&event.event.position) {
+                        return;
+                    }
+                    let Some(gap) = drop_gap(event.bounds, event.event.position, index) else {
+                        return;
+                    };
+                    let order = this.settings.read(cx).enabled_lyrics_provider_priority();
+                    let from = order
+                        .iter()
+                        .position(|name| *name == event.drag(cx).provider);
+                    let gap = Some(gap)
+                        .filter(|gap| from.is_some_and(|from| *gap != from && *gap != from + 1));
+                    if this.lyrics_drop_gap != gap {
+                        this.lyrics_drop_gap = gap;
+                        cx.notify();
+                    }
+                }),
+            )
+            .when_some(edge, |entry, edge| entry.child(drop_marker(edge, cx)))
+            .into_any_element()
     }
 
     fn karaoke_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
@@ -4610,25 +4782,25 @@ fn wrapped_lines(text: SharedString, size: Pixels, width: Pixels, window: &Windo
         .unwrap_or(1)
 }
 
-/// Hands a file to the system's default application for it, without waiting on that program.
-fn open_path(path: &Path) -> std::io::Result<()> {
-    #[cfg(target_os = "windows")]
-    Command::new("cmd")
-        .args(["/C", "start", ""])
-        .arg(path)
-        .spawn()?;
+/// Notepad on Windows refuses a file that Sonora still writes to, so the button opens a copy
+/// `File::open` shares write access, `fs::copy` documents no share mode
+fn snapshot(log: &Path) -> io::Result<PathBuf> {
+    let copy = log.with_file_name("sonora.copy.log");
+    io::copy(&mut File::open(log)?, &mut File::create(&copy)?)?;
+    Ok(copy)
+}
 
-    #[cfg(target_os = "macos")]
-    Command::new("open").arg(path).spawn()?;
-
-    #[cfg(target_os = "linux")]
-    Command::new("xdg-open").arg(path).spawn()?;
-
-    Ok(())
+impl Render for DraggedSource {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Ghost::new(self.position, self.label.clone())
+    }
 }
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !cx.has_active_drag() {
+            self.lyrics_drop_gap = None;
+        }
         let searching = self.searching();
         // a search can list the typeface row from any category
         let in_appearance = self.tab == SettingsTab::Appearance || searching;
@@ -4991,4 +5163,20 @@ fn hertz(frequency: f32) -> SharedString {
         ),
         false => t!("settings-equalizer-hertz", hz = frequency.round() as i64),
     }
+}
+
+/// The name a lyrics source goes by in the settings, falling back to the provider's own name.
+fn source_name(provider: &str) -> SharedString {
+    let key = match provider {
+        music::lyrics::LOCAL => "settings-lyrics-provider-local",
+        "Spotify" => "settings-lyrics-provider-spotify",
+        "YouTube Music" => "settings-lyrics-provider-youtube",
+        "Apple Music" => "settings-lyrics-provider-apple-music",
+        "Musixmatch" => "settings-lyrics-provider-musixmatch",
+        "LrcLib" => "settings-lyrics-provider-lrclib",
+        "Kugou" => "settings-lyrics-provider-kugou",
+        "NetEase" => "settings-lyrics-provider-netease",
+        _ => return SharedString::from(provider.to_owned()),
+    };
+    i18n::lookup(key, None)
 }
