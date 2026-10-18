@@ -81,7 +81,7 @@ pub(crate) enum Lane {
 
 /// A signed-in session as it is kept on disk: the tokens, who they belong to, and which client
 /// renews them. Renewing replaces the whole thing, so a caller never edits one in place.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Credentials {
     pub access_token: String,
     pub refresh_token: String,
@@ -139,6 +139,19 @@ impl std::fmt::Display for Unavailable {
 }
 
 impl std::error::Error for Unavailable {}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("user_id", &self.user_id)
+            .field("country_code", &self.country_code)
+            .field("lane", &self.lane)
+            .finish()
+    }
+}
 
 impl Credentials {
     /// Whether the access token is close enough to its end to renew before using it.
