@@ -22,6 +22,14 @@ const NODE_REST: f32 = 0.75;
 /// How opaque the area under the response is at its furthest reach, and while bypassed.
 const AREA_FILL: f32 = 0.3;
 const BYPASSED_FILL: f32 = 0.1;
+/// How strongly the frequency lines, the level lines and the 0 dB line show over the plot.
+const GRID_FAINT: f32 = 0.18;
+const GRID_LEVEL: f32 = 0.3;
+const GRID_ZERO: f32 = 0.3;
+/// How strongly the axis labels show, quieter than the curve they describe.
+const LABEL: f32 = 0.7;
+/// How strongly the reference level's dashed line shows.
+const REFERENCE: f32 = 0.3;
 /// The dash and gap of the reference line, so it reads apart from the grid.
 const DASH: [Pixels; 2] = [px(4.), px(3.)];
 /// How many lines one wheel notch scrolls, so a notch is one width step on every platform.
@@ -604,8 +612,8 @@ fn paint_plot(
             theme.primary,
             AREA_FILL,
             theme.primary,
-            theme.foreground.opacity(0.55),
-            theme.popover_foreground,
+            theme.muted_foreground.opacity(REFERENCE),
+            theme.muted_foreground.opacity(LABEL),
         ),
     };
     paint_area(&curve, axes.y(0., bounds), accent, fill, window);
@@ -689,7 +697,7 @@ fn paint_grid(
         line(
             &[point(x, bounds.top()), point(x, bounds.bottom())],
             HAIRLINE,
-            theme.border.opacity(0.35),
+            theme.border.opacity(GRID_FAINT),
             window,
         );
         let label = match hz >= 1000. {
@@ -700,7 +708,7 @@ fn paint_grid(
             label,
             point(x, bounds.bottom() + pad),
             0.5,
-            theme.muted_foreground,
+            theme.muted_foreground.opacity(LABEL),
             None,
             window,
             cx,
@@ -713,8 +721,8 @@ fn paint_grid(
         let db = tick as f32 * step;
         let y = axes.y(db, bounds);
         let color = match tick == 0 {
-            true => theme.muted_foreground.opacity(0.4),
-            false => theme.border.opacity(0.6),
+            true => theme.muted_foreground.opacity(GRID_ZERO),
+            false => theme.border.opacity(GRID_LEVEL),
         };
         line(
             &[point(bounds.left(), y), point(bounds.right(), y)],
@@ -722,11 +730,15 @@ fn paint_grid(
             color,
             window,
         );
+        // the floor's label would sit on the first frequency's in the corner
+        if tick == start {
+            continue;
+        }
         text(
             t!("response-graph-db", value = db),
             point(bounds.left() - pad, y - theme.text(Text::Tiny) / 2.),
             1.,
-            theme.muted_foreground,
+            theme.muted_foreground.opacity(LABEL),
             None,
             window,
             cx,
