@@ -98,7 +98,7 @@ impl EqualizerView {
         let id = cx.entity_id();
         let preamp = cx.new(|cx| Input::new("", cx).compact());
         let rows = (0..MAX_FILTERS).map(|_| Row::new(cx)).collect();
-        let meter = cx.new(|cx| OutputMeter::new(equalizer.clone(), cx));
+        let meter = cx.new(|cx| OutputMeter::new(equalizer.clone(), signal.clone(), cx));
         let graph = cx.new(|cx| {
             EqualizerGraph::new(
                 equalizer.clone(),

@@ -19,7 +19,7 @@ const SPECTRUM_TICK: Duration = Duration::from_millis(33);
 /// times a second, the rate its level and clip warning are made for.
 const METER_EVERY: u32 = 3;
 /// How many bits of a sample the 32-bit floats Sonora works in carry.
-const FLOAT_BITS: u8 = 24;
+pub const FLOAT_BITS: u8 = 24;
 
 /// The spectrum heard ahead of the equalizer, the signal path and the output meter, read while a
 /// screen holds the one watch `watch` returns.
@@ -86,8 +86,9 @@ pub enum Change {
         to: u16,
     },
     /// The device takes fewer bits than the track carries, or integers for a track that has
-    /// no bit depth of its own.
+    /// no bit depth of its own. `from` is the bits Sonora carries, `None` for such a track.
     Requantized {
+        from: Option<u8>,
         to: u8,
     },
 }
@@ -131,7 +132,10 @@ impl SignalPath {
             if let Sample::Integer(to) = stream.format.sample
                 && bits.is_none_or(|bits| bits.min(FLOAT_BITS) > to)
             {
-                changes.push(Change::Requantized { to });
+                changes.push(Change::Requantized {
+                    from: bits.map(|bits| bits.min(FLOAT_BITS)),
+                    to,
+                });
             }
         }
         changes

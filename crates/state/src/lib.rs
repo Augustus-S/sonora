@@ -69,7 +69,7 @@ pub use settings::{
     RomanizationScripts, SYSTEM_FONT, SideTab, equalizer_profile_label, remember_window,
     window_placement,
 };
-pub use signal::{Change, Equalizing, Signal, SignalPath};
+pub use signal::{Change, Equalizing, FLOAT_BITS, Signal, SignalPath};
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, ToastAction, Toasts};

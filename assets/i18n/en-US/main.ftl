@@ -792,6 +792,27 @@ equalizer-overload-slight = Clipping by under 0.1 dB
 equalizer-graph-preamp = { $db } dB
 equalizer-lower-preamp = Lower preamp
 equalizer-level = Level
+equalizer-status-bit-perfect = Bit-perfect
+equalizer-status-bit-perfect-detail = Bit-perfect from Sonora
+equalizer-status-server = The sound server then converts it to { $khz } kHz
+equalizer-status-altered = Not bit-perfect
+equalizer-status-separator = {", "}
+equalizer-status-more = +{ $count }
+equalizer-status-equalized = EQ
+equalizer-status-volume = Volume
+equalizer-status-normalized = Normalized
+equalizer-status-rate = { $from } → { $to } kHz
+equalizer-status-bits = { $from } → { $to } bit
+equalizer-status-float = Float → { $to } bit
+equalizer-status-channels = { $from ->
+    [1] Mono
+    [2] Stereo
+   *[other] { $from } ch
+} → { $to ->
+    [1] mono
+    [2] stereo
+   *[other] { $to } ch
+}
 settings-panel-lyrics-size = Lyrics size (panel)
 settings-panel-lyrics-size-detail = Size of the lyrics text in the side panel, on top of the base font size
 settings-fullscreen-lyrics-size = Lyrics size (fullscreen)
