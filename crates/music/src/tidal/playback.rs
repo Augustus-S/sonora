@@ -275,66 +275,106 @@ impl Fetch for Tidal {
         true
     }
 
-    /// Builds a decoder placed at `at`. Only the header is read here.
+    fn open(&self, id: &str, loaded: &Loaded, at: Duration) -> Option<Self::Source> {
+        self.open_near(id, loaded, at).map(|(source, _)| source)
+    }
+
+    /// Builds a decoder placed at `at`, or at the start when `at` cannot be reached without
+    /// decoding everything before it. Only the header is read here.
     ///
     /// A file is opened seekable and moved. A segmented track is opened without its length,
     /// which would have symphonia read every fragment to build a sample table, and a position
     /// splices the init segment onto the segment that covers it, trimming what comes before
-    /// the position off the front.
-    fn open(&self, id: &str, loaded: &Loaded, at: Duration) -> Option<Self::Source> {
-        open(id, loaded, at)
+    /// the position off the front. A position the download has not reached in time starts the
+    /// track from the top instead, since winding there would hold the audio thread for as long
+    /// as it takes to decode the way.
+    fn open_near(&self, id: &str, loaded: &Loaded, at: Duration) -> Option<(Opened, Duration)> {
+        let (source, start) = match &loaded.timeline {
+            Some(timeline) => open_segments(id, &loaded.stream, timeline, at),
+            None => open_file(id, &loaded.stream, at),
+        }?;
+        log::debug!(
+            "playback: {id} decodes at {} Hz, {} channels",
+            source.sample_rate(),
+            source.channels()
+        );
+        Some((source, start))
     }
 }
 
-/// What [`Fetch::open`] does, which needs nothing from the client.
-fn open(id: &str, loaded: &Loaded, at: Duration) -> Option<Opened> {
-    let stream = &loaded.stream;
-    let segmented = loaded.timeline.is_some();
-    let entry = loaded
-        .timeline
-        .as_ref()
-        .filter(|_| !at.is_zero())
-        .and_then(|timeline| stream.awaiting(|_, _, _| lock(timeline).entry(at)));
-    let builder = rodio::Decoder::builder();
-    let builder = match (segmented, entry) {
-        (true, Some(entry)) => builder
-            .with_data(stream.spliced(entry.head, entry.graft))
-            .with_seekable(false),
-        (true, None) => builder.with_data(stream.reader()).with_seekable(false),
-        (false, _) => {
-            let builder = builder.with_data(stream.reader()).with_seekable(true);
-            match stream.total() {
-                Some(total) => builder.with_byte_len(total),
-                None => builder,
-            }
-        }
+/// Opens a segmented track on the segment covering `at`, once the download has reached it.
+fn open_segments(
+    id: &str,
+    stream: &Stream<Long>,
+    timeline: &Mutex<Timeline>,
+    at: Duration,
+) -> Option<(Opened, Duration)> {
+    let entry = match at.is_zero() {
+        true => None,
+        false => stream.awaiting(|_, _, _| lock(timeline).entry(at)),
     };
-    let mut decoder = match builder.build() {
-        Ok(decoder) => decoder,
+    let reader = match entry {
+        Some(entry) => stream.spliced(entry.head, entry.graft),
+        None => stream.reader(),
+    };
+    let decoder = decoder(
+        id,
+        rodio::Decoder::builder()
+            .with_data(reader)
+            .with_seekable(false),
+    )?;
+    let Some(entry) = entry else {
+        if !at.is_zero() {
+            log::warn!(
+                "playback: the tidal track {id} has not arrived as far as {}s, starting it from the top",
+                at.as_secs()
+            );
+        }
+        return Some((Trimmed::new(decoder, Duration::ZERO, None), Duration::ZERO));
+    };
+    Some((Trimmed::new(decoder, entry.into, None), at))
+}
+
+/// Opens a track that is one file and moves it to `at`. A file that cannot be moved there is
+/// opened again from the top, since a failed seek may leave its decoder anywhere.
+fn open_file(id: &str, stream: &Stream<Long>, at: Duration) -> Option<(Opened, Duration)> {
+    let mut decoder = file_decoder(id, stream)?;
+    if at.is_zero() {
+        return Some((Trimmed::new(decoder, Duration::ZERO, None), Duration::ZERO));
+    }
+    if let Err(error) = decoder.try_seek(at) {
+        log::warn!(
+            "playback: cannot start the tidal track {id} at {}s, starting it from the top: {error}",
+            at.as_secs()
+        );
+        let decoder = file_decoder(id, stream)?;
+        return Some((Trimmed::new(decoder, Duration::ZERO, None), Duration::ZERO));
+    }
+    Some((Trimmed::new(decoder, Duration::ZERO, None), at))
+}
+
+/// A seekable decoder over the whole of a track that is one file.
+fn file_decoder(id: &str, stream: &Stream<Long>) -> Option<rodio::Decoder<Reader<Long>>> {
+    let builder = rodio::Decoder::builder()
+        .with_data(stream.reader())
+        .with_seekable(true);
+    let builder = match stream.total() {
+        Some(total) => builder.with_byte_len(total),
+        None => builder,
+    };
+    decoder(id, builder)
+}
+
+/// Builds a decoder, or reports a track that will not decode.
+fn decoder(
+    id: &str,
+    builder: rodio::decoder::DecoderBuilder<Reader<Long>>,
+) -> Option<rodio::Decoder<Reader<Long>>> {
+    match builder.build() {
+        Ok(decoder) => Some(decoder),
         Err(error) => {
             log::warn!("playback: cannot decode the tidal track {id}: {error}");
-            return None;
+            None
         }
-    };
-    log::debug!(
-        "playback: {id} decodes at {} Hz, {} channels",
-        decoder.sample_rate(),
-        decoder.channels()
-    );
-    let skip = match (segmented, entry) {
-        (true, Some(entry)) => entry.into,
-        (true, None) => at,
-        (false, _) => {
-            if !at.is_zero()
-                && let Err(error) = decoder.try_seek(at)
-            {
-                log::warn!(
-                    "playback: cannot start the tidal track {id} at {}s: {error}",
-                    at.as_secs()
-                );
-            }
-            Duration::ZERO
-        }
-    };
-    Some(Trimmed::new(decoder, skip, None))
+    }
 }

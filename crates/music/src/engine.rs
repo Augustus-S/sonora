@@ -111,6 +111,18 @@ pub trait Fetch: Send + Sync + 'static {
     /// engine reports as unavailable.
     fn open(&self, id: &str, loaded: &Self::Loaded, at: Duration) -> Option<Self::Source>;
 
+    /// Opens a decoder as near `at` as the download allows and says where it really starts,
+    /// which is where the engine reports the position from. The default is [`open`](Self::open)
+    /// exactly at `at`. A provider that may have to start earlier than asked overrides this.
+    fn open_near(
+        &self,
+        id: &str,
+        loaded: &Self::Loaded,
+        at: Duration,
+    ) -> Option<(Self::Source, Duration)> {
+        self.open(id, loaded, at).map(|source| (source, at))
+    }
+
     /// Whether a seek opens a second decoder at the target rather than moving the running one.
     ///
     /// A fragmented stream has no index for a decoder to jump around in: asking one to seek
@@ -734,7 +746,7 @@ impl<F: Fetch> Playing<F> {
         offset: u64,
         normalise: bool,
     ) -> Option<Self> {
-        let source = fetch.open(id, &loaded, at)?;
+        let (source, base) = fetch.open_near(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
         Some(Self {
             id: id.to_owned(),
@@ -742,7 +754,7 @@ impl<F: Fetch> Playing<F> {
             rate: source.sample_rate().get(),
             loaded,
             source,
-            base: at,
+            base,
             offset,
             gain,
         })
