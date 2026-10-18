@@ -8,7 +8,7 @@ use gpui::{
     Context, DispatchPhase, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     Pixels, Point, Render, Window, canvas, div, point, px, relative,
 };
-use router::{Destination, navigate};
+use router::{Destination, SettingsTab, navigate};
 use state::{Outcome, Target, Toasts};
 use ui::{ActiveTheme as _, Toast, css_ease, css_ease_out, paced};
 
@@ -356,7 +356,20 @@ impl ToastStack {
                 card.layer_translate(point(px(sway), px(drop)))
             })
             .when_some(toast.name.clone(), Toast::strong)
-            .when_some(toast.detail.clone(), Toast::detail)
+            .when_some(
+                toast
+                    .detail
+                    .clone()
+                    .or_else(|| toast.note.as_ref().map(|key| i18n::lookup(key, None))),
+                Toast::detail,
+            )
+            .when(
+                toast
+                    .action
+                    .as_ref()
+                    .is_some_and(|action| action.target.is_some()),
+                |card| card.action_icon("icons/external-link.svg"),
+            )
             .map(|card| match toast.outcome {
                 Outcome::Plain => card,
                 Outcome::Done => card.icon("icons/circle-check.svg"),
@@ -422,6 +435,9 @@ impl ToastStack {
         match toast.action.clone() {
             Some(action) => card.action(i18n::lookup(&action.key, None), move |_, _, cx| {
                 action.run(cx);
+                if let Some(target) = action.target.clone() {
+                    navigate(destination(target), cx);
+                }
                 toasts.update(cx, |this, cx| this.dismiss(id, cx));
             }),
             None => card,
@@ -615,5 +631,6 @@ fn destination(target: Target) -> Destination {
         Target::Album(id) => Destination::Album(id),
         Target::Artist(id) => Destination::Artist(id),
         Target::Playlist(id) => Destination::Playlist(id),
+        Target::PlaybackSettings => Destination::Settings(SettingsTab::Playback),
     }
 }

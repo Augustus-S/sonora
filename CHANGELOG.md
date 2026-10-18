@@ -44,6 +44,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to dismiss it.
 - Sonora now plays at your device's own sample rate and converts each track to it with the
   higher-quality ardftsrc resampler, rather than switching the device's rate between tracks.
+- When Apple Music tracks keep failing because the Widevine module Sonora found in your browser
+  is out of date, Sonora says so and offers a button to the settings where you can download
+  Google's copy.
 
 ### Fixed
 

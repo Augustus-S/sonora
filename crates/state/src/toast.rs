@@ -21,19 +21,25 @@ pub enum Outcome {
     Loading,
 }
 
+/// A page a toast leads to, which the views turn into a destination.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Target {
     Song(SharedString),
     Album(SharedString),
     Artist(SharedString),
     Playlist(SharedString),
+    /// The Playback tab of settings, where the Widevine module is managed.
+    PlaybackSettings,
 }
 
-/// A button on a toast. Pressing it runs the handler and then dismisses the toast.
+/// A button on a toast. Pressing it runs the handler, opens the target if there is one, and
+/// then dismisses the toast.
 #[derive(Clone)]
 pub struct ToastAction {
     /// The Fluent key of the button's label.
     pub key: SharedString,
+    /// The page the button opens after the handler has run.
+    pub target: Option<Target>,
     run: Run,
 }
 
@@ -41,6 +47,7 @@ impl ToastAction {
     pub fn new(key: impl Into<SharedString>, run: impl Fn(&mut App) + 'static) -> Self {
         Self {
             key: key.into(),
+            target: None,
             run: Rc::new(run),
         }
     }
@@ -61,6 +68,9 @@ pub struct Toast {
     pub count: Option<usize>,
     /// A line of its own below the text, such as the error behind a failure. Not translated.
     pub detail: Option<SharedString>,
+    /// The Fluent key of a line below the text that explains it. `detail` takes the line when
+    /// both are set.
+    pub note: Option<SharedString>,
     pub target: Option<Target>,
     /// The emphasised button, such as Undo.
     pub action: Option<ToastAction>,
@@ -83,6 +93,7 @@ impl Toast {
             name: None,
             count: None,
             detail: None,
+            note: None,
             target: None,
             action: None,
             cancel: None,
@@ -111,6 +122,11 @@ impl Toast {
         self
     }
 
+    pub fn note(mut self, key: impl Into<SharedString>) -> Self {
+        self.note = Some(key.into());
+        self
+    }
+
     /// Makes the bold name a link to the target's page.
     pub fn target(mut self, target: Option<Target>) -> Self {
         self.target = target;
@@ -132,6 +148,14 @@ impl Toast {
         run: impl Fn(&mut App) + 'static,
     ) -> Self {
         self.cancel = Some(ToastAction::new(key, run));
+        self
+    }
+
+    /// Adds a button that opens the target's page.
+    pub fn open(mut self, key: impl Into<SharedString>, target: Target) -> Self {
+        let mut action = ToastAction::new(key, |_| {});
+        action.target = Some(target);
+        self.action = Some(action);
         self
     }
 
@@ -159,6 +183,7 @@ impl Toast {
             && self.name == other.name
             && self.count == other.count
             && self.detail == other.detail
+            && self.note == other.note
     }
 }
 
