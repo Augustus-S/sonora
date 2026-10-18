@@ -209,9 +209,10 @@ impl TableSource for PlaylistSource {
                     Destination::User(playlist.owner_id.clone().into()),
                 ),
             },
-            PlaylistField::TrackCount => {
-                cells::dim(&cell, format!("{}", playlist.track_count), muted)
-            }
+            PlaylistField::TrackCount => match playlist.track_count == 0 && !playlist.owned {
+                true => cells::blank(&cell),
+                false => cells::dim(&cell, format!("{}", playlist.track_count), muted),
+            },
             PlaylistField::Modified => cells::dim(&cell, cells::stamp(playlist.modified_at), muted),
             PlaylistField::Index => cells::blank(&cell),
         }

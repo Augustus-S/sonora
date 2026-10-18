@@ -2,6 +2,7 @@ pub mod apple;
 pub mod artwork;
 mod audio;
 pub mod binimum;
+mod calendar;
 pub mod credentials;
 pub mod deezer;
 pub mod drm;
@@ -26,6 +27,7 @@ mod spectrum;
 pub mod spotify;
 mod stream;
 pub mod subsonic;
+pub mod tidal;
 mod trim;
 pub mod trouble;
 pub mod youtube;
@@ -226,6 +228,16 @@ pub trait MusicApi: Send + Sync {
     }
     async fn set_playlist_public(&self, playlist_id: &str, public: bool) -> Result<()>;
     async fn add_track_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()>;
+
+    /// Adds tracks to the end of a playlist in order, and a track named twice goes in twice. A
+    /// provider that takes many at once does it in one write. The default adds them one by one
+    /// and stops at the first that fails, leaving the ones before it in.
+    async fn add_tracks_to_playlist(&self, playlist_id: &str, track_ids: &[String]) -> Result<()> {
+        for track_id in track_ids {
+            self.add_track_to_playlist(playlist_id, track_id).await?;
+        }
+        Ok(())
+    }
     async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()>;
     async fn saved_albums(&self) -> Result<Vec<Album>>;
 

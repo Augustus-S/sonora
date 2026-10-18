@@ -952,6 +952,8 @@ pub enum LibraryEvent {
         track: String,
     },
     TracksHidden(Vec<String>),
+    /// A playlist a failed change may have altered in part, so a page showing it loads it again.
+    PlaylistChanged(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1784,9 +1786,7 @@ impl Library {
             move |client| async move {
                 let tracks = addition.resolve(&client).await?;
                 let id = client.create_playlist(&name).await?;
-                for track in &tracks {
-                    client.add_track_to_playlist(&id, track).await?;
-                }
+                client.add_tracks_to_playlist(&id, &tracks).await?;
                 let fetched = client.playlist(&id).await.map(|detail| detail.playlist);
                 Ok(fetched.unwrap_or_else(|error| {
                     log::warn!("library: a new playlist is not readable yet: {error:#}");
@@ -1891,9 +1891,9 @@ impl Library {
             move |client| async move {
                 let mut track_ids = addition.resolve(&client).await?;
                 track_ids.retain(|id| !known.contains(id));
-                for track_id in &track_ids {
-                    client.add_track_to_playlist(&playlist_id, track_id).await?;
-                }
+                client
+                    .add_tracks_to_playlist(&playlist_id, &track_ids)
+                    .await?;
                 Ok(track_ids)
             },
             move |this, track_ids, cx| {
@@ -1918,19 +1918,27 @@ impl Library {
     }
 
     /// Takes tracks out of a playlist and reports it once the provider agrees, with an Undo that
-    /// adds them back at the end, the way every provider adds.
+    /// adds them back at the end, the way every provider adds. Every copy of a named track goes,
+    /// the way the page drops every row of it, so `rows` names a track once for each copy the
+    /// playlist holds and the count and the Undo follow it.
     pub fn remove_tracks_from_playlist(
         &mut self,
         playlist_id: String,
-        track_ids: Vec<String>,
+        rows: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        if track_ids.is_empty() {
+        if rows.is_empty() {
             return;
         }
+        let mut seen = HashSet::new();
+        let track_ids: Vec<String> = rows
+            .iter()
+            .filter(|track| seen.insert(track.as_str()))
+            .cloned()
+            .collect();
         let emptied = playlist_id.clone();
-        let dropped = track_ids.clone();
-        let dropped_count = track_ids.len() as u32;
+        let gone = track_ids.clone();
+        let dropped_count = rows.len() as u32;
         let name = self
             .playlist(&playlist_id)
             .map(|playlist| playlist.name.clone());
@@ -1953,7 +1961,7 @@ impl Library {
                 Ok(())
             },
             move |this, (), cx| {
-                this.raise_rows(&emptied, name, dropped.clone(), cx);
+                this.raise_rows(&emptied, name, rows, cx);
                 this.amend_playlist(
                     &emptied,
                     |playlist| {
@@ -1962,11 +1970,11 @@ impl Library {
                     cx,
                 );
                 if let Some(ids) = this.contents.get_mut(&emptied) {
-                    for track in &dropped {
+                    for track in &gone {
                         ids.remove(track);
                     }
                 }
-                for track in dropped {
+                for track in gone {
                     cx.emit(LibraryEvent::TrackDropped {
                         playlist: emptied.clone(),
                         track,
@@ -2419,9 +2427,8 @@ impl Library {
         let io = self.io.clone();
         self.playlist_task = Some(cx.spawn(async move |this, cx| {
             let result = join(io.spawn(async move { mutation(client).await })).await;
-            if result.is_ok()
-                && let Some(catalog) = catalog
-            {
+            // A change that failed part way may still have landed in part.
+            if let Some(catalog) = catalog {
                 for id in &invalidated {
                     catalog.invalidate_playlist(id).await;
                 }
@@ -2442,6 +2449,9 @@ impl Library {
                     Err(error) => {
                         log::warn!("library: cannot {action}: {error:#}");
                         Toasts::show(Outcome::Failed, "toast-playlist-failed", cx);
+                        for id in invalidated {
+                            cx.emit(LibraryEvent::PlaylistChanged(id));
+                        }
                     }
                 }
                 cx.notify();

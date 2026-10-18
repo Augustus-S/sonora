@@ -36,6 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to 192 kHz, with the − and + buttons beside it. Only rates your device offers are stepped through.
 - Pick the buffer size Sonora hands your audio device, from 128 to 4096 frames, the same way. A
   bigger buffer stops crackles on a busy system, and a smaller one makes pause react faster.
+- Tidal as a provider: sign in with a code on link.tidal.com, then play your favorites,
+  playlists, mixes and search in up to 24-bit FLAC, whatever your plan includes.
 
 ### Changed
 

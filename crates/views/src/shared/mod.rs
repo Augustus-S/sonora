@@ -5,6 +5,7 @@ pub(crate) mod ambient;
 pub(crate) mod cards;
 pub(crate) mod cells;
 pub(crate) mod confirm;
+pub(crate) mod device_code;
 pub(crate) mod hero;
 pub(crate) mod local;
 pub(crate) mod menus;
@@ -37,6 +38,7 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
         "subsonic" => "icons/subsonic.svg",
         "deezer" => "icons/deezer.svg",
         "apple" => "icons/applemusic.svg",
+        "tidal" => "icons/tidal.svg",
         _ => "icons/music.svg",
     }
 }
