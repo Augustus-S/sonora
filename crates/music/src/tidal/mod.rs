@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 
+use crate::tidal::auth::{Credentials, Lane};
 use crate::tidal::playback::Factory;
 use crate::{
     Capabilities, InputSource, MusicApi as _, MusicProvider, PromptSink, ProviderSession, Shape,
@@ -34,17 +35,26 @@ impl TidalProvider {
         Self
     }
 
-    /// Opens the stored sign-in. It is given up on only when Tidal refuses it; a lost
+    /// Opens the stored sign-in. When Tidal refuses it, the stored sign-in is forgotten and the
+    /// refusal returned, so the listener is told once and the app stops trying it. A lost
     /// connection or Tidal being down is an error the app can try again from.
     async fn restore_stored() -> Result<Option<ProviderSession>> {
         let Some((stored, generation)) = auth::restore() else {
             return Ok(None);
         };
-        match TidalClient::connect(client::http()?, stored, generation).await {
-            Ok(client) => Ok(Some(session(client).await?)),
+        let first = stored.refresh_token.clone();
+        let client = TidalClient::new(client::http()?, stored, Some(generation));
+        let opened = match client.connect().await {
+            Ok(()) => session(client.clone()).await,
+            Err(error) => Err(error),
+        };
+        match opened {
+            Ok(session) => Ok(Some(session)),
             Err(error) if auth::refused(&error) => {
                 log::warn!("tidal: the stored session is no longer usable: {error:#}");
-                Ok(None)
+                let last = client.credentials().await.refresh_token;
+                auth::abandon(generation, &[&first, &last]);
+                Err(error)
             }
             // The app keeps a session it only could not reach, and tries again once the
             // network answers, which is the right answer for Tidal being down too.
@@ -56,15 +66,29 @@ impl TidalProvider {
     }
 
     /// The device flow from the code to an open session. Nothing is stored until all of it has
-    /// worked, so dropping this future part way leaves no sign-in behind.
+    /// worked, so dropping this future part way leaves no sign-in behind. When Tidal refuses
+    /// the session moved to the app client, the sign-in carries on as the device client.
     async fn sign_in_by_device(prompt: &PromptSink) -> Result<ProviderSession> {
         let http = client::http()?;
-        let credentials = auth::device(&http, prompt).await?;
-        let client = TidalClient::connect(http, credentials.clone(), auth::generation())
-            .await
-            .context("cannot reach tidal with that sign-in")?;
-        let session = session(client).await?;
-        auth::store(&credentials)?;
+        let approved = auth::device(&http, prompt).await?;
+        let upgraded = auth::upgrade(&http, approved.clone()).await;
+        let moved = upgraded.lane == Lane::App;
+        let client = match open(&http, upgraded).await {
+            Ok(client) => client,
+            Err(error) if moved && auth::refused(&error) => {
+                log::warn!(
+                    "tidal: the app client session was refused, signing in as the device client: {error:#}"
+                );
+                let device = Credentials {
+                    lane: Lane::Refused,
+                    ..approved
+                };
+                open(&http, device).await?
+            }
+            Err(error) => return Err(error),
+        };
+        let session = session(client.clone()).await?;
+        client.stored_at(auth::store(&client.credentials().await)?);
         Ok(session)
     }
 }
@@ -128,6 +152,16 @@ impl MusicProvider for TidalProvider {
     fn sign_out(&self) {
         auth::forget();
     }
+}
+
+/// A new sign-in's session, checked with Tidal and holding nothing on disk yet.
+async fn open(http: &reqwest::Client, credentials: Credentials) -> Result<TidalClient> {
+    let client = TidalClient::new(http.clone(), credentials, None);
+    client
+        .connect()
+        .await
+        .context("cannot reach tidal with that sign-in")?;
+    Ok(client)
 }
 
 async fn session(client: TidalClient) -> Result<ProviderSession> {

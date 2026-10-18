@@ -8,8 +8,8 @@
 //! Since April 2026 the device client is served AAC where it asks for CD-quality FLAC. The
 //! refresh token it is handed can be renewed as Tidal's Android app instead, which is served
 //! FLAC at every tier, so the first thing a new sign-in does is exactly that, the way tidalapi's
-//! `client_enable_hires` does. Tidal may stop allowing it; then the sign-in stays with the
-//! device client and plays what that client is given.
+//! `client_enable_hires` does. If Tidal stops allowing it, the sign-in stays with the device
+//! client and plays what that client is given.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -42,6 +42,8 @@ const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// How long the device flow waits between polls when Tidal names no interval, and how much
 /// longer it waits each time Tidal says to slow down, both as RFC 8628 sets them.
 const POLL: Duration = Duration::from_secs(5);
+/// The shortest wait between polls, so an answer naming no wait at all cannot spin the loop.
+const POLL_FLOOR: Duration = Duration::from_secs(1);
 /// The OAuth errors that mean the token or the client was refused, rather than the request
 /// failing. Only these give up on a session.
 const REFUSALS: [&str; 3] = ["invalid_grant", "invalid_client", "unauthorized_client"];
@@ -161,8 +163,9 @@ impl Credentials {
 }
 
 /// Runs the device flow: shows the code, opens the approval page, and polls until the
-/// listener approves, refuses or lets the code expire. Cancelling is the caller's to watch for,
-/// by dropping this future.
+/// listener approves, refuses or lets the code expire. It answers with the device client's own
+/// credentials, which [`upgrade`] moves to the app client. Cancelling is the caller's to watch
+/// for, by dropping this future.
 pub(crate) async fn device(http: &reqwest::Client, prompt: &PromptSink) -> Result<Credentials> {
     let device: Device = http
         .post(DEVICE)
@@ -193,7 +196,10 @@ pub(crate) async fn device(http: &reqwest::Client, prompt: &PromptSink) -> Resul
         false => format!("https://{approve}"),
     });
 
-    let mut interval = device.interval.map_or(POLL, Duration::from_secs);
+    let mut interval = device
+        .interval
+        .map_or(POLL, Duration::from_secs)
+        .max(POLL_FLOOR);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(device.expires_in);
     loop {
         tokio::time::sleep(interval).await;
@@ -221,19 +227,24 @@ pub(crate) async fn device(http: &reqwest::Client, prompt: &PromptSink) -> Resul
                 continue;
             }
         };
+        // Tidal hands an approval out once, so an answer that cannot be read means approving
+        // a new code.
         if response.status().is_success() {
-            let token: Token = response
-                .json()
-                .await
-                .context("cannot read the tidal sign-in answer")?;
-            let approved = credentials_from(token, None)?;
-            return Ok(upgrade(http, approved).await);
+            let token: Token = response.json().await.context(
+                "cannot read the tidal sign-in approval, so the code has to be approved again",
+            )?;
+            return credentials_from(token, None);
         }
         let status = response.status();
         let refusal: Refusal = response.json().await.unwrap_or_default();
         match refusal.error.as_str() {
             "authorization_pending" => {}
-            "" => log::debug!("tidal: the sign-in poll answered {status}, trying again"),
+            // A busy or failing Tidal names no OAuth error, and is given more room the way a
+            // request to slow down is.
+            "" => {
+                log::debug!("tidal: the sign-in poll answered {status}, trying again later");
+                interval += POLL;
+            }
             "slow_down" => interval += POLL,
             "expired_token" => {
                 return Err(SignInFailure(SignInProblem::Cancelled))
@@ -254,7 +265,7 @@ pub(crate) async fn device(http: &reqwest::Client, prompt: &PromptSink) -> Resul
 /// Moves a device sign-in over to the app client, so it is served FLAC. Failing to is not a
 /// failed sign-in: the device session still plays, at the quality it is given, and unless
 /// Tidal refused the move it is tried again at the next renewal.
-async fn upgrade(http: &reqwest::Client, device: Credentials) -> Credentials {
+pub(crate) async fn upgrade(http: &reqwest::Client, device: Credentials) -> Credentials {
     match renew(http, &device, APP_CLIENT).await {
         Ok(upgraded) => {
             log::info!("tidal: the session is served lossless");
@@ -278,9 +289,11 @@ async fn upgrade(http: &reqwest::Client, device: Credentials) -> Credentials {
 
 /// Swaps the refresh token for a new access token. A session renews as the app client unless
 /// Tidal has refused it there, and a refusal from the app client falls back to the device
-/// client for good. Any other failure is the caller's, except for a device session still
-/// waiting to move, which renews as it is and tries again next time. A refusal from the client
-/// the session ends up on means the sign-in is gone.
+/// client for good. Any other answer from the app client falls back to the device client for
+/// this renewal only, and the move is tried again next time. Only a lost connection or Tidal
+/// being down is left for the caller to retry. A refusal from the client the session ends up
+/// on means the sign-in is gone. The session keeps the country it was opened in, since a
+/// refresh answer names the account's home country instead.
 pub(crate) async fn refresh(http: &reqwest::Client, stale: &Credentials) -> Result<Credentials> {
     let (renewed, lane) = match stale.lane {
         Lane::Refused => (renew(http, stale, DEVICE_CLIENT).await?, Lane::Refused),
@@ -290,8 +303,8 @@ pub(crate) async fn refresh(http: &reqwest::Client, stale: &Credentials) -> Resu
                 log::warn!("tidal: the app client refused the session, falling back: {error:#}");
                 (renew(http, stale, DEVICE_CLIENT).await?, Lane::Refused)
             }
-            Err(error) if stale.lane == Lane::Device => {
-                log::debug!("tidal: cannot move the session to the app client yet: {error:#}");
+            Err(error) if stale.lane == Lane::Device || !retryable(&error) => {
+                log::debug!("tidal: cannot renew as the app client this time: {error:#}");
                 (renew(http, stale, DEVICE_CLIENT).await?, Lane::Device)
             }
             Err(error) => return Err(error),
@@ -300,7 +313,23 @@ pub(crate) async fn refresh(http: &reqwest::Client, stale: &Credentials) -> Resu
     if stale.lane == Lane::Device && lane == Lane::App {
         log::info!("tidal: the session is served lossless");
     }
-    Ok(Credentials { lane, ..renewed })
+    Ok(Credentials {
+        lane,
+        country_code: stale.country_code.clone(),
+        ..renewed
+    })
+}
+
+/// Moves a session to the device client for good. It is for when Tidal's api refuses the app
+/// client's tokens even though its token endpoint still hands them out.
+pub(crate) async fn demote(http: &reqwest::Client, stale: &Credentials) -> Result<Credentials> {
+    log::warn!("tidal: the api refused the app client, so lossless tracks play as aac");
+    let renewed = renew(http, stale, DEVICE_CLIENT).await?;
+    Ok(Credentials {
+        lane: Lane::Refused,
+        country_code: stale.country_code.clone(),
+        ..renewed
+    })
 }
 
 /// Whether an answer is Tidal being down, busy or slow rather than refusing anything, which
@@ -315,6 +344,12 @@ pub(crate) fn transient(status: reqwest::StatusCode) -> bool {
 /// signing out over.
 pub(crate) fn unavailable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| cause.is::<Unavailable>())
+}
+
+/// Whether a renewal failed on the way rather than being answered. That is the network or
+/// Tidal being down, and is worth asking the same client again later.
+fn retryable(error: &anyhow::Error) -> bool {
+    unavailable(error) || error.chain().any(|cause| cause.is::<reqwest::Error>())
 }
 
 /// Whether a failure is Tidal refusing the credentials, as opposed to the network or Tidal
@@ -367,7 +402,7 @@ async fn renew(http: &reqwest::Client, stale: &Credentials, client: Client) -> R
 }
 
 /// Builds stored credentials from a token answer. A refresh answer leaves out what does not
-/// change, which is read from the credentials it renews; which client the session renews as is
+/// change, which is read from the credentials it renews. Which client the session renews as is
 /// the caller's to settle.
 fn credentials_from(token: Token, previous: Option<&Credentials>) -> Result<Credentials> {
     let user_id = token
@@ -410,11 +445,6 @@ pub(crate) fn load() -> Option<Credentials> {
     (!credentials.refresh_token.is_empty()).then_some(credentials)
 }
 
-/// How many sign-outs this process has seen. A session remembers the count it began at.
-pub(crate) fn generation() -> u64 {
-    *lock(&SIGN_OUTS)
-}
-
 /// The stored sign-in and the sign-out count it was read at, read together so a sign-out cannot
 /// fall between them and leave the old sign-in counted as current.
 pub(crate) fn restore() -> Option<(Credentials, u64)> {
@@ -422,22 +452,54 @@ pub(crate) fn restore() -> Option<(Credentials, u64)> {
     Some((load()?, *held))
 }
 
-/// Stores a sign-in that has just been made.
-pub(crate) fn store(credentials: &Credentials) -> Result<()> {
-    let _held = lock(&SIGN_OUTS);
-    write(credentials)
+/// Stores a sign-in that has just been made, and answers with the sign-out count it was stored
+/// at, which its session keeps its renewals under.
+pub(crate) fn store(credentials: &Credentials) -> Result<u64> {
+    let held = lock(&SIGN_OUTS);
+    write(credentials)?;
+    Ok(*held)
 }
 
 /// Stores a renewed sign-in, unless the listener has signed out since the session renewing it
-/// began, which would otherwise bring back the sign-in they just removed.
+/// began, which would otherwise bring back the sign-in they just removed. A failed write is
+/// tried once more. If that fails too the session carries on from memory and the next renewal
+/// writes again, so what is lost is at most a refresh token Tidal rotated before the app quit.
 pub(crate) fn keep(generation: u64, credentials: &Credentials) -> Result<()> {
     let held = lock(&SIGN_OUTS);
-    match *held == generation {
-        true => write(credentials),
-        false => {
-            log::debug!("tidal: not keeping a renewal from a session that was signed out");
-            Ok(())
-        }
+    if *held != generation {
+        log::debug!("tidal: not keeping a renewal from a session that was signed out");
+        return Ok(());
+    }
+    write(credentials).or_else(|error| {
+        log::debug!("tidal: cannot keep the renewed session, trying once more: {error:#}");
+        write(credentials)
+    })
+}
+
+/// The stored sign-in, when another session of the same generation has renewed it since
+/// `current` was read. A renewal starts from it so it never spends a refresh token that was
+/// already swapped for a newer one.
+pub(crate) fn newer(generation: u64, current: &Credentials) -> Option<Credentials> {
+    let held = lock(&SIGN_OUTS);
+    if *held != generation {
+        return None;
+    }
+    load().filter(|stored| {
+        stored.user_id == current.user_id && stored.expires_at > current.expires_at
+    })
+}
+
+/// Removes a stored sign-in Tidal has refused, so the app stops restoring it. It goes only when
+/// it still holds one of the `refused` refresh tokens and no sign-out came since `generation`,
+/// so a sign-in made in the meantime stays.
+pub(crate) fn abandon(generation: u64, refused: &[&str]) {
+    let held = lock(&SIGN_OUTS);
+    if *held != generation {
+        return;
+    }
+    if load().is_some_and(|stored| refused.contains(&stored.refresh_token.as_str())) {
+        log::info!("tidal: forgetting the stored session tidal refused");
+        credentials::remove(&path());
     }
 }
 

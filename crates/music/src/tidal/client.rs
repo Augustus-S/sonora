@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
 use crate::engine::Loudness;
-use crate::tidal::auth::{self, Credentials};
+use crate::tidal::auth::{self, Credentials, Lane};
 use crate::tidal::manifest::Manifest;
 use crate::tidal::{lock, wire};
 use crate::{
@@ -83,9 +83,18 @@ const BACKOFF_CEILING: Duration = Duration::from_secs(10);
 const CONNECT: Duration = Duration::from_secs(10);
 const STALL: Duration = Duration::from_secs(20);
 
-/// The sub-statuses of a `401` that a renewed token clears: a token whose session Tidal has
-/// ended, an invalid one, and an expired one.
+/// The sub-statuses of a `401` that are about the token rather than one thing it asked for: a
+/// token whose session Tidal has ended, an invalid one, and an expired one. A `401` naming none
+/// of them is renewed once too, but only these, or no sub-status at all, end the session.
 const TOKEN_TROUBLE: [u64; 3] = [6004, 11002, 11003];
+
+/// Held while a token is renewed, by every session in the process. Two sessions holding the
+/// same refresh token then never spend it at once, and the second picks up the first's renewal.
+static RENEWING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The generation a session runs at until its sign-in is stored. No sign-out count reaches it,
+/// so nothing the session renews is written before the sign-in has fully worked.
+const UNSTORED: u64 = u64::MAX;
 
 /// A signed-in Tidal session: the api calls behind [`MusicApi`] and the playback lookup. Clones
 /// share one session, so a token renewed by one is the token every clone uses next.
@@ -97,12 +106,9 @@ pub struct TidalClient {
 struct Inner {
     http: reqwest::Client,
     credentials: RwLock<Credentials>,
-    /// Held while a token is renewed, so calls that find it stale at the same moment renew it
-    /// once between them.
-    renewing: tokio::sync::Mutex<()>,
     /// The sign-out count the session began at, so its renewals stop being kept once the
-    /// listener signs out.
-    generation: u64,
+    /// listener signs out. A new sign-in holds [`UNSTORED`] until it is stored.
+    generation: AtomicU64,
     /// Artist portraits already looked up, so a search that ranks the same artists on every
     /// keystroke does not ask for them again.
     portraits: Mutex<HashMap<String, String>>,
@@ -118,6 +124,15 @@ enum Payload<'a> {
     Form(&'a [(&'a str, &'a str)]),
     /// A JSON:API document, which is what Tidal's official api reads.
     Json(&'a Value),
+}
+
+/// What a call asks for, which decides what a `401` that outlasts a renewal means.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// One track, album or listing, which Tidal may refuse while the session is fine.
+    Resource,
+    /// The session itself, so any refusal is the session's.
+    Session,
 }
 
 /// Tidal refusing a playlist write because the `ETag` it carried is no longer the playlist's.
@@ -142,41 +157,61 @@ impl std::fmt::Display for Stale {
 impl std::error::Error for Stale {}
 
 impl TidalClient {
-    /// Opens a session with stored or freshly approved credentials, renewing the token first
-    /// when it is about to run out, and checks it with Tidal before handing it back.
-    pub(crate) async fn connect(
+    /// A session over stored or freshly approved credentials, not yet checked with Tidal.
+    /// `generation` is the sign-out count a stored sign-in was read at, and `None` for a new
+    /// sign-in, which keeps nothing it renews until [`TidalClient::stored_at`] names one.
+    pub(crate) fn new(
         http: reqwest::Client,
         credentials: Credentials,
-        generation: u64,
-    ) -> Result<Self> {
-        let credentials = match credentials.stale() {
-            true => {
-                let renewed = auth::refresh(&http, &credentials).await?;
-                if let Err(error) = auth::keep(generation, &renewed) {
-                    log::warn!("tidal: cannot keep the renewed session: {error:#}");
-                }
-                renewed
-            }
-            false => credentials,
-        };
-        let client = Self {
+        generation: Option<u64>,
+    ) -> Self {
+        Self {
             inner: Arc::new(Inner {
                 http,
                 credentials: RwLock::new(credentials),
-                renewing: tokio::sync::Mutex::new(()),
-                generation,
+                generation: AtomicU64::new(generation.unwrap_or(UNSTORED)),
                 portraits: Mutex::new(HashMap::new()),
                 revoked: AtomicBool::new(false),
             }),
-        };
-        let session = client
-            .get("/sessions", &[])
-            .await
-            .context("tidal refused the session")?;
-        if let Some(country) = wire::text(&session, "countryCode") {
-            client.inner.credentials.write().await.country_code = country.to_owned();
         }
-        Ok(client)
+    }
+
+    /// Checks the session with Tidal, renewing the token first when it is about to run out,
+    /// and takes the country Tidal serves it in. Any `401` here means the session itself was
+    /// refused.
+    pub(crate) async fn connect(&self) -> Result<()> {
+        let session: Value = self
+            .exchange(
+                Method::GET,
+                &format!("{V1}/sessions"),
+                &[],
+                Payload::Empty,
+                None,
+                Scope::Session,
+            )
+            .await
+            .context("tidal refused the session")?
+            .json()
+            .await
+            .context("cannot read the tidal session")?;
+        if let Some(country) = wire::text(&session, "countryCode") {
+            self.inner.credentials.write().await.country_code = country.to_owned();
+        }
+        Ok(())
+    }
+
+    /// The credentials the session holds now, renewals included.
+    pub(crate) async fn credentials(&self) -> Credentials {
+        self.inner.credentials.read().await.clone()
+    }
+
+    /// Starts keeping the renewals of a new sign-in, once it is stored at `generation`.
+    pub(crate) fn stored_at(&self, generation: u64) {
+        self.inner.generation.store(generation, Ordering::Relaxed);
+    }
+
+    fn generation(&self) -> u64 {
+        self.inner.generation.load(Ordering::Relaxed)
     }
 
     pub(crate) fn http(&self) -> &reqwest::Client {
@@ -188,10 +223,14 @@ impl TidalClient {
     }
 
     /// The access token, renewed first when it is about to run out or when it is `rejected`,
-    /// the token Tidal has just refused. A token another call already renewed is used as it is.
-    async fn token(&self, rejected: Option<&str>) -> Result<String> {
+    /// the token Tidal has just refused. With `demote` the renewal moves the session to the
+    /// device client for good. A token another call or another session already renewed is used
+    /// as it is.
+    async fn token(&self, rejected: Option<&str>, demote: bool) -> Result<String> {
         let usable = |credentials: &Credentials| {
-            !credentials.stale() && rejected != Some(credentials.access_token.as_str())
+            !credentials.stale()
+                && rejected != Some(credentials.access_token.as_str())
+                && !(demote && credentials.lane == Lane::App)
         };
         {
             let credentials = self.inner.credentials.read().await;
@@ -199,16 +238,30 @@ impl TidalClient {
                 return Ok(credentials.access_token.clone());
             }
         }
-        let _renewing = self.inner.renewing.lock().await;
-        let current = self.inner.credentials.read().await.clone();
-        // Someone else renewed it while this call waited for the lock.
+        let _renewing = RENEWING.lock().await;
+        let mut current = self.inner.credentials.read().await.clone();
         if usable(&current) {
             return Ok(current.access_token);
         }
-        let renewed = auth::refresh(&self.inner.http, &current)
-            .await
-            .inspect_err(|error| self.revoke_if_refused(error))?;
-        if let Err(error) = auth::keep(self.inner.generation, &renewed) {
+        if let Some(newer) = auth::newer(self.generation(), &current) {
+            log::debug!("tidal: taking the session another one renewed");
+            current = Credentials {
+                country_code: current.country_code,
+                ..newer
+            };
+            *self.inner.credentials.write().await = current.clone();
+            if usable(&current) {
+                return Ok(current.access_token);
+            }
+        }
+        let renewed = match demote {
+            true => auth::demote(&self.inner.http, &current).await,
+            false => auth::refresh(&self.inner.http, &current).await,
+        }
+        .inspect_err(|error| self.revoke_if_refused(error))?;
+        if self.generation() != UNSTORED
+            && let Err(error) = auth::keep(self.generation(), &renewed)
+        {
             log::warn!("tidal: cannot keep the renewed session: {error:#}");
         }
         let token = renewed.access_token.clone();
@@ -216,9 +269,7 @@ impl TidalClient {
         Ok(token)
     }
 
-    /// One call, answered with its response once it succeeds. A refused token is renewed and
-    /// the call asked once more, and so is a call Tidal asks to be slowed down. A token Tidal
-    /// still refuses after renewing is the sign-in being gone.
+    /// One call to a resource, answered with its response once it succeeds.
     async fn call(
         &self,
         method: Method,
@@ -227,11 +278,29 @@ impl TidalClient {
         payload: Payload<'_>,
         etag: Option<&str>,
     ) -> Result<reqwest::Response> {
+        self.exchange(method, url, query, payload, etag, Scope::Resource)
+            .await
+    }
+
+    /// One call, answered with its response once it succeeds. Any `401` renews the token and
+    /// asks once more, and so does a call Tidal asks to be slowed down. A `401` that is about
+    /// the session after renewing moves an app client session to the device client and asks
+    /// again, and after that it is the sign-in being gone.
+    async fn exchange(
+        &self,
+        method: Method,
+        url: &str,
+        query: &[(&str, &str)],
+        payload: Payload<'_>,
+        etag: Option<&str>,
+        scope: Scope,
+    ) -> Result<reqwest::Response> {
         let country = self.inner.credentials.read().await.country_code.clone();
         let mut rejected: Option<String> = None;
+        let mut demoted = false;
         let mut slowed = false;
         loop {
-            let token = self.token(rejected.as_deref()).await?;
+            let token = self.token(rejected.as_deref(), demoted).await?;
             let mut request = self
                 .inner
                 .http
@@ -272,14 +341,25 @@ impl TidalClient {
             }
             let refusal: Value = response.json().await.unwrap_or(Value::Null);
             let sub_status = wire::number(&refusal, "subStatus").unwrap_or(0);
-            if status == StatusCode::UNAUTHORIZED && TOKEN_TROUBLE.contains(&sub_status) {
+            if status == StatusCode::UNAUTHORIZED {
                 if rejected.is_none() {
                     rejected = Some(token);
                     continue;
                 }
-                self.inner.revoked.store(true, Ordering::Relaxed);
-                return Err(SignInFailure(SignInProblem::Credentials))
-                    .with_context(|| format!("tidal refused the session for {}", path_of(url)));
+                let session = scope == Scope::Session
+                    || sub_status == 0
+                    || TOKEN_TROUBLE.contains(&sub_status);
+                if session {
+                    if !demoted && self.inner.credentials.read().await.lane == Lane::App {
+                        demoted = true;
+                        rejected = Some(token);
+                        continue;
+                    }
+                    self.inner.revoked.store(true, Ordering::Relaxed);
+                    return Err(SignInFailure(SignInProblem::Credentials)).with_context(|| {
+                        format!("tidal refused the session for {}", path_of(url))
+                    });
+                }
             }
             let message = wire::text(&refusal, "userMessage").unwrap_or("no reason given");
             if auth::transient(status) {
