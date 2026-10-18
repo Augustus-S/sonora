@@ -6,8 +6,8 @@ use music::equalizer::Preset;
 use state::{AppSettings, Equalizer, Sound};
 use ui::{ActiveTheme as _, MenuItem, Picker, Popovers};
 
-/// How tall the sound menu grows before it scrolls, in cover sizes.
-const MENU_HEIGHT: f32 = 2.4;
+/// How tall a sound menu grows before it scrolls, in cover sizes.
+pub(crate) const SOUND_MENU_HEIGHT: f32 = 2.4;
 
 /// One picker for every sound the equalizer can play: the built-in presets, the curve someone
 /// shaped from one, and the named profiles. Choosing any of them turns the equalizer on.
@@ -21,7 +21,7 @@ pub(crate) fn sound_picker(
     settings: &Entity<AppSettings>,
     cx: &App,
 ) -> Picker {
-    let height = cx.theme().metrics.cover * MENU_HEIGHT;
+    let height = cx.theme().metrics.cover * SOUND_MENU_HEIGHT;
     let settings = settings.read(cx);
     let playing = settings.equalizer_profile();
     let scratch = settings.equalizer_scratch();
@@ -123,4 +123,3 @@ pub(crate) fn preset_key(preset: Preset) -> &'static str {
         Preset::Loudness => "settings-equalizer-loudness",
     }
 }
-

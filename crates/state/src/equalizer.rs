@@ -315,8 +315,9 @@ impl Equalizer {
 
     /// Removes the rule for `device`. What plays stays.
     pub fn remove_rule(&mut self, device: &RuleDevice, cx: &mut Context<Self>) {
-        self.settings
-            .update(cx, |settings, cx| settings.remove_equalizer_rule(device, cx));
+        self.settings.update(cx, |settings, cx| {
+            settings.remove_equalizer_rule(device, cx)
+        });
     }
 
     /// Plays `sound` and turns the equalizer on, the way picking it does. A profile that is no

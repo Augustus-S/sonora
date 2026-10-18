@@ -1,12 +1,14 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Render,
-    ScrollHandle, SharedString, StyleRefinement, Task, Window, div,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Render, ScrollHandle,
+    SharedString, StyleRefinement, Task, Window, div,
 };
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
-use music::output::OutputId;
-use state::{AppSettings, Equalizer, Outputs, Signal, Sonora, equalizer_profile_label};
+use music::output::{DeviceOption, OutputId, ServerOutput};
+use state::{
+    AppSettings, Equalizer, Outputs, RuleDevice, Signal, Sonora, Sound, equalizer_profile_label,
+};
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
     Picker, Popovers, Room, Scrollbar, Scroller, Submit, Switch, TabBar, Text, heading,
@@ -23,6 +25,7 @@ use rows::{Row, figure, measured};
 mod graph;
 mod meter;
 mod rows;
+mod rules;
 mod transfer;
 
 const SOUND: &str = "equalizer-sound";
@@ -39,8 +42,8 @@ const SOUND_WIDTH: f32 = 2.2;
 const BLURB: f32 = 1.6;
 
 /// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
-/// and advanced mode adds a card each for the preamp, the filters and Equalizer APO text in
-/// and out.
+/// and advanced mode adds a card each for the preamp, the filters, the device rules and
+/// Equalizer APO text in and out.
 pub(crate) struct EqualizerView {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -53,6 +56,9 @@ pub(crate) struct EqualizerView {
     name: Entity<Input>,
     /// What the name dialog is open for, while it is.
     naming: Option<Naming>,
+    /// The device and the sound chosen in the row that adds a device rule, until it is added.
+    rule_device: Option<RuleDevice>,
+    rule_sound: Option<Sound>,
     /// The name dialog's own focus, and what had focus before it opened, given back on close.
     focus: FocusHandle,
     restore: Option<FocusHandle>,
@@ -92,6 +98,9 @@ struct Drawn {
     preamp: f64,
     output: Option<OutputId>,
     port: Option<String>,
+    /// What the device rules' menu offers.
+    server_outputs: Vec<ServerOutput>,
+    devices: Vec<DeviceOption>,
 }
 
 impl EqualizerView {
@@ -138,6 +147,8 @@ impl EqualizerView {
             rows,
             name: cx.new(|cx| Input::new("equalizer-profile-name-hint", cx)),
             naming: None,
+            rule_device: None,
+            rule_sound: None,
             focus: cx.focus_handle(),
             restore: None,
             shown: None,
@@ -171,6 +182,8 @@ impl EqualizerView {
             preamp: equalizer.preamp_db(),
             output: outputs.binding_key(),
             port: outputs.sink().and_then(|sink| sink.port.clone()),
+            server_outputs: outputs.server_outputs().to_vec(),
+            devices: outputs.devices().to_vec(),
         }
     }
 
@@ -185,10 +198,13 @@ impl EqualizerView {
     }
 
     /// Reads the output meter, the signal path and the spectrum while the screen is the one
-    /// shown.
+    /// shown, and the outputs the device rules offer once it comes into view.
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if visible != self.watch.is_some() {
             self.watch = visible.then(|| self.signal.update(cx, |signal, cx| signal.watch(cx)));
+            if visible {
+                self.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
+            }
         }
     }
 
@@ -590,6 +606,7 @@ impl Render for EqualizerView {
                                     this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
                                 })),
                         )
+                        .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
                         .child(card(
                             &view,
                             "equalizer-transfer",
