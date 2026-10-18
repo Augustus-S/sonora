@@ -4,7 +4,7 @@ use gpui::{
     ScrollHandle, SharedString, StyleRefinement, Task, Window, div,
 };
 use i18n::t;
-use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
+use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
 use music::output::OutputId;
 use state::{AppSettings, Equalizer, Outputs, Signal, Sonora, equalizer_profile_label};
 use ui::{
@@ -14,7 +14,7 @@ use ui::{
 
 use crate::chrome::Chrome;
 use crate::shared::confirm::{self, Confirm};
-use crate::shared::equalizer::sound_picker;
+use crate::shared::equalizer::{preset_key, sound_picker};
 
 use graph::{EqualizerGraph, Selected};
 use meter::OutputMeter;
@@ -30,7 +30,7 @@ const SOUND: &str = "equalizer-sound";
 const PREAMP: &str = "equalizer-preamp";
 /// How wide a number field is, in cover sizes.
 const FIELD: f32 = 0.6;
-/// How wide the rename dialog is, in cover sizes.
+/// How wide the name dialog is, in cover sizes.
 const DIALOG: f32 = 2.8;
 /// How wide the sound picker and its menu are in a wide room, in cover sizes. A narrower room
 /// lets the picker fill its row instead.
@@ -52,10 +52,9 @@ pub(crate) struct EqualizerView {
     preamp: Entity<Input>,
     rows: Vec<Row>,
     name: Entity<Input>,
-    /// The profile the rename dialog is open for, by its index and stored name then, so a
-    /// profile list that changed meanwhile renames nothing.
-    renaming: Option<(usize, String)>,
-    /// The rename dialog's own focus, and what had focus before it opened, given back on close.
+    /// What the name dialog is open for, while it is.
+    naming: Option<Naming>,
+    /// The name dialog's own focus, and what had focus before it opened, given back on close.
     focus: FocusHandle,
     restore: Option<FocusHandle>,
     /// The curve the fields were last filled from, so they are only rewritten when it changes.
@@ -71,6 +70,16 @@ pub(crate) struct EqualizerView {
     watch: Option<Task<()>>,
     /// The file being read in or written out.
     file: Option<Task<()>>,
+}
+
+/// What the name dialog is open for.
+#[derive(Clone)]
+enum Naming {
+    /// Saving the playing sound as a new profile.
+    Save,
+    /// Renaming the profile at this index, by its stored name then, so a profile list that
+    /// changed meanwhile renames nothing.
+    Rename(usize, String),
 }
 
 /// What the screen shows from the equalizer and the output. Position ticks and
@@ -131,7 +140,7 @@ impl EqualizerView {
             preamp,
             rows,
             name: cx.new(|cx| Input::new("equalizer-profile-name-hint", cx)),
-            renaming: None,
+            naming: None,
             focus: cx.focus_handle(),
             restore: None,
             shown: None,
@@ -212,12 +221,42 @@ impl EqualizerView {
         }
     }
 
-    fn new_profile(&mut self, cx: &mut Context<Self>) {
-        let count = self.settings.read(cx).equalizer_profiles().count();
-        let name = t!("equalizer-profile-new", number = count + 1);
-        let curve = Curve::new(Preamp::Auto, Vec::new()).expect("an empty curve is valid");
-        self.equalizer
-            .update(cx, |equalizer, cx| equalizer.add_profile(&name, curve, cx));
+    /// A name for the playing sound: the preset it matches while it is the unnamed profile, else
+    /// the first numbered profile name no profile shows yet.
+    fn suggested_name(&self, cx: &App) -> SharedString {
+        let settings = self.settings.read(cx);
+        let preset = settings
+            .equalizer_scratch()
+            .filter(|scratch| *scratch == settings.equalizer_profile())
+            .and_then(|_| Preset::matching(self.equalizer.read(cx).curve()));
+        if let Some(preset) = preset {
+            return i18n::lookup(preset_key(preset), None);
+        }
+        let taken: Vec<SharedString> = settings
+            .equalizer_profiles()
+            .map(equalizer_profile_label)
+            .collect();
+        (1..)
+            .map(|number| t!("equalizer-profile-new", number = number))
+            .find(|name| !taken.contains(name))
+            .unwrap_or_default()
+    }
+
+    /// Opens the name dialog for `naming`, filled with `text` and focused.
+    fn open_naming(
+        &mut self,
+        naming: Naming,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.restore = window.focused(cx);
+        self.name.update(cx, |input, cx| {
+            input.set_text(text, cx);
+            input.focus(window, cx);
+        });
+        self.naming = Some(naming);
+        cx.notify();
     }
 
     fn duplicate_profile(&mut self, cx: &mut Context<Self>) {
@@ -228,7 +267,13 @@ impl EqualizerView {
             .update(cx, |equalizer, cx| equalizer.add_profile(&name, curve, cx));
     }
 
-    /// Opens the rename dialog on the playing profile, filled with the name it shows.
+    /// Opens the name dialog to save the playing sound as a new profile.
+    fn open_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.suggested_name(cx);
+        self.open_naming(Naming::Save, name, window, cx);
+    }
+
+    /// Opens the name dialog on the playing profile, filled with the name it shows.
     fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self.settings.read(cx);
         let (index, stored) = (
@@ -236,35 +281,39 @@ impl EqualizerView {
             settings.equalizer_profile_name().to_owned(),
         );
         let shown = equalizer_profile_label(&stored);
-        self.restore = window.focused(cx);
-        self.name.update(cx, |input, cx| {
-            input.set_text(shown, cx);
-            input.focus(window, cx);
-        });
-        self.renaming = Some((index, stored));
-        cx.notify();
+        self.open_naming(Naming::Rename(index, stored), shown, window, cx);
     }
 
-    fn close_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.renaming = None;
+    fn close_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.naming = None;
         if let Some(focus) = self.restore.take() {
             window.focus(&focus, cx);
         }
         cx.notify();
     }
 
-    /// Renames the profile the dialog was opened for to what it holds. An empty name is not
-    /// saved and the dialog stays open.
-    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((index, from)) = self.renaming.clone() else {
+    /// Saves or renames with the name the dialog holds. An empty name is not taken and the
+    /// dialog stays open.
+    fn submit_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(naming) = self.naming.clone() else {
             return;
         };
         let name = self.name.read(cx).text().to_owned();
-        let renamed = self.settings.update(cx, |settings, cx| {
-            settings.rename_equalizer_profile(index, &from, &name, cx)
-        });
-        if renamed {
-            self.close_rename(window, cx);
+        let done = match naming {
+            Naming::Rename(index, from) => self.settings.update(cx, |settings, cx| {
+                settings.rename_equalizer_profile(index, &from, &name, cx)
+            }),
+            Naming::Save => {
+                let named = !name.trim().is_empty();
+                if named {
+                    self.equalizer
+                        .update(cx, |equalizer, cx| equalizer.save_as(&name, cx));
+                }
+                named
+            }
+        };
+        if done {
+            self.close_naming(window, cx);
         }
     }
 
@@ -378,12 +427,8 @@ impl EqualizerView {
                 .gap_1()
                 .ml_auto()
                 .child(
-                    action(
-                        "equalizer-new",
-                        "icons/plus.svg",
-                        "equalizer-profile-new-tooltip",
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.new_profile(cx))),
+                    action("equalizer-save-as", "icons/plus.svg", "equalizer-save-as")
+                        .on_click(cx.listener(|this, _, window, cx| this.open_save(window, cx))),
                 )
                 .child(
                     action(
@@ -479,25 +524,29 @@ impl EqualizerView {
             .into_any_element()
     }
 
-    fn rename_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.renaming.as_ref()?;
+    /// The dialog that names a profile, titled for saving or renaming.
+    fn name_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let title = match self.naming.as_ref()? {
+            Naming::Save => t!("equalizer-save-as"),
+            Naming::Rename(..) => t!("equalizer-rename"),
+        };
         let theme = *cx.theme();
-        let modal = Modal::new("equalizer-rename-dialog", t!("equalizer-rename"))
+        let modal = Modal::new("equalizer-name-dialog", title)
             .w(theme.metrics.cover * DIALOG)
             .child(self.name.clone())
             .action(
-                Button::new("equalizer-rename-cancel")
+                Button::new("equalizer-name-cancel")
                     .ghost()
                     .label(t!("common-cancel"))
-                    .on_click(cx.listener(|this, _, window, cx| this.close_rename(window, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.close_naming(window, cx))),
             )
             .action(
-                Button::new("equalizer-rename-save")
+                Button::new("equalizer-name-save")
                     .primary()
                     .label(t!("common-save"))
-                    .on_click(cx.listener(|this, _, window, cx| this.rename(window, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.submit_name(window, cx))),
             )
-            .on_dismiss(cx.listener(|this, _, window, cx| this.close_rename(window, cx)));
+            .on_dismiss(cx.listener(|this, _, window, cx| this.close_naming(window, cx)));
 
         Some(
             div()
@@ -507,11 +556,11 @@ impl EqualizerView {
                 .track_focus(&self.focus)
                 .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
                     cx.stop_propagation();
-                    this.close_rename(window, cx);
+                    this.close_naming(window, cx);
                 }))
                 .on_action(cx.listener(|this, _: &Submit, window, cx| {
                     cx.stop_propagation();
-                    this.rename(window, cx);
+                    this.submit_name(window, cx);
                 }))
                 .child(modal)
                 .into_any_element(),
@@ -572,10 +621,7 @@ impl Render for EqualizerView {
                     }),
             );
 
-        div()
-            .size_full()
-            .child(page)
-            .children(self.rename_dialog(cx))
+        div().size_full().child(page).children(self.name_dialog(cx))
     }
 }
 
