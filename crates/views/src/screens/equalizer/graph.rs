@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Window};
 use i18n::t;
@@ -9,7 +11,7 @@ use music::equalizer::{
 use state::{AppSettings, Equalizer, Outputs, Signal};
 use ui::{
     ActiveTheme as _, GraphEdit, ResponseAxes, ResponseGraph, ResponseGraphState, ResponseNode,
-    ResponsePoint, Room,
+    ResponsePoint, Room, ease_out_cubic,
 };
 
 use super::rows::{NEW_FILTER, figure};
@@ -28,6 +30,8 @@ const WIDTH_STEP: f64 = 1. / 12.;
 const FREQUENCY_FIGURES: i32 = 3;
 /// The levels at the bottom and the top of the plot that the spectrum is drawn between, in dBFS.
 const SPECTRUM_SCALE: (f32, f32) = (-90., 0.);
+/// How long the spectrum takes to rise in once it arrives, as a fade-in of the sound would.
+const SPECTRUM_RISE: Duration = Duration::from_millis(700);
 /// How tall the graph is in cover sizes, with the room of a wide window, and with less.
 const GRAPH_TALL: f32 = 2.8;
 const GRAPH_SHORT: f32 = 2.;
@@ -49,6 +53,8 @@ pub(super) struct EqualizerGraph {
     graph: Graph,
     /// What the graph last drew, so a notify that changed none of it draws nothing.
     drawn: Option<Drawn>,
+    /// When the spectrum last arrived after none, which its rise counts from.
+    spectrum_since: Option<Instant>,
 }
 
 /// Emitted when the selected filter changes, which the filter list highlights too.
@@ -231,6 +237,7 @@ impl EqualizerGraph {
             signal,
             graph: Graph::new(),
             drawn: None,
+            spectrum_since: None,
         };
         graph.redraw(cx);
         graph
@@ -391,15 +398,26 @@ impl Render for EqualizerGraph {
         let curve = equalizer.curve().clone();
         let rate = rate(&self.outputs, cx);
         let preamp = equalizer.preamp_db();
-        let spectrum: Vec<_> = self
-            .signal
-            .read(cx)
-            .levels()
-            .unwrap_or_default()
+        let levels = self.signal.read(cx).levels().unwrap_or_default();
+        // The spectrum comes in the way sound fades in: a gain that climbs from below the plot's
+        // floor to none, so it rises from the bottom rather than appearing at once.
+        let rise = match levels.is_empty() {
+            true => {
+                self.spectrum_since = None;
+                1.
+            }
+            false => {
+                let since = *self.spectrum_since.get_or_insert_with(Instant::now);
+                ease_out_cubic(since.elapsed().as_secs_f32() / SPECTRUM_RISE.as_secs_f32())
+            }
+        };
+        let (floor, ceiling) = SPECTRUM_SCALE;
+        let fade = (floor - ceiling) * (1. - rise);
+        let spectrum: Vec<_> = levels
             .iter()
             .map(|level| ResponsePoint {
                 frequency_hz: level.frequency,
-                gain_db: level.dbfs,
+                gain_db: level.dbfs + fade,
             })
             .collect();
         let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
