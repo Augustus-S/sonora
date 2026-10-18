@@ -11,8 +11,9 @@
 //! A device the system no longer lists is gone, which is not a failure: the default plays in its
 //! place without trying it, and it is played on again once it is back.
 //!
-//! On Linux cpal plays through PipeWire when it runs, then PulseAudio, then ALSA. A sound server
-//! offers its own outputs, and a sound card's own ALSA device can still be picked to play past it.
+//! On Linux cpal plays through PulseAudio when a server answers, PipeWire's `pipewire-pulse`
+//! included, and ALSA otherwise. A sound server offers its own outputs, and a sound card's own
+//! ALSA device can still be picked to play past it.
 
 #[cfg(target_os = "linux")]
 mod output_alsa;
@@ -33,6 +34,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
 use crate::audio::Chain;
+#[cfg(target_os = "linux")]
+use output_host::host;
 
 /// The buffer asked of the device, in frames, as far as the device allows it, when none is
 /// chosen in settings.
@@ -472,7 +475,7 @@ impl Output {
 /// outputs, followed by each sound card's direct device. This opens devices on some platforms, so
 /// call it off the UI thread.
 pub fn devices() -> Vec<DeviceOption> {
-    let host = cpal::default_host();
+    let host = host();
     let system = system_default(&host);
     let Ok(devices) = host.output_devices() else {
         return Vec::new();
@@ -516,7 +519,7 @@ pub fn retired(id: &str) -> bool {
         Ok(id) => {
             id.host() == cpal::HostId::Alsa
                 && !output_alsa::is_direct(id.id())
-                && output_host::is_server(&cpal::default_host())
+                && output_host::is_server(&host())
         }
         #[cfg(not(target_os = "linux"))]
         Ok(_) => false,
@@ -528,7 +531,7 @@ pub fn retired(id: &str) -> bool {
 /// remembered: the pick is simply not taken. This blocks for as long as the system takes, which
 /// CoreAudio can stretch to ten seconds, so call it off the UI thread.
 pub fn open(id: Option<&str>) -> Result<Opened> {
-    let host = cpal::default_host();
+    let host = host();
     let device = match id {
         Some(id) => find_device(&host, id).context("the device is not connected")?,
         None => host
@@ -641,7 +644,7 @@ pub fn system_audio_settings_uri(device: Option<&str>) -> Option<String> {
 /// failures) or it is unplugged and plugged back in, which `forget_gone` notices at the start of
 /// each call.
 fn resolve_device() -> Result<cpal::Device> {
-    let host = cpal::default_host();
+    let host = host();
     forget_gone(&host);
 
     // First try the device chosen in settings, if it has not failed to open and is connected.
@@ -689,7 +692,7 @@ pub(crate) fn output_openable() -> bool {
     if output_available() {
         return Device::acquire().is_ok();
     }
-    let Some(device) = cpal::default_host().default_output_device() else {
+    let Some(device) = host().default_output_device() else {
         return false;
     };
     let chosen_and_failed = cpal_ident(&device).is_some_and(|id| {
@@ -732,6 +735,12 @@ fn forget_gone(host: &cpal::Host) {
     if !gone.is_empty() {
         DeviceSelection::lock().forget(&gone);
     }
+}
+
+/// The host Sonora plays through.
+#[cfg(not(target_os = "linux"))]
+fn host() -> cpal::Host {
+    cpal::default_host()
 }
 
 /// The id of the device the system plays its default output on, as `devices` lists it, or `None`
@@ -812,7 +821,7 @@ fn buffers(config: &cpal::SupportedStreamConfig, buffer: u32) -> Vec<u32> {
 }
 
 /// The buffers `config` allows, in frames, as `(min, max)`, or `None` when the device does not
-/// say. PipeWire reports an empty range until it has sent its clock settings, which says nothing.
+/// say. An empty range says nothing either.
 fn buffer_range(config: &cpal::SupportedStreamConfig) -> Option<(u32, u32)> {
     match *config.buffer_size() {
         cpal::SupportedBufferSize::Range { max: 0, .. } => None,

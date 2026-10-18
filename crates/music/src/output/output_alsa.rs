@@ -102,7 +102,7 @@ pub(super) fn named(pcm: &str) -> String {
 /// `pulseaudio-alsa` fixes. Only ALSA's configuration is read, no device is opened, and nothing
 /// is missing when Sonora plays through another host.
 pub fn missing_bridge() -> Option<Server> {
-    if !is_alsa(&cpal::default_host()) {
+    if !is_alsa(&super::host()) {
         return None;
     }
     let server = server()?;
