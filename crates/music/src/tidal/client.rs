@@ -895,12 +895,14 @@ impl TidalClient {
             (Some(depth), Some(rate)) => format!("{granted} at {depth}-bit {rate} Hz"),
             _ => granted.to_owned(),
         };
-        let loudness = wire::decimal(&answer, "trackReplayGain").map(|gain| {
-            Loudness::replay_gain(
-                gain as f32,
-                wire::decimal(&answer, "trackPeakAmplitude").map(|peak| peak as f32),
-            )
-        });
+        // Tidal's gains are read as ReplayGain 2.0, against -18 LUFS. The album's stand in for a
+        // track that carries none, and the album peak is never below the track's, so it still
+        // keeps a raised track from clipping.
+        let peak = wire::decimal(&answer, "trackPeakAmplitude")
+            .or_else(|| wire::decimal(&answer, "albumPeakAmplitude"));
+        let loudness = wire::decimal(&answer, "trackReplayGain")
+            .or_else(|| wire::decimal(&answer, "albumReplayGain"))
+            .map(|gain| Loudness::replay_gain(gain as f32, peak.map(|peak| peak as f32)));
         let duration = track
             .ok()
             .and_then(|track| wire::number(&track, "duration"))
