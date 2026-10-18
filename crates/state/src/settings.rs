@@ -2755,7 +2755,9 @@ mod tests {
         assert!(!move_lyrics_provider(&mut order, &enabled, "unknown", true));
         assert!(move_lyrics_provider(&mut order, &enabled, "Subsonic", true));
         assert_eq!(&order[..2], &["Subsonic", LOCAL]);
-        assert!(move_lyrics_provider(&mut order, &enabled, "Subsonic", false));
+        assert!(move_lyrics_provider(
+            &mut order, &enabled, "Subsonic", false
+        ));
         assert_eq!(order, lyrics_priority(&[]));
     }
 

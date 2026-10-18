@@ -78,6 +78,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   close button, and the other shortcuts keep working.
 - Pressing play and pause quickly several times in a row no longer leaves the music playing
   while Sonora shows it paused.
+- Apple Music songs that Apple has re-released under a new id play again instead of showing as
+  unavailable in your library and playlists.
 
 ## [0.43.0] - 2026-10-13
 

@@ -202,6 +202,9 @@ pub struct Attributes<'a> {
 #[serde(default, rename_all = "camelCase", bound(deserialize = "'de: 'a"))]
 pub struct PlayParams<'a> {
     pub catalog_id: Leaf<'a>,
+    /// The catalog song a library row plays as now. It differs from `catalog_id` when Apple
+    /// pulled the old id and delivered the song again under a new one.
+    pub reporting_id: Leaf<'a>,
 }
 
 #[derive(Default, Deserialize)]
@@ -735,12 +738,13 @@ pub fn playlist_track(row: &Resource) -> Option<Track> {
 
 /// One library song, which plays through the catalog id its play parameters name. A library row
 /// without one is an upload, and this path has no way to play it. A row whose catalog
-/// relationship was asked for and came back empty names a song Apple has since pulled: the
-/// play parameters still carry its id, but web playback refuses it, so it is listed unplayable.
+/// relationship was asked for and came back empty names an id Apple has pulled, which web
+/// playback refuses. It plays through the reporting id when Apple delivered the song again
+/// under a new one, and is listed unplayable when it did not.
 pub fn library_song(value: &Resource) -> Option<Track> {
     let attributes = value.attributes.as_ref();
-    let id = attributes
-        .and_then(|attributes| attributes.play_params.as_ref())
+    let params = attributes.and_then(|attributes| attributes.play_params.as_ref());
+    let id = params
         .and_then(|params| params.catalog_id.as_str())
         .or_else(|| catalog(value)?.id.as_str())?
         .to_owned();
@@ -749,11 +753,18 @@ pub fn library_song(value: &Resource) -> Option<Track> {
     // that album joined the library, which is also the order Apple itself sorts songs by.
     let mut track = match catalog(value) {
         Some(found) => song_as(found, id)?,
-        None => {
-            let mut track = song_as(value, id)?;
-            track.playable = value.relationships.catalog.data.is_none();
-            track
-        }
+        None if value.relationships.catalog.data.is_none() => song_as(value, id)?,
+        None => match params
+            .and_then(|params| params.reporting_id.as_str())
+            .filter(|replacement| *replacement != id)
+        {
+            Some(replacement) => song_as(value, replacement.to_owned())?,
+            None => {
+                let mut track = song_as(value, id)?;
+                track.playable = false;
+                track
+            }
+        },
     };
     track.added_at = attributes
         .and_then(|attributes| moment(attributes.date_added.as_str()))
