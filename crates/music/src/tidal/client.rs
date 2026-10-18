@@ -41,6 +41,9 @@ const CLIENT_VERSION: &str = "2025.7.16";
 /// The best quality there is. Tidal answers with the best the account and the track allow,
 /// which may be less.
 const QUALITY: &str = "HI_RES_LOSSLESS";
+/// What a track is asked for again at when its best stream is one Sonora cannot play, such as a
+/// protected or spatial one. CD quality comes as one plain FLAC file.
+const FALLBACK_QUALITY: &str = "LOSSLESS";
 
 /// How many rows a listing asks for at once. Tidal refuses more than this on most listings.
 const PAGE: usize = 100;
@@ -840,30 +843,50 @@ impl TidalClient {
     }
 
     /// Resolves a track to a stream at the best quality the account may play, and reads what
-    /// Tidal says about its loudness on the way.
+    /// Tidal says about its loudness on the way. A best stream Sonora cannot play is asked for
+    /// once more at `FALLBACK_QUALITY` before the track counts as unplayable.
     pub async fn playback(&self, track_id: &str) -> Result<Playback> {
         let track_path = format!("/tracks/{}", escape::component(track_id));
         let info_path = format!("{track_path}/playbackinfopostpaywall");
-        let (answer, track) = tokio::join!(
+        let info = async |quality: &str| {
             self.get(
                 &info_path,
                 &[
-                    ("audioquality", QUALITY),
+                    ("audioquality", quality),
                     ("playbackmode", "STREAM"),
                     ("assetpresentation", "FULL"),
                 ],
-            ),
-            self.get(&track_path, &[]),
-        );
-        let answer = answer.with_context(|| format!("cannot play the tidal track {track_id}"))?;
-        if wire::text(&answer, "assetPresentation") == Some("PREVIEW") {
-            bail!("the tidal plan only plays a preview of {track_id}");
-        }
-        let mime = wire::text(&answer, "manifestMimeType").unwrap_or_default();
-        let manifest = Manifest::read(
-            mime,
-            wire::text(&answer, "manifest").context("tidal sent no manifest")?,
-        )?;
+            )
+            .await
+            .with_context(|| format!("cannot play the tidal track {track_id}"))
+        };
+        let manifest = |answer: &Value| -> Result<Manifest> {
+            if wire::text(answer, "assetPresentation") == Some("PREVIEW") {
+                bail!("the tidal plan only plays a preview of {track_id}");
+            }
+            let mime = wire::text(answer, "manifestMimeType").unwrap_or_default();
+            Manifest::read(
+                mime,
+                wire::text(answer, "manifest").context("tidal sent no manifest")?,
+            )
+        };
+        let (answer, track) = tokio::join!(info(QUALITY), self.get(&track_path, &[]));
+        let mut answer = answer?;
+        let manifest = match manifest(&answer) {
+            Ok(manifest) => manifest,
+            Err(error) if wire::text(&answer, "assetPresentation") == Some("PREVIEW") => {
+                return Err(error);
+            }
+            Err(error) => {
+                log::info!(
+                    "tidal: {track_id} cannot play at {QUALITY}, asking for {FALLBACK_QUALITY}: {error:#}"
+                );
+                answer = info(FALLBACK_QUALITY).await?;
+                manifest(&answer).with_context(|| {
+                    format!("the tidal track {track_id} has no stream sonora can play")
+                })?
+            }
+        };
         let granted = wire::text(&answer, "audioQuality").unwrap_or("an unknown quality");
         let quality = match (
             wire::number(&answer, "bitDepth"),

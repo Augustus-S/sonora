@@ -20,6 +20,10 @@ const BTS: &str = "application/vnd.tidal.bts";
 /// The manifest type of a track served as DASH segments.
 const DASH: &str = "application/dash+xml";
 
+/// The codec names Dolby Atmos and Sony 360 Reality Audio arrive under, which no decoder here
+/// plays.
+const SPATIAL: &[&str] = &["ec-3", "eac3", "ac-3", "ac3", "ac-4", "ac4", "mha1", "mhm1"];
+
 /// The most segments one track may expand to. A long track is a few hundred, so this only
 /// bounds what a wrong `r` or `duration` attribute can cost.
 const SEGMENT_CEILING: usize = 20_000;
@@ -63,8 +67,18 @@ struct Bts {
 
 impl Manifest {
     /// Reads the manifest a playback answer carries, given its declared type and its base64
-    /// body. Refuses an encrypted track rather than handing ciphertext to a decoder.
+    /// body. Refuses an encrypted track rather than handing ciphertext to a decoder, and a
+    /// spatial mix no decoder here can play.
     pub fn read(mime: &str, encoded: &str) -> Result<Self> {
+        let manifest = Self::parse(mime, encoded)?;
+        let codec = manifest.codec().to_ascii_lowercase();
+        if SPATIAL.iter().any(|spatial| codec.starts_with(spatial)) {
+            bail!("the track is coded as {codec}, which sonora cannot decode");
+        }
+        Ok(manifest)
+    }
+
+    fn parse(mime: &str, encoded: &str) -> Result<Self> {
         let bytes = STANDARD
             .decode(encoded.trim())
             .context("cannot decode the tidal manifest")?;
