@@ -24,8 +24,9 @@ const LOBE: f64 = 2.;
 /// How long a window lasts, about: its length is the power of two nearest above this at the
 /// rate, 16384 samples at 44.1 and 48 kHz. Long enough to part the lowest bands.
 const SPAN: f64 = 0.3;
-/// How many windows overlap at any time: one starts every eighth of a window.
-const OVERLAP: usize = 8;
+/// How many windows overlap at any time: one starts every 32nd of a window, so the spectrum can
+/// move at the sixty reads a second the screen takes.
+const OVERLAP: usize = 32;
 /// How long the average takes to close 63% of the gap to a new level, in seconds of audio.
 const SETTLE: f64 = 0.4;
 /// How many samples wait for the analysis at most: more than a fifth of a second of stereo at

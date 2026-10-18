@@ -12,12 +12,12 @@ use music::{Level, Normalisation, TrackSignal};
 
 use crate::{Equalizer, Outputs, Playback, PlaybackState};
 
-/// How often the spectrum is read while watched. The analysis moves on every eighth of its
-/// window, about 43 ms at 48 kHz, so this is as often as anything new can be drawn.
-const SPECTRUM_TICK: Duration = Duration::from_millis(33);
+/// How often the spectrum is read while watched, about sixty times a second. The analysis moves
+/// on every 32nd of its window, about 11 ms at 48 kHz, so every read has something new.
+const SPECTRUM_TICK: Duration = Duration::from_millis(16);
 /// How many spectrum ticks pass between two reads of the output meter, so it is read about ten
 /// times a second, the rate its level and clip warning are made for.
-const METER_EVERY: u32 = 3;
+const METER_EVERY: u32 = 6;
 /// How many bits of a sample the 32-bit floats Sonora works in carry.
 pub const FLOAT_BITS: u8 = 24;
 
