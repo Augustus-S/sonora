@@ -71,11 +71,11 @@ pub(crate) struct EqualizerView {
     /// from them that changed none of it draws nothing.
     drawn: Option<Drawn>,
     cards: Cards,
-    /// The output meter's reads and the spectrum's, held while the screen is the one shown and
-    /// dropped with it.
-    metering: Option<[Task<()>; 2]>,
-    /// The signal path's reads, held while it is open in advanced mode.
-    path: Option<Task<()>>,
+    /// The spectrum's, the output meter's and the signal path's reads, held while the screen is
+    /// the one shown and dropped with it.
+    watch: Option<Task<()>>,
+    /// Whether the signal path is open, which only advanced mode allows.
+    path: bool,
     /// The file being read in or written out.
     file: Option<Task<()>>,
 }
@@ -134,13 +134,13 @@ impl EqualizerView {
         .detach();
         cx.observe(&settings, |this, settings, cx| {
             if !settings.read(cx).equalizer_advanced() {
-                this.path = None;
+                this.path = false;
             }
             cx.notify();
         })
         .detach();
         cx.observe(&signal, |this, _, cx| {
-            if this.path.is_some() {
+            if this.path {
                 this.redraw(cx);
             }
         })
@@ -189,8 +189,8 @@ impl EqualizerView {
             meter,
             drawn: None,
             cards,
-            metering: None,
-            path: None,
+            watch: None,
+            path: false,
             file: None,
         };
         let fields: Vec<_> = view
@@ -219,8 +219,8 @@ impl EqualizerView {
             port: outputs.sink().and_then(|sink| sink.port.clone()),
             path: self
                 .path
-                .as_ref()
-                .and_then(|_| self.signal.read(cx).path().cloned()),
+                .then(|| self.signal.read(cx).path().cloned())
+                .flatten(),
         }
     }
 
@@ -234,20 +234,14 @@ impl EqualizerView {
         }
     }
 
-    /// Reads the output meter, the playing rate and the spectrum while the screen is the one
+    /// Reads the output meter, the signal path and the spectrum while the screen is the one
     /// shown.
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
-        if visible != self.metering.is_some() {
-            self.metering = visible.then(|| {
-                [
-                    self.equalizer
-                        .update(cx, |equalizer, cx| equalizer.watch_overload(cx)),
-                    self.signal.update(cx, |signal, cx| signal.watch(cx)),
-                ]
-            });
+        if visible != self.watch.is_some() {
+            self.watch = visible.then(|| self.signal.update(cx, |signal, cx| signal.watch(cx)));
         }
         if !visible {
-            self.path = None;
+            self.path = false;
         }
     }
 

@@ -15,10 +15,10 @@ use super::{EqualizerView, blurb};
 const BULLET: &str = " · ";
 
 impl EqualizerView {
-    /// The signal path's card, with the button that opens and closes it. The stages are read
-    /// and shown only while it is open.
+    /// The signal path's card, with the button that opens and closes it. The stages are shown
+    /// only while it is open.
     pub(super) fn signal_path(&self, cx: &mut Context<Self>) -> AnyElement {
-        let open = self.path.is_some();
+        let open = self.path;
         let toggle = Button::new("equalizer-signal-path")
             .small()
             .outline()
@@ -40,19 +40,18 @@ impl EqualizerView {
             .into_any_element()
     }
 
-    /// Reads the signal path while it is open, and stops when it closes.
+    /// Opens or closes the signal path.
     fn toggle_path(&mut self, cx: &mut Context<Self>) {
-        self.path = match self.path.take() {
-            Some(_) => None,
-            None => Some(self.signal.update(cx, |signal, cx| signal.watch_path(cx))),
-        };
+        self.path = !self.path;
         cx.notify();
     }
 
     /// What happens to the sound from the track to the device, stage by stage, and whether
     /// what leaves Sonora is the decoded track bit for bit. Nothing while the path is closed.
     fn path_stages(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.path.as_ref()?;
+        if !self.path {
+            return None;
+        }
         let theme = *cx.theme();
         let Some(path) = self.signal.read(cx).path().cloned() else {
             return Some(

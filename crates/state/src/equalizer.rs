@@ -12,8 +12,6 @@ use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, Preset, apo};
 use crate::overload::{OutputLevel, Overload};
 use crate::{AppSettings, BoundOutput, Outputs, Playback, Reloaded};
 
-/// How often the output meter is read while something watches for overload.
-const METER_TICK: Duration = Duration::from_millis(100);
 /// How long after the last glided edit the curve is stored, so a drag or a run of wheel steps
 /// reaches the settings once, when it pauses.
 const GLIDE_STORE: Duration = Duration::from_millis(300);
@@ -236,21 +234,24 @@ impl Equalizer {
         self.output_level.clone()
     }
 
-    /// Reads the output meter for as long as the returned task is held, starting from no
-    /// overload.
-    pub fn watch_overload(&mut self, cx: &mut Context<Self>) -> Task<()> {
+    /// Starts the level meter and the clip warning afresh, from no overload, for a screen that
+    /// starts watching. `Signal::watch` then reads the meter on its own tick.
+    pub(crate) fn reset_meter(&mut self, cx: &mut Context<Self>) {
         self.overload = Overload::default();
         self.meter.take();
         self.output_level.update(cx, |level, cx| level.reset(cx));
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(METER_TICK).await;
-                if this.update(cx, |this, cx| this.read_meter(cx)).is_err() {
-                    break;
-                }
-            }
-        })
+    }
+
+    /// Reads the meter once, the loudest sample since the read before, feeding the level meter
+    /// and the clip warning. It notifies only when the warning changed.
+    pub(crate) fn read_meter(&mut self, cx: &mut Context<Self>) {
+        let (peak, now) = (self.meter.take(), Instant::now());
+        self.output_level
+            .update(cx, |level, cx| level.observe(peak, now, cx));
+        if self.overload.observe(peak, now) {
+            cx.notify();
+        }
     }
 
     /// Lowers the preamp by the overload and a margin, made manual, so what overloaded fits.
@@ -369,17 +370,6 @@ impl Equalizer {
     /// The playing curve as an Equalizer APO text.
     pub fn export(&self) -> String {
         apo::export(self.writer.curve())
-    }
-
-    /// Reads the meter once, feeding the level meter and the clip warning, and notifies only
-    /// when the warning changed.
-    fn read_meter(&mut self, cx: &mut Context<Self>) {
-        let (peak, now) = (self.meter.take(), Instant::now());
-        self.output_level
-            .update(cx, |level, cx| level.observe(peak, now, cx));
-        if self.overload.observe(peak, now) {
-            cx.notify();
-        }
     }
 
     fn replace_curve(&mut self, curve: Curve, cx: &mut Context<Self>) {

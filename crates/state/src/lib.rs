@@ -304,7 +304,7 @@ pub fn init(
     let usage = cx.new(|cx| Usage::new(session.clone(), database, io.clone(), cx));
     let pins = cx.new(|cx| Pins::new(settings.clone(), library.clone(), session.clone(), cx));
     let potoken = potoken::attach(cx);
-    let signal = cx.new(|_| Signal::new(playback.clone(), outputs.clone(), equalizer.clone()));
+    let signal = cx.new(|cx| Signal::new(playback.clone(), outputs.clone(), equalizer.clone(), cx));
     let wake = cx.new(|cx| Wake::new(settings.clone(), playback.clone(), io.clone(), cx));
     discord::attach(
         playback.clone(),
