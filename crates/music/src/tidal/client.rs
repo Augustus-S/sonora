@@ -66,6 +66,9 @@ const SIMILAR_RELEASES: usize = 2;
 /// Tidal caught up. Three runs wait three seconds at most.
 const EDIT_ATTEMPTS: u32 = 3;
 const EDIT_SETTLE: Duration = Duration::from_secs(1);
+/// How many tracks one write adds to a playlist, so a long addition goes in a few pieces
+/// rather than one request Tidal may refuse.
+const ADD_CHUNK: usize = 100;
 
 /// How many artist lookups run at once, for portraits and for an album's recommendations.
 const LOOKUPS: usize = 4;
@@ -1154,19 +1157,30 @@ impl MusicApi for TidalClient {
     }
 
     async fn add_track_to_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
+        self.add_tracks_to_playlist(playlist_id, &[track_id.to_owned()])
+            .await
+    }
+
+    /// Adds the tracks in one write for each `ADD_CHUNK` of them. A chunk that fails stops the
+    /// rest, and the chunks before it stay in.
+    async fn add_tracks_to_playlist(&self, playlist_id: &str, track_ids: &[String]) -> Result<()> {
         let path = format!("/playlists/{}/items", escape::component(playlist_id));
-        let form = [
-            ("trackIds", track_id),
-            ("onDupes", "ADD"),
-            ("onArtifactNotFound", "SKIP"),
-        ];
-        self.edit_playlist(|| async {
-            let etag = self.etag(playlist_id).await?;
-            self.send(Method::POST, &path, Some(&form), Some(&etag))
-                .await
-        })
-        .await
-        .context("cannot add the track to the playlist")
+        for chunk in track_ids.chunks(ADD_CHUNK) {
+            let joined = chunk.join(",");
+            let form = [
+                ("trackIds", joined.as_str()),
+                ("onDupes", "ADD"),
+                ("onArtifactNotFound", "SKIP"),
+            ];
+            self.edit_playlist(|| async {
+                let etag = self.etag(playlist_id).await?;
+                self.send(Method::POST, &path, Some(&form), Some(&etag))
+                    .await
+            })
+            .await
+            .context("cannot add the tracks to the playlist")?;
+        }
+        Ok(())
     }
 
     async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
