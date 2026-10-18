@@ -1589,15 +1589,17 @@ impl AppSettings {
         }
         self.schedule_save(cx);
     }
+
     /// Adds a profile after the others and makes it the one that plays. Its name is `name`
-    /// trimmed, or the Default label when that is empty, numbered when another profile shows
-    /// it already.
+    /// trimmed, numbered when another profile shows it already. An empty name stays empty so
+    /// the label is read at render, unless a profile with no name exists, which keeps that one
+    /// the only one presets load into.
     pub fn add_equalizer_profile(&mut self, name: &str, curve: &Curve, cx: &mut Context<Self>) {
-        let name = match name.trim() {
-            "" => equalizer_profile_label(""),
-            name => SharedString::from(name.to_owned()),
+        let name = match (name.trim(), self.equalizer_scratch()) {
+            ("", None) => String::new(),
+            ("", Some(_)) => self.free_profile_name(&equalizer_profile_label(""), None),
+            (name, _) => self.free_profile_name(name, None),
         };
-        let name = self.free_profile_name(&name, None);
         let values = &mut self.values;
         values.equalizer_profile = values.equalizer_profiles.len();
         values.equalizer_profiles.push(Profile {
