@@ -59,6 +59,7 @@ ytmusic.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa.workspace = true
 cpal = { workspace = true, features = ["pipewire", "pulseaudio"] }
+pipewire.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true

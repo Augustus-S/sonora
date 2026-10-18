@@ -4395,6 +4395,7 @@ dependencies = [
  "open",
  "opensubsonic",
  "percent-encoding",
+ "pipewire",
  "protobuf",
  "reqwest 0.13.4",
  "rodio",
