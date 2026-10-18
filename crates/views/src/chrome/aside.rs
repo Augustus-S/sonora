@@ -19,9 +19,9 @@ use state::{
     Shelf, SideTab, Sonora, Whence,
 };
 use ui::{
-    ActiveTheme as _, Button, Card, DraggedPin, Edge, Motion, Motioned as _, Pin, Pinnable as _,
-    Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy, drop_gap, drop_marker,
-    ease_out_cubic, ease_out_expo, eyebrow, faint, mix, snapped, vacant,
+    ActiveTheme as _, Button, Card, DraggedPin, Edge, Motion, Motioned as _, PREFETCH_REACH, Pin,
+    Pinnable as _, Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy, drop_gap, drop_marker,
+    ease_out_cubic, ease_out_expo, eyebrow, faint, mix, prefetch, snapped, vacant,
 };
 
 use crate::chrome::{Chrome, section_label};
@@ -1823,9 +1823,20 @@ impl Aside {
         uniform_list(
             "queue-rows",
             sections.len() + TAIL_ROWS,
-            cx.processor(move |_, range: Range<usize>, _window, cx| {
-                let (revision, slots) = {
+            cx.processor(move |_, range: Range<usize>, window, cx| {
+                let reach = (range.len() as f32 * PREFETCH_REACH).ceil() as usize;
+                let near = (range.start.saturating_sub(reach)..range.start)
+                    .chain(range.end..(range.end + reach).min(sections.len()));
+                let (revision, slots, ahead) = {
                     let queue = queue.read(cx);
+                    let ahead = near
+                        .filter_map(|index| match sections.slot(index) {
+                            Slot::Track(position) => {
+                                track(queue, position).map(|found| (index, position, found))
+                            }
+                            Slot::Header(_) => None,
+                        })
+                        .collect::<Vec<_>>();
                     let slots = range
                         .clone()
                         .map(|index| {
@@ -1837,10 +1848,10 @@ impl Aside {
                             (index, slot, found)
                         })
                         .collect::<Vec<_>>();
-                    (queue.revision(), slots)
+                    (queue.revision(), slots, ahead)
                 };
 
-                slots
+                let rows = slots
                     .into_iter()
                     .map(|(index, slot, found)| match (slot, found) {
                         (None, _) => div().into_any_element(),
@@ -1881,7 +1892,16 @@ impl Aside {
                         }
                         (Some(Slot::Track(_)), None) => div().into_any_element(),
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                for (index, position, found) in ahead {
+                    let look = RowLook {
+                        playing: false,
+                        drop_line: None,
+                    };
+                    let row = Self::row(found, index, position, revision, look, cx);
+                    prefetch(row.into_any_element(), window, cx);
+                }
+                rows
             }),
         )
     }

@@ -7,13 +7,15 @@ use gpui::{
     LayoutId, Pixels, Style, StyleRefinement, Window, div, point, relative, size,
 };
 
+use crate::artwork::{PREFETCH_REACH, prefetch};
 use crate::table::Viewport;
 
 type Draw = Box<dyn Fn(usize, &mut Window, &mut App) -> AnyElement>;
 type Measure = Box<dyn Fn(Pixels, &mut Window, &mut App)>;
 
 /// A run of rows of known heights inside a scrolling region, of which only the ones in view are
-/// built. The element takes the extent of the whole run, so the region scrolls and its
+/// built. Rows within `PREFETCH_REACH` of the view are laid out unseen as well, so their covers
+/// are loading before they scroll in. The element takes the extent of the whole run, so the region scrolls and its
 /// scrollbar measures as if every row were there, and it finds the rows on screen from its own
 /// bounds and the region's clip while it is laid out, so it is never a frame behind the scroll
 /// and needs nothing measured by its caller. `across` turns the run sideways for a rail.
@@ -174,9 +176,18 @@ impl Element for Deck {
         };
         let tops = tops(&self.rows, self.gap);
         let shown = span(&tops, &self.rows, viewport);
+        let reach = viewport.height * PREFETCH_REACH;
+        let near = span(
+            &tops,
+            &self.rows,
+            Viewport {
+                top: viewport.top - reach,
+                height: viewport.height + reach * 2.,
+            },
+        );
 
         let mut built = Vec::with_capacity(shown.len());
-        for index in shown {
+        for index in shown.clone() {
             let (width, height) = match across {
                 true => (self.rows[index], bounds.size.height),
                 false => (bounds.size.width, self.rows[index]),
@@ -202,6 +213,9 @@ impl Element for Deck {
                 };
             element.prepaint_at(origin, window, cx);
             built.push(element);
+        }
+        for index in near.filter(|index| !shown.contains(index)) {
+            prefetch(draw(index, window, cx), window, cx);
         }
         built
     }
