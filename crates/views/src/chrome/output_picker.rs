@@ -12,24 +12,26 @@ use ui::{Menu, MenuItem, Picker, Popovers, Scrollbar, Spinner, SubmenuState, Tex
 const OUTPUT_DEVICES: &str = "output-devices";
 /// How tall the device menu grows before it scrolls.
 const MENU_HEIGHT: Pixels = px(360.);
-/// How wide the device menus are, so a device's detail fits on one line.
-const MENU_WIDTH: Pixels = px(460.);
+/// How wide the device menus are. A longer name is cut short rather than widening the menu.
+const MENU_WIDTH: Pixels = px(320.);
 /// Past this many devices, a card's devices are folded into a submenu, since a card with many
 /// outputs otherwise floods the list.
 const GROUP_AFTER: usize = 10;
 
 /// The output device picker: "System default" first, then every device the system offers, with
-/// a card's devices folded into a submenu once the list is long. Picking goes through
-/// `Outputs`, and the picker is held behind a spinner while a pick is being opened.
+/// a card's devices folded into a submenu once the list is long. A sound server's outputs are
+/// listed flat, and the sound cards' own devices follow in one "Direct to hardware" submenu.
+/// Picking goes through `Outputs`, and the picker is held behind a spinner while a pick is being
+/// opened.
 pub(crate) struct OutputPicker {
     outputs: Entity<Outputs>,
     popovers: Popovers,
     /// Scrolls the device menu once it outgrows `MENU_HEIGHT`.
     scrollbar: Entity<Scrollbar>,
-    /// Each card's submenu, by card name, so a device plugged in while the menu is open does
-    /// not hand one card's submenu to another. Emptied while the menu is shut, so none reopens
+    /// Each submenu, by what it groups, so a device plugged in while the menu is open does not
+    /// hand one card's submenu to another. Emptied while the menu is shut, so none reopens
     /// already open or scrolled.
-    groups: HashMap<String, DeviceGroup>,
+    groups: HashMap<Group, DeviceGroup>,
 }
 
 /// What a card's submenu keeps between frames.
@@ -38,10 +40,19 @@ struct DeviceGroup {
     scrollbar: Entity<Scrollbar>,
 }
 
-/// A row of the device menu: one device by index, or a card's devices by index.
+/// A row of the device menu: one device by index, or a group of devices by index.
 enum DeviceRow {
     Device(usize),
-    Group { card: String, members: Vec<usize> },
+    Group { group: Group, members: Vec<usize> },
+}
+
+/// What a submenu of the device menu holds.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Group {
+    /// One ALSA card's devices, by card name.
+    Card(String),
+    /// The sound cards' own devices, which play past the sound server.
+    Direct,
 }
 
 impl OutputPicker {
@@ -73,14 +84,14 @@ impl Render for OutputPicker {
             true => {
                 let me = cx.entity_id();
                 for row in &rows {
-                    if let DeviceRow::Group { card, .. } = row
-                        && !self.groups.contains_key(card)
+                    if let DeviceRow::Group { group, .. } = row
+                        && !self.groups.contains_key(group)
                     {
-                        let group = DeviceGroup {
+                        let state = DeviceGroup {
                             state: SubmenuState::instant(),
                             scrollbar: cx.new(|_| Scrollbar::inset().watching(me)),
                         };
-                        self.groups.insert(card.clone(), group);
+                        self.groups.insert(group.clone(), state);
                     }
                 }
             }
@@ -104,18 +115,16 @@ impl Render for OutputPicker {
             },
         };
 
-        // the device is only named when the system's default is one of the listed devices, as
-        // it is not on ALSA
-        let follows = match devices.iter().find(|device| device.system) {
-            Some(device) => t!(
-                "settings-output-device-system-current",
-                device = device.name.clone()
-            ),
-            None => t!("settings-output-device-system-follows"),
-        };
+        // the default names the device it plays on, which only a sound server says
+        let current = devices
+            .iter()
+            .find(|device| device.system)
+            .map(|device| device.name.clone());
         let default = MenuItem::new("output-system", t!("settings-output-device-system"))
             .selected(chosen.is_none())
-            .detail(div().text_color(muted).text_size(small).child(follows))
+            .when_some(current, |item, current| {
+                item.detail(div().text_color(muted).text_size(small).child(current))
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.outputs
                     .update(cx, |outputs, cx| outputs.choose(None, cx));
@@ -134,36 +143,56 @@ impl Render for OutputPicker {
                         .update(cx, |outputs, cx| outputs.choose(Some(id), cx));
                 }))
         };
-        let items = rows.into_iter().enumerate().map(|(place, row)| match row {
-            DeviceRow::Device(index) => item(index, devices[index].name.clone()),
-            DeviceRow::Group { card, members } => {
-                let holds_chosen = members
-                    .iter()
-                    .any(|index| chosen == Some(devices[*index].id.as_str()));
-                let Some(group) = self.groups.get(&card) else {
-                    // the menu is shut, so the row is never shown
-                    return MenuItem::new(("output-device-group", place), card);
-                };
-                let menu = Menu::new(("output-device-submenu", place))
-                    .w(MENU_WIDTH)
-                    .max_h(MENU_HEIGHT)
-                    .scrollbar(group.scrollbar.clone())
-                    .items(
-                        members
-                            .into_iter()
-                            .map(|index| item(index, devices[index].label.clone())),
-                    );
-                MenuItem::new(("output-device-group", place), card)
-                    .selected(holds_chosen)
-                    .submenu(menu, group.state.clone())
-            }
-        });
+        let items = rows
+            .into_iter()
+            .enumerate()
+            .flat_map(|(place, row)| match row {
+                DeviceRow::Device(index) => vec![item(index, devices[index].name.clone())],
+                DeviceRow::Group { group, members } => {
+                    let holds_chosen = members
+                        .iter()
+                        .any(|index| chosen == Some(devices[*index].id.as_str()));
+                    let title = match &group {
+                        Group::Card(card) => card.clone().into(),
+                        Group::Direct => t!("settings-output-device-direct"),
+                    };
+                    let Some(state) = self.groups.get(&group) else {
+                        // the menu is shut, so the row is never shown
+                        return vec![MenuItem::new(("output-device-group", place), title)];
+                    };
+                    let direct = group == Group::Direct;
+                    let menu = Menu::new(("output-device-submenu", place))
+                        .w(MENU_WIDTH)
+                        .max_h(MENU_HEIGHT)
+                        .scrollbar(state.scrollbar.clone())
+                        .items(members.into_iter().map(|index| {
+                            let device = &devices[index];
+                            let label = match direct {
+                                true => device.name.clone(),
+                                false => device.label.clone(),
+                            };
+                            item(index, label)
+                        }));
+                    let row = MenuItem::new(("output-device-group", place), title)
+                        .selected(holds_chosen)
+                        .submenu(menu, state.state.clone());
+                    match direct {
+                        true => vec![
+                            MenuItem::separator(("output-device-direct-rule", place)),
+                            row,
+                        ],
+                        false => vec![row],
+                    }
+                }
+            });
         let menu = Menu::new("output-devices-menu")
             .w(MENU_WIDTH)
             .max_h(MENU_HEIGHT)
             .scrollbar(self.scrollbar.clone());
         // a device plugged in since the list was read is only found by asking again
         let picker = Picker::new(OUTPUT_DEVICES, &self.popovers, label)
+            // a long device name is cut short rather than crowding the setting's own label
+            .max_w(Picker::WIDE)
             .on_open(cx.listener(|this, _, _, cx| {
                 this.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
             }))
@@ -181,15 +210,31 @@ impl Render for OutputPicker {
     }
 }
 
-/// Lays the devices out as menu rows, in the order the system lists them. Up to `GROUP_AFTER`
-/// devices each get a row; past that, a card with more than one device becomes a submenu,
-/// placed where its first device was.
+/// Lays the devices out as menu rows, in the order the system lists them, with the sound cards'
+/// own devices last, in one submenu. Up to `GROUP_AFTER` other devices each get a row. Past
+/// that, a card with more than one device becomes a submenu, placed where its first device was.
 fn device_rows(devices: &[DeviceOption]) -> Vec<DeviceRow> {
-    if devices.len() <= GROUP_AFTER {
-        return (0..devices.len()).map(DeviceRow::Device).collect();
+    let (direct, listed): (Vec<usize>, Vec<usize>) =
+        (0..devices.len()).partition(|&index| devices[index].direct);
+    let mut rows = listed_rows(devices, listed);
+    if !direct.is_empty() {
+        rows.push(DeviceRow::Group {
+            group: Group::Direct,
+            members: direct,
+        });
+    }
+    rows
+}
+
+/// The rows of the devices at `listed`, with a card's devices folded together once there are
+/// more than `GROUP_AFTER`.
+fn listed_rows(devices: &[DeviceOption], listed: Vec<usize>) -> Vec<DeviceRow> {
+    if listed.len() <= GROUP_AFTER {
+        return listed.into_iter().map(DeviceRow::Device).collect();
     }
     let mut runs: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
-    for (index, device) in devices.iter().enumerate() {
+    for index in listed {
+        let device = &devices[index];
         let card = device.card.as_deref();
         match runs
             .iter_mut()
@@ -202,7 +247,7 @@ fn device_rows(devices: &[DeviceOption]) -> Vec<DeviceRow> {
     runs.into_iter()
         .flat_map(|(card, members)| match (card, members.len()) {
             (Some(card), 2..) => vec![DeviceRow::Group {
-                card: card.to_owned(),
+                group: Group::Card(card.to_owned()),
                 members,
             }],
             _ => members.into_iter().map(DeviceRow::Device).collect(),

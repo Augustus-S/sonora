@@ -58,10 +58,10 @@ ytmusic.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-core-audio.workspace = true
-objc2-core-foundation.workspace = true
+# TODO: move to cpal's native `pipewire` backend, and drop the trip through pipewire-pulse, once a
+# cpal release sets `node.rate` (upstream commit ec35008, unreleased in 0.18) and CI builds on a
+# distro with libpipewire 0.3.53 or newer.
+cpal = { workspace = true, features = ["pulseaudio"] }
 
 [dev-dependencies]
 env_logger.workspace = true
