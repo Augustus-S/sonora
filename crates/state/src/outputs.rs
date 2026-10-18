@@ -299,16 +299,30 @@ impl Outputs {
             .update(cx, |settings, cx| settings.set_output_device(id, cx));
     }
 
-    /// Reads the system's devices again, as when a settings page comes into view.
+    /// Reads the system's devices again, as when a settings page comes into view. A saved device
+    /// that can never be found again, such as an ALSA device saved before a sound server played,
+    /// is forgotten here, and the system's default plays in its place.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let listed = cx
-            .background_executor()
-            .spawn(async move { output::devices() });
+        let selected = self.selected.clone();
+        let listed = cx.background_executor().spawn(async move {
+            let retired = selected.filter(|id| output::retired(id));
+            (output::devices(), retired)
+        });
         self.listing = Some(cx.spawn(async move |this, cx| {
-            let devices = listed.await;
+            let (devices, retired) = listed.await;
             this.update(cx, |this, cx| {
                 this.listing = None;
                 this.listed = true;
+                if let Some(id) = retired.filter(|id| this.selected.as_ref() == Some(id)) {
+                    log::info!(
+                        "playback: the saved output device {id} is not offered here anymore, \
+                         playing on the system default"
+                    );
+                    this.selected = None;
+                    this.save(None, cx);
+                    output::choose_device(None);
+                    cx.notify();
+                }
                 if this.devices != devices {
                     this.devices = devices;
                     cx.notify();
