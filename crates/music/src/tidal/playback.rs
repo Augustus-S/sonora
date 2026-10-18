@@ -93,6 +93,20 @@ struct Parts {
     renewal: Renewal,
 }
 
+/// A track that is one file, read as one response and asked for again from the first missing
+/// byte when the connection drops. A refused url is renewed the way a segment's is.
+struct Resuming {
+    http: reqwest::Client,
+    url: String,
+    /// The response being read. `None` between a drop and the request that resumes it.
+    response: Option<reqwest::Response>,
+    /// How many bytes have been handed to the stream, which is where a resumed request starts.
+    received: u64,
+    /// The file's length, when the server said.
+    total: Option<u64>,
+    renewal: Renewal,
+}
+
 /// What a download needs to ask Tidal for fresh urls once the signed ones it holds are refused.
 struct Renewal {
     client: TidalClient,
@@ -224,6 +238,116 @@ impl stream::Source for Parts {
     }
 }
 
+impl Resuming {
+    /// Makes the first request, asking again the way a dropped connection would.
+    async fn open(http: reqwest::Client, url: String, renewal: Renewal) -> Result<Self> {
+        let mut file = Self {
+            http,
+            url,
+            response: None,
+            received: 0,
+            total: None,
+            renewal,
+        };
+        file.connect()
+            .await
+            .context("cannot stream the tidal track")?;
+        file.total = file
+            .response
+            .as_ref()
+            .and_then(reqwest::Response::content_length);
+        Ok(file)
+    }
+
+    /// Opens a response from the first byte not yet received. A failed connection or server is
+    /// asked again with a growing wait, and a refused url is renewed first.
+    async fn connect(&mut self) -> Result<()> {
+        let mut backoff = Backoff::new();
+        loop {
+            match self.request().await {
+                Ok(response) => {
+                    self.response = Some(response);
+                    return Ok(());
+                }
+                Err(Failure::Expired(error)) => {
+                    log::debug!("tidal: the file was refused: {error:#}");
+                    self.renew().await?;
+                }
+                Err(Failure::Passing(error)) => backoff.wait(error).await?,
+                Err(Failure::Final(error)) => return Err(error),
+            }
+        }
+    }
+
+    async fn renew(&mut self) -> Result<()> {
+        let Manifest::File { url, .. } = self.renewal.manifest().await? else {
+            bail!("tidal no longer streams the track as one file");
+        };
+        self.url = url;
+        Ok(())
+    }
+
+    /// One request from the first byte not yet received. A resumed request has to be answered
+    /// with exactly the rest of the same file, or the track would splice two files together.
+    async fn request(&self) -> Result<reqwest::Response, Failure> {
+        let mut request = self.http.get(&self.url);
+        if self.received > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={}-", self.received));
+        }
+        let response = Failure::check(request.send().await?)?;
+        if self.received == 0 {
+            return Ok(response);
+        }
+        if response.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(Failure::Final(anyhow!(
+                "the tidal file server cannot resume a download"
+            )));
+        }
+        let lines_up = content_range(&response).is_some_and(|(start, total)| {
+            start == self.received && (self.total.is_none() || total == self.total)
+        });
+        match lines_up {
+            true => Ok(response),
+            false => Err(Failure::Final(anyhow!(
+                "the tidal file server resumed somewhere other than byte {}",
+                self.received
+            ))),
+        }
+    }
+}
+
+impl stream::Source for Resuming {
+    async fn chunk(&mut self) -> Result<Option<Bytes>> {
+        let mut backoff = Backoff::new();
+        loop {
+            let Some(response) = &mut self.response else {
+                self.connect()
+                    .await
+                    .context("cannot resume the tidal track")?;
+                continue;
+            };
+            let error = match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    self.received += chunk.len() as u64;
+                    return Ok(Some(chunk));
+                }
+                Ok(None) => match self.total {
+                    Some(total) if self.received < total => {
+                        anyhow!("the tidal file ended {} bytes early", total - self.received)
+                    }
+                    _ => return Ok(None),
+                },
+                Err(error) => error.into(),
+            };
+            self.response = None;
+            backoff
+                .wait(error)
+                .await
+                .context("cannot stream the tidal track")?;
+        }
+    }
+}
+
 impl Renewal {
     /// A fresh manifest for the same track in the same codec. It fails once `RENEWALS` are
     /// spent, since a refusal that outlasts them is not an expired url.
@@ -338,14 +462,9 @@ impl Tidal {
         };
         let (stream, timeline) = match manifest {
             Manifest::File { url, .. } => {
-                let response = self
-                    .media
-                    .get(&url)
-                    .send()
-                    .await
-                    .and_then(reqwest::Response::error_for_status)
-                    .context("cannot stream the tidal track")?;
-                (Stream::new(response, Long), None)
+                let file = Resuming::open(self.media.clone(), url, renewal).await?;
+                let total = file.total;
+                (Stream::pulling(file, total, Long), None)
             }
             Manifest::Segments {
                 init,
@@ -531,6 +650,19 @@ async fn whole(http: &reqwest::Client, url: &str) -> Result<Bytes, Failure> {
         part.extend_from_slice(&chunk);
     }
     Ok(Bytes::from(part))
+}
+
+/// The first byte and the full length a `Content-Range` header names. The length is `None`
+/// when the server left it as `*`.
+fn content_range(response: &reqwest::Response) -> Option<(u64, Option<u64>)> {
+    let value = response
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)?
+        .to_str()
+        .ok()?;
+    let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
+    let (start, _) = range.split_once('-')?;
+    Some((start.trim().parse().ok()?, total.trim().parse().ok()))
 }
 
 /// The http client a track's bytes come through.
