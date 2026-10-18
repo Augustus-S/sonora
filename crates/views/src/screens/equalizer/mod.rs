@@ -373,7 +373,10 @@ impl EqualizerView {
                 .h(theme.metrics.control_small),
         );
         let on = self.equalizer.read(cx).enabled();
-        let only = self.settings.read(cx).equalizer_profiles().count() < 2;
+        let settings = self.settings.read(cx);
+        let only = settings.equalizer_profiles().count() < 2;
+        // the unnamed profile is where presets load, so it keeps no name and is never removed
+        let built_in = settings.equalizer_scratch() == Some(settings.equalizer_profile());
         let (undo, redo) = self.equalizer.read(cx).history();
         let width = theme.metrics.cover * SOUND_WIDTH;
 
@@ -424,11 +427,12 @@ impl EqualizerView {
                 )
                 .child(
                     action("equalizer-rename", "icons/pencil.svg", "equalizer-rename")
+                        .disabled(built_in)
                         .on_click(cx.listener(|this, _, window, cx| this.open_rename(window, cx))),
                 )
                 .child(
                     action("equalizer-delete", "icons/trash-2.svg", "equalizer-delete")
-                        .disabled(only)
+                        .disabled(only || built_in)
                         .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
                 )
         });
@@ -483,16 +487,25 @@ impl EqualizerView {
                     .on_click(cx.listener(move |this, _, _, cx| this.set_preamp(choice, cx)))
             }),
         );
+        // The automatic level reads beside the picker, in the room the manual field and its unit
+        // take, so switching modes moves nothing.
         let value = match auto {
-            true => measured(
-                div()
-                    .text_right()
-                    .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(figure(resolved, 1)),
-                t!("equalizer-decibels"),
-                cx,
-            ),
+            true => div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_size(theme.text(Text::Small))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(theme.metrics.cover * FIELD)
+                        .pl_3()
+                        .whitespace_nowrap()
+                        .text_color(theme.muted_foreground)
+                        .child(t!("equalizer-decibels-value", db = figure(resolved, 1))),
+                )
+                .child(div().invisible().child(t!("equalizer-decibels")))
+                .into_any_element(),
             false => measured(self.preamp.clone(), t!("equalizer-decibels"), cx),
         };
         let controls = div()

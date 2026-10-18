@@ -709,6 +709,7 @@ equalizer-preamp-detail = Lowers the level before the filters, so a boost has ro
 equalizer-preamp-auto = Automatic
 equalizer-preamp-manual = Manual
 equalizer-decibels = dB
+equalizer-decibels-value = { $db } dB
 equalizer-hertz = Hz
 equalizer-q = Q
 equalizer-octaves = oct
