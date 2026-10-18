@@ -14,10 +14,29 @@ use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
 use crate::{
-    PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player as MusicPlayer,
+    Encoding, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
+    Player as MusicPlayer, Quality,
 };
 
 const TRACK_PREFIX: &str = "spotify:track:";
+/// The levels Spotify serves, best first: Ogg Vorbis at 320, 160 and 96 kbps.
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Vorbis { kbps: 320 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Normal,
+        encoding: Encoding::Vorbis { kbps: 160 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Low,
+        encoding: Encoding::Vorbis { kbps: 96 },
+        up_to: false,
+    },
+];
 /// Position reports that can still come from before a seek or load: one already in the channel
 /// and one for a packet decoded before the player read the command.
 const STALE_POSITIONS: u8 = 2;
@@ -120,7 +139,7 @@ impl Engine {
         let spectrum = Spectrum::new();
 
         let player_config = PlayerConfig {
-            bitrate: Bitrate::Bitrate320,
+            bitrate: bitrate(config.quality),
             normalisation: config.normalisation,
             gapless: config.gapless,
             position_update_interval: Some(config.position_interval),
@@ -307,5 +326,15 @@ fn translate(event: PlayerEvent) -> Option<PlaybackEvent> {
             Some(PlaybackEvent::Unavailable { id: track_id(uri) })
         }
         _ => None,
+    }
+}
+
+/// The bitrate librespot asks for at a level. It steps down by itself when the account is not
+/// allowed that one.
+fn bitrate(quality: Quality) -> Bitrate {
+    match quality.within(QUALITIES) {
+        Quality::HiRes | Quality::Lossless | Quality::High => Bitrate::Bitrate320,
+        Quality::Normal => Bitrate::Bitrate160,
+        Quality::Low => Bitrate::Bitrate96,
     }
 }

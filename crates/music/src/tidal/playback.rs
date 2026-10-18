@@ -15,13 +15,14 @@ use bytes::Bytes;
 use reqwest::StatusCode;
 use rodio::Source as _;
 
+use crate::aac::Aac;
 use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::{self, Reader, Stream};
 use crate::tidal::client::TidalClient;
 use crate::tidal::lock;
 use crate::tidal::manifest::Manifest;
-use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
+use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
 
 /// How long one part keeps being asked for, with the wait between asks doubling from
 /// `FIRST_WAIT` up to `LONGEST_WAIT`. A track is a hundred or so requests, so one that fails
@@ -113,6 +114,8 @@ struct Renewal {
     id: String,
     /// The codec the download started in, which fresh urls have to name too.
     codec: String,
+    /// The level the download was asked for at, which fresh urls are asked for at too.
+    quality: Quality,
     /// How many more times the urls may be renewed.
     left: u32,
 }
@@ -159,6 +162,8 @@ struct Tidal {
     /// The http client the track's bytes come through, which gives up on a stalled request
     /// sooner than the api client does.
     media: reqwest::Client,
+    /// The level every track is asked for at.
+    quality: Quality,
 }
 
 impl Timeline {
@@ -357,7 +362,7 @@ impl Renewal {
         }
         self.left -= 1;
         log::info!("tidal: asking for fresh urls for {}", self.id);
-        let manifest = self.client.playback(&self.id).await?.manifest;
+        let manifest = self.client.playback(&self.id, self.quality).await?.manifest;
         if manifest.codec() != self.codec {
             bail!(
                 "tidal now streams {} as {} rather than {}",
@@ -441,6 +446,7 @@ impl PlaybackFactory for Factory {
             Tidal {
                 client: self.client.clone(),
                 media: self.media.clone(),
+                quality: config.quality,
             },
             config,
         )
@@ -458,6 +464,7 @@ impl Tidal {
             client: self.client.clone(),
             id: id.to_owned(),
             codec: manifest.codec().to_owned(),
+            quality: self.quality,
             left: RENEWALS,
         };
         let (stream, timeline) = match manifest {
@@ -500,10 +507,10 @@ impl Fetch for Tidal {
         "tidal"
     }
 
-    /// Asks for the best quality the account may play and starts the download, waiting only
-    /// for the preroll, and for that no longer than `PRIMING`.
+    /// Asks for the chosen quality, or the best below it the account may play, and starts the
+    /// download, waiting only for the preroll, and for that no longer than `PRIMING`.
     async fn load(&self, id: &str) -> Result<Loaded> {
-        let playback = self.client.playback(id).await?;
+        let playback = self.client.playback(id, self.quality).await?;
         log::info!(
             "tidal: {id} streams as {} {}",
             playback.quality,
@@ -591,6 +598,7 @@ fn open_segments(
     let decoder = decoder(
         id,
         rodio::Decoder::builder()
+            .with_symphonia_decoder::<Aac>()
             .with_data(reader)
             .with_seekable(false),
     )?;
@@ -627,6 +635,7 @@ fn open_file(id: &str, stream: &Stream<Long>, at: Duration) -> Option<(Opened, D
 /// A seekable decoder over the whole of a track that is one file.
 fn file_decoder(id: &str, stream: &Stream<Long>) -> Option<rodio::Decoder<Reader<Long>>> {
     let builder = rodio::Decoder::builder()
+        .with_symphonia_decoder::<Aac>()
         .with_data(stream.reader())
         .with_seekable(true);
     let builder = match stream.total() {

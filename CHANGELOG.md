@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- You can pick a streaming quality for Tidal, Deezer, Spotify, YouTube Music and Apple Music in
+  Settings → Playback → Streaming. Each level says what it streams as. Go as low as 48 kbps to
+  save data, or choose Hi-res on Tidal for 24-bit FLAC. When your plan or a track has nothing at
+  that level, Sonora plays the next one down.
 - With a Subsonic or Navidrome server, you can pick the format and the highest bitrate tracks
   stream at in Settings → Playback → Streaming. MP3, Opus or AAC at 128 kbps uses far less
   data than lossless files on a metered connection.
@@ -43,6 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- With YouTube Music Premium, songs stream at 256 kbps instead of 128 kbps.
 - The Prefer local lyrics switch is gone. Lyrics in a file's own tags now compete with the
   online providers, so synced lyrics found online beat plain ones in the file. Rank Local first
   to have it win when both are equally good.
@@ -59,6 +64,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Low-bitrate HE-AAC files, in your local library or on a Subsonic server, play with their full
+  sound. They used to play muffled, with everything above about 11 kHz missing.
 - When the service you last used cannot sign back in at launch, Sonora switches to another
   service you are connected to, or to guest mode, and tells you, instead of sending you back to
   the sign-in page.

@@ -23,7 +23,9 @@ use i18n::{Language, t};
 use music::drm::Origin;
 use music::equalizer::{self, Preset};
 use music::scrobble::{Link, Secret};
-use music::{AccountChoice, Codec, SignIn, SignInPrompt, Transcode, WritingSystem};
+use music::{
+    AccountChoice, Codec, Encoding, Offer, Quality, SignIn, SignInPrompt, Transcode, WritingSystem,
+};
 use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
     AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io,
@@ -85,6 +87,7 @@ const PACE: &str = "pace";
 const SAVER: &str = "saver";
 const SLEEP: &str = "sleep";
 const EQUALIZER_PRESETS: &str = "equalizer-presets";
+const STREAM_QUALITIES: &str = "stream-qualities";
 const STREAM_FORMATS: &str = "stream-formats";
 const STREAM_BITRATES: &str = "stream-bitrates";
 // the step a dragged band snaps to, in decibels
@@ -183,6 +186,7 @@ enum Slot {
     AdaptiveMenu,
     Normalisation,
     Gapless,
+    StreamQuality,
     StreamFormat,
     StreamBitrate,
     Sleep,
@@ -666,12 +670,16 @@ impl SettingsView {
                 if self.drm.read(cx).shown(cx) {
                     slots.push(Slot::Widevine);
                 }
-                if self.session.read(cx).capabilities().transcode {
-                    slots.extend([
-                        Slot::Title("settings-group-streaming"),
-                        Slot::StreamFormat,
-                        Slot::StreamBitrate,
-                    ]);
+                let capabilities = self.session.read(cx).capabilities();
+                let qualities = !capabilities.qualities.is_empty();
+                if qualities || capabilities.transcode {
+                    slots.push(Slot::Title("settings-group-streaming"));
+                }
+                if qualities {
+                    slots.push(Slot::StreamQuality);
+                }
+                if capabilities.transcode {
+                    slots.extend([Slot::StreamFormat, Slot::StreamBitrate]);
                 }
                 slots.extend([Slot::Title("settings-group-devices"), Slot::OutputDevice]);
                 let outputs = self.outputs.read(cx);
@@ -843,6 +851,10 @@ impl SettingsView {
                 t!("settings-normalisation-detail"),
             ),
             Slot::Gapless => (t!("settings-gapless"), t!("settings-gapless-detail")),
+            Slot::StreamQuality => (
+                t!("settings-stream-quality"),
+                t!("settings-stream-quality-detail"),
+            ),
             Slot::StreamFormat => (
                 t!("settings-stream-format"),
                 t!("settings-stream-format-detail"),
@@ -1088,6 +1100,7 @@ impl SettingsView {
             Slot::AdaptiveMenu => self.adaptive_menu_row(cx).element,
             Slot::Normalisation => self.playback_row(cx).element,
             Slot::Gapless => self.gapless_row(cx).element,
+            Slot::StreamQuality => self.stream_quality_row(cx).element,
             Slot::StreamFormat => self.stream_format_row(cx).element,
             Slot::StreamBitrate => self.stream_bitrate_row(cx).element,
             Slot::Sleep => self.sleep_row(cx).element,
@@ -2373,6 +2386,57 @@ impl SettingsView {
         )
     }
 
+    /// The stream level picker, offering only the levels the signed-in service serves, each with
+    /// what it streams as. A saved level the service lacks shows as the one it plays instead, and
+    /// a service with one level states it without a picker.
+    fn stream_quality_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let offers = self.session.read(cx).capabilities().qualities;
+        let current = self.playback.read(cx).quality().within(offers);
+
+        let picker = Picker::new(
+            STREAM_QUALITIES,
+            &self.popovers,
+            i18n::lookup(quality_key(current), None),
+        )
+        .width(Picker::WIDE)
+        .items(offers.iter().map(|offer| {
+            let quality = offer.quality;
+            MenuItem::new(quality.id(), i18n::lookup(quality_key(quality), None))
+                .selected(quality == current)
+                .detail(
+                    div()
+                        .text_color(muted)
+                        .text_size(small)
+                        .child(encoding_label(offer)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.playback
+                        .update(cx, |playback, cx| playback.set_quality(quality, cx));
+                    cx.notify();
+                }))
+        }));
+
+        // one level is nothing to choose between, so it is stated rather than offered
+        let (detail, control) = match offers {
+            [only] => (
+                t!("settings-stream-quality-fixed-detail"),
+                div()
+                    .text_color(muted)
+                    .text_size(small)
+                    .child(encoding_label(only))
+                    .into_any_element(),
+            ),
+            _ => (
+                t!("settings-stream-quality-detail"),
+                picker.into_any_element(),
+            ),
+        };
+        self.row(t!("settings-stream-quality"), detail, muted, small, control)
+    }
+
     fn stream_format_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -2384,7 +2448,7 @@ impl SettingsView {
             &self.popovers,
             i18n::lookup(codec_key(transcode.codec), None),
         )
-        .width(Picker::NARROW)
+        .width(Picker::WIDE)
         .items(
             std::iter::once(None)
                 .chain(Codec::ALL.map(Some))
@@ -2394,6 +2458,12 @@ impl SettingsView {
                         i18n::lookup(codec_key(codec), None),
                     )
                     .selected(codec == transcode.codec)
+                    .detail(
+                        div()
+                            .text_color(muted)
+                            .text_size(small)
+                            .child(i18n::lookup(codec_detail_key(codec), None)),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.playback.update(cx, |playback, cx| {
                             playback.set_transcode(Transcode { codec, ..transcode }, cx)
@@ -2423,7 +2493,7 @@ impl SettingsView {
             &self.popovers,
             bitrate_label(transcode.bitrate),
         )
-        .width(Picker::NARROW)
+        .width(Picker::REGULAR)
         .items(
             std::iter::once(None)
                 .chain(Transcode::BITRATES.map(Some))
@@ -2431,6 +2501,12 @@ impl SettingsView {
                     let id = bitrate.map_or_else(|| "unlimited".into(), |kbps| kbps.to_string());
                     MenuItem::new(SharedString::from(id), bitrate_label(bitrate))
                         .selected(bitrate == transcode.bitrate)
+                        .detail(
+                            div()
+                                .text_color(muted)
+                                .text_size(small)
+                                .child(bitrate_detail(bitrate)),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.playback.update(cx, |playback, cx| {
                                 playback.set_transcode(
@@ -5262,6 +5338,56 @@ fn sleep_label(sleep: Option<Sleep>) -> SharedString {
 }
 
 /// The Fluent key naming a stream format, where `None` keeps the format the server sends.
+fn quality_key(quality: Quality) -> &'static str {
+    match quality {
+        Quality::HiRes => "settings-stream-quality-hi-res",
+        Quality::Lossless => "settings-stream-quality-lossless",
+        Quality::High => "settings-stream-quality-high",
+        Quality::Normal => "settings-stream-quality-normal",
+        Quality::Low => "settings-stream-quality-low",
+    }
+}
+
+/// What a level streams as, such as "FLAC, up to 24-bit 192 kHz" or "AAC, 320 kbps".
+fn encoding_label(offer: &Offer) -> SharedString {
+    let lossy = |codec: &str, kbps: u32| match offer.up_to {
+        true => t!(
+            "settings-stream-quality-lossy-up-to",
+            codec = codec.to_owned(),
+            kbps = i64::from(kbps)
+        ),
+        false => t!(
+            "settings-stream-quality-lossy",
+            codec = codec.to_owned(),
+            kbps = i64::from(kbps)
+        ),
+    };
+    match offer.encoding {
+        Encoding::Flac { depth, rate } => {
+            // 44100 reads as 44.1 and 192000 as 192
+            let khz = match rate % 1000 {
+                0 => (rate / 1000).to_string(),
+                _ => format!("{:.1}", f64::from(rate) / 1000.0),
+            };
+            match offer.up_to {
+                true => t!(
+                    "settings-stream-quality-flac-up-to",
+                    depth = i64::from(depth),
+                    rate = khz
+                ),
+                false => t!(
+                    "settings-stream-quality-flac",
+                    depth = i64::from(depth),
+                    rate = khz
+                ),
+            }
+        }
+        Encoding::Aac { kbps } => lossy("AAC", kbps),
+        Encoding::Vorbis { kbps } => lossy("Ogg Vorbis", kbps),
+        Encoding::Mp3 { kbps } => lossy("MP3", kbps),
+    }
+}
+
 fn codec_key(codec: Option<Codec>) -> &'static str {
     match codec {
         None => "settings-stream-format-original",
@@ -5271,10 +5397,32 @@ fn codec_key(codec: Option<Codec>) -> &'static str {
     }
 }
 
+/// What choosing a format does, said under it in the picker.
+fn codec_detail_key(codec: Option<Codec>) -> &'static str {
+    match codec {
+        None => "settings-stream-format-original-detail",
+        Some(Codec::Mp3) => "settings-stream-format-mp3-detail",
+        Some(Codec::Opus) => "settings-stream-format-opus-detail",
+        Some(Codec::Aac) => "settings-stream-format-aac-detail",
+    }
+}
+
 fn bitrate_label(bitrate: Option<u32>) -> SharedString {
     match bitrate {
         Some(kbps) => t!("settings-stream-bitrate-value", kbps = i64::from(kbps)),
         None => t!("settings-stream-bitrate-unlimited"),
+    }
+}
+
+/// About how much data an hour at a bitrate ceiling takes, said under it in the picker.
+fn bitrate_detail(bitrate: Option<u32>) -> SharedString {
+    match bitrate {
+        // kilobits a second over an hour, in megabytes
+        Some(kbps) => t!(
+            "settings-stream-bitrate-hourly",
+            megabytes = i64::from(kbps * 3600 / 8 / 1000)
+        ),
+        None => t!("settings-stream-bitrate-unlimited-detail"),
     }
 }
 

@@ -1,3 +1,4 @@
+mod aac;
 pub mod apple;
 pub mod artwork;
 mod audio;
@@ -357,6 +358,86 @@ pub struct PlaybackConfig {
     pub gain: f32,
     pub equalizer: Equalizer,
     pub transcode: Transcode,
+    pub quality: Quality,
+}
+
+/// How good a stream to ask a streaming service for. Each provider lists the levels it serves in
+/// [`Capabilities::qualities`], plays any other level as the nearest of those through
+/// [`Quality::within`], and steps further down by itself when the account or the track has
+/// nothing at that level.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Quality {
+    Low,
+    Normal,
+    High,
+    Lossless,
+    #[default]
+    HiRes,
+}
+
+impl Quality {
+    /// Every level, best first.
+    pub const ALL: [Self; 5] = [
+        Self::HiRes,
+        Self::Lossless,
+        Self::High,
+        Self::Normal,
+        Self::Low,
+    ];
+
+    /// The name settings store the level by.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::HiRes => "hi-res",
+            Self::Lossless => "lossless",
+            Self::High => "high",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|quality| quality.id() == id)
+    }
+
+    /// The level out of `offers` that stands in for this one: the best at or below it, or the
+    /// lowest offered when every one is above it. It is this level itself when `offers` is
+    /// empty.
+    pub fn within(self, offers: &[Offer]) -> Self {
+        let levels = || offers.iter().map(|offer| offer.quality);
+        let below = levels().filter(|level| *level <= self).max();
+        below.or_else(|| levels().min()).unwrap_or(self)
+    }
+}
+
+/// One level a service serves and what it streams at that level, so the listener can choose by
+/// what they will hear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Offer {
+    pub quality: Quality,
+    pub encoding: Encoding,
+    /// The figures are the most a track comes at. Many come lower, such as an album that was
+    /// never mastered in hi-res, or a plan that does not reach that far.
+    pub up_to: bool,
+}
+
+/// What a stream is encoded as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding {
+    /// FLAC at this bit depth and sample rate in hertz.
+    Flac {
+        depth: u8,
+        rate: u32,
+    },
+    Aac {
+        kbps: u32,
+    },
+    Vorbis {
+        kbps: u32,
+    },
+    Mp3 {
+        kbps: u32,
+    },
 }
 
 /// What a server that converts audio on request is asked to send. Only Subsonic honours it, and
@@ -557,6 +638,9 @@ pub struct Capabilities {
     pub pins: bool,
     /// The server converts tracks on request, as [`Transcode`] asks.
     pub transcode: bool,
+    /// The stream levels the service serves, best first. Empty when there is nothing to choose
+    /// between, so the setting stays hidden.
+    pub qualities: &'static [Offer],
 }
 
 impl Capabilities {
@@ -569,6 +653,7 @@ impl Capabilities {
         playcounts: true,
         pins: false,
         transcode: false,
+        qualities: &[],
     };
 
     /// Nothing beyond listing and playing.
@@ -578,6 +663,7 @@ impl Capabilities {
         playcounts: false,
         pins: false,
         transcode: false,
+        qualities: &[],
     };
 }
 

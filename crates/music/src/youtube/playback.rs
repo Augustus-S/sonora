@@ -14,12 +14,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ytmusic::{AudioStream, YtMusic};
 
+use crate::aac::Aac;
 use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::{PREROLL, Plain, Reader, Source, Stream};
 use crate::trim::{self, Trim};
 use crate::youtube::segments::Segments;
-use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
+use crate::{Encoding, Offer, PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
 
 /// How long the stream metadata, and then the preroll, may each take before the attempt is
 /// given up. The stream host has no timeout of its own, so a connection it dropped halfway
@@ -29,6 +30,26 @@ const PATIENCE: Duration = Duration::from_secs(15);
 const ATTEMPTS: u32 = 2;
 /// The level the stream host measures `loudnessDb` against, in LUFS.
 const REFERENCE_LUFS: f32 = -14.0;
+/// The levels YouTube Music serves, best first. High is the best AAC stream there is, 256 kbps
+/// for a Premium account and 128 kbps otherwise, normal is the 128 kbps one and low the 48 kbps
+/// HE-AAC one.
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Aac { kbps: 256 },
+        up_to: true,
+    },
+    Offer {
+        quality: Quality::Normal,
+        encoding: Encoding::Aac { kbps: 128 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Low,
+        encoding: Encoding::Aac { kbps: 48 },
+        up_to: false,
+    },
+];
 
 /// A track arriving, with what the stream host said about its length and loudness and what its
 /// header says about where the music is.
@@ -59,6 +80,7 @@ impl PlaybackFactory for Factory {
         engine::start(
             YouTube {
                 api: self.api.clone(),
+                ceiling: ceiling(config.quality),
             },
             config,
         )
@@ -67,6 +89,8 @@ impl PlaybackFactory for Factory {
 
 struct YouTube {
     api: Arc<YtMusic>,
+    /// The highest bitrate a stream is chosen at, in bits per second, or `None` for the best.
+    ceiling: Option<u32>,
 }
 
 impl Source for AudioStream {
@@ -90,7 +114,7 @@ impl Fetch for YouTube {
     async fn load(&self, id: &str) -> Result<Loaded> {
         let mut attempt = 1;
         loop {
-            match attempt_open(&self.api, id).await {
+            match attempt_open(&self.api, id, self.ceiling).await {
                 Err(error) if attempt < ATTEMPTS && error.is::<tokio::time::error::Elapsed>() => {
                     log::warn!("playback: {id} stalled, trying again: {error:#}");
                     attempt += 1;
@@ -146,6 +170,7 @@ impl Fetch for YouTube {
             None => loaded.stream.reader(),
         };
         let decoder = match rodio::Decoder::builder()
+            .with_symphonia_decoder::<Aac>()
             .with_data(reader)
             .with_seekable(false)
             .build()
@@ -167,9 +192,9 @@ impl Fetch for YouTube {
 }
 
 /// Opens the stream and waits for the preroll, each under its own deadline.
-async fn attempt_open(api: &Arc<YtMusic>, id: &str) -> Result<Loaded> {
+async fn attempt_open(api: &Arc<YtMusic>, id: &str, ceiling: Option<u32>) -> Result<Loaded> {
     let started = Instant::now();
-    let (format, audio) = tokio::time::timeout(PATIENCE, api.open_audio(id))
+    let (format, audio) = tokio::time::timeout(PATIENCE, api.open_audio_within(id, ceiling))
         .await
         .context("stream metadata timed out")??;
     let total = audio.total();
@@ -207,4 +232,14 @@ async fn attempt_open(api: &Arc<YtMusic>, id: &str) -> Result<Loaded> {
         loudness_db: format.loudness_db,
         duration: format.duration,
     })
+}
+
+/// The bitrate ceiling a level stands for, in bits per second. Each sits between two streams,
+/// since the bitrate YouTube reports runs a little above the nominal one.
+fn ceiling(quality: Quality) -> Option<u32> {
+    match quality.within(QUALITIES) {
+        Quality::HiRes | Quality::Lossless | Quality::High => None,
+        Quality::Normal => Some(160_000),
+        Quality::Low => Some(64_000),
+    }
 }
