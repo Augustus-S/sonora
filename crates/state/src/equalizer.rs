@@ -136,7 +136,7 @@ impl Equalizer {
         }
     }
 
-    /// Starts following the output `outputs` settles on, and the volume of `playback`, which
+    /// Starts following the output `outputs` plays on, and the volume of `playback`, which
     /// takes the clip warning down when it changes.
     pub(crate) fn follow(
         &mut self,
@@ -155,11 +155,8 @@ impl Equalizer {
             }));
         self._subscriptions
             .push(cx.observe(outputs, |this, outputs, cx| {
-                let settled = outputs
-                    .read(cx)
-                    .settled_binding_key()
-                    .map(|output| output.id.clone());
-                if let Some(id) = settled {
+                let playing = outputs.read(cx).binding_key().map(|output| output.id);
+                if let Some(id) = playing {
                     this.follow_output(id, cx);
                 }
             }));

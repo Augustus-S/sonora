@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, SharedString, div, svg};
 use i18n::t;
-use music::output::OutputId;
+use music::output::{self, DeviceOption, OutputId, Sink};
 use state::{DeviceRule, RuleDevice};
 use ui::{ActiveTheme as _, Button, MenuItem, Picker, Separator, Text};
 
@@ -250,38 +250,23 @@ impl EqualizerView {
         cx.notify();
     }
 
-    /// Every device a rule can be added for, each once: the output playing now, then the sound
-    /// server's outputs, or the system's devices where no server answers, then the devices that
-    /// have a rule, and last every other device.
+    /// Every device a rule can be added for, each once: the output playing now, then the devices
+    /// the output picker lists, a sound server's sink once for each of its ports, then the devices
+    /// that have a rule, and last every other device.
     fn offered(&self, cx: &App) -> Vec<Offered> {
         let outputs = self.outputs.read(cx);
         let current = outputs.binding_key().map(|output| OutputId {
             name: output_name(
                 &output.name,
-                outputs.sink().and_then(|sink| sink.port.as_deref()),
+                outputs
+                    .playing_sink()
+                    .and_then(Sink::shown_port)
+                    .map(|port| port.name.as_str()),
             )
             .into(),
             id: output.id,
         });
-        let served = outputs.server_outputs().iter().map(|offer| {
-            let name = output_name(&offer.output.name, offer.port.as_deref());
-            let output = OutputId {
-                id: offer.output.id.clone(),
-                name: name.into(),
-            };
-            (output, offer.available)
-        });
-        let devices = outputs
-            .devices()
-            .iter()
-            .filter(|_| outputs.server_outputs().is_empty())
-            .map(|device| {
-                let output = OutputId {
-                    id: device.id.clone(),
-                    name: device.name.clone(),
-                };
-                (output, true)
-            });
+        let devices = outputs.devices().iter().flat_map(device_outputs);
         let ruled = self
             .settings
             .read(cx)
@@ -297,7 +282,6 @@ impl EqualizerView {
         for (output, connected) in current
             .map(|output| (output, true))
             .into_iter()
-            .chain(served)
             .chain(devices)
             .chain(ruled)
         {
@@ -341,4 +325,28 @@ fn output_name(name: &str, port: Option<&str>) -> SharedString {
         ),
         None => name.to_owned().into(),
     }
+}
+
+/// The outputs a listed device offers rules for, each with whether it is connected: one for each
+/// port of a sound server's sink, named with the port when there are several, else the device.
+fn device_outputs(device: &DeviceOption) -> Vec<(OutputId, bool)> {
+    let Some(sink) = device.sink.as_ref().filter(|sink| !sink.ports.is_empty()) else {
+        let output = OutputId {
+            id: device.id.clone(),
+            name: device.name.clone(),
+        };
+        return vec![(output, true)];
+    };
+    let several = sink.ports.len() > 1;
+    sink.ports
+        .iter()
+        .map(|port| {
+            let shown = several.then_some(port.name.as_str());
+            let output = OutputId {
+                id: output::output_key(&device.id, Some(port)),
+                name: output_name(&device.name, shown).into(),
+            };
+            (output, port.available)
+        })
+        .collect()
 }

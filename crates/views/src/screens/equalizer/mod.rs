@@ -5,7 +5,7 @@ use gpui::{
 };
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
-use music::output::{DeviceOption, OutputId, ServerOutput};
+use music::output::{DeviceOption, OutputId, Port};
 use state::{
     AppSettings, Equalizer, Outputs, RuleDevice, Signal, Sonora, Sound, equalizer_profile_label,
 };
@@ -97,9 +97,8 @@ struct Drawn {
     history: (bool, bool),
     preamp: f64,
     output: Option<OutputId>,
-    port: Option<String>,
+    port: Option<Port>,
     /// What the device rules' menu offers.
-    server_outputs: Vec<ServerOutput>,
     devices: Vec<DeviceOption>,
 }
 
@@ -181,8 +180,9 @@ impl EqualizerView {
             history: equalizer.history(),
             preamp: equalizer.preamp_db(),
             output: outputs.binding_key(),
-            port: outputs.sink().and_then(|sink| sink.port.clone()),
-            server_outputs: outputs.server_outputs().to_vec(),
+            port: outputs
+                .playing_sink()
+                .and_then(|sink| sink.shown_port().cloned()),
             devices: outputs.devices().to_vec(),
         }
     }

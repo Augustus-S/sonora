@@ -20,8 +20,6 @@ mod output_alsa;
 #[cfg(target_os = "linux")]
 mod output_host;
 mod output_rate;
-#[cfg(target_os = "linux")]
-mod output_server;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +47,7 @@ const BUFFER_FRAMES: u32 = 1024;
 const BUFFERS: [u32; 6] = [128, 256, 512, 1024, 2048, 4096];
 
 /// How often an open stream checks that its device is still the one `resolve_device` names and
-/// still runs at the stream's rate.
+/// still runs at the stream's rate, and reads its sink again.
 const DEVICE_POLL: Duration = Duration::from_millis(500);
 
 /// The device stream every output in the process mixes into.
@@ -62,8 +60,8 @@ static DEVICE_OPEN: Mutex<()> = Mutex::new(());
 /// Which device was chosen in settings, and which devices would not open.
 static DEVICE_SELECTION: Mutex<DeviceSelection> = Mutex::new(DeviceSelection::new());
 
-/// Triggers watchers whenever a stream opens or closes, so a settings page can read
-/// `active_device_info` again.
+/// Triggers watchers whenever a stream opens or closes, or the sound server says something new of
+/// the sink it plays on, so a settings page can read `active_device_info` again.
 static DEVICE_CHANGES: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::Sender::new(()));
 
 /// An output device the system offers.
@@ -95,43 +93,40 @@ pub struct DeviceOption {
     /// output. Nothing else can play on the card while Sonora holds it, and it does not open
     /// while the server does.
     pub direct: bool,
+
+    /// What the sound server says of the sink, for one of its own outputs.
+    pub sink: Option<Sink>,
 }
 
-/// An output as equalizer profiles are bound to it, whether a sound server's sink or a device:
-/// its stable id, and its name when it was seen, so a binding to an output that is not
-/// connected can still be shown.
+/// An output as device rules know it: its key, from `output_key`, and its name when it was seen,
+/// so a rule for an output that is not connected can still be shown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputId {
     pub id: String,
     pub name: String,
 }
 
-/// One port of a sound server's sink, as the equalizer's device rules offer it. It is keyed
-/// the way `Sink::id` keys the sink that plays, so a rule made for it matches once it plays.
+/// One port of a sound server's sink, such as headphones or speakers on one card.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ServerOutput {
-    pub output: OutputId,
-    /// The port's own name, when its sink has more than one.
-    pub port: Option<String>,
+pub struct Port {
+    /// The server's name for it, which `output_key` keys it by.
+    pub id: String,
+    /// What the user knows it as.
+    pub name: String,
     /// Whether something is plugged into it. Only false when the server knows it is not.
     pub available: bool,
 }
 
-/// The sink a sound server plays Sonora's stream on, as the server names it.
+/// What a sound server says of one of its sinks: its ports, the one that plays, and the format
+/// it runs at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sink {
-    /// The sink's name and its active port: stable across restarts and unique on this machine.
-    pub id: String,
-    /// What the user knows it as.
-    pub name: String,
-    /// The port that plays, such as headphones or speakers on one card, when it has more than
-    /// one.
-    pub port: Option<String>,
-    /// The format the server runs it at, when it says.
+    pub ports: Vec<Port>,
+    /// Where the port that plays is in `ports`, or `None` when the sink has no ports.
+    pub active: Option<usize>,
+    /// The format the server runs the sink at, when it says. The server converts a stream at
+    /// another rate to it.
     pub format: Option<Format>,
-    /// The device Sonora's stream was open on when the server said, or `None` for the server's
-    /// default standing in before Sonora has had a stream.
-    pub device: Option<String>,
 }
 
 /// A rate, a channel count and a sample format.
@@ -291,11 +286,16 @@ pub struct DeviceInfo {
     /// The buffers `choose_buffer` can open the device with, in frames, lowest first, `buffer`
     /// among them.
     pub buffers: Vec<u32>,
+
+    /// What the sound server says of the sink the stream plays on, read again while it is open,
+    /// for one of the server's own outputs.
+    pub sink: Option<Sink>,
 }
 
 /// One open stream on an output device, with the mixer the engines' chains play into.
 struct Device {
-    /// Which device it is, and the rate and buffer the stream runs at.
+    /// Which device it is, and the rate and buffer the stream runs at. Its `sink` stays `None`,
+    /// since `sink` holds the one kept up to date.
     info: DeviceInfo,
 
     /// Set by cpal's error callback, on the audio thread, when the stream reports any error but
@@ -309,6 +309,9 @@ struct Device {
 
     /// Where each output on the stream hears that it has to reopen.
     listeners: Mutex<Vec<UnboundedSender<()>>>,
+
+    /// What the sound server last said of the sink, which `info` hands out in place of its own.
+    sink: Mutex<Option<Sink>>,
 
     /// rodio's handle on the open cpal stream, and the mixer every engine's chain is added to.
     /// Dropping it closes the stream, which happens when the last output lets go of this device.
@@ -412,6 +415,7 @@ impl Device {
         let failed = Arc::new(AtomicBool::new(false));
         let (stream, buffer) = open_stream(device, &id, &config, frames, &failed)?;
         let buffers = buffers(&config, buffer);
+        let sink = read_sink(&id);
         Ok(Self {
             info: DeviceInfo {
                 id,
@@ -424,10 +428,12 @@ impl Device {
                 buffer,
                 rates,
                 buffers,
+                sink: None,
             },
             failed,
             stale: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
+            sink: Mutex::new(sink),
             stream,
         })
     }
@@ -481,6 +487,31 @@ impl Device {
     fn add(&self, source: impl Source + Send + 'static) {
         self.stream.mixer().add(source);
     }
+
+    /// Which device it is and what its stream runs at, with what the sound server last said of
+    /// the sink.
+    fn info(&self) -> DeviceInfo {
+        DeviceInfo {
+            sink: self
+                .sink
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+            ..self.info.clone()
+        }
+    }
+
+    /// Asks the sound server about the sink again, returning whether it says something new, such
+    /// as another port playing or another rate.
+    fn follow_sink(&self) -> bool {
+        let now = read_sink(&self.info.id);
+        let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        if *sink == now {
+            return false;
+        }
+        *sink = now;
+        true
+    }
 }
 
 impl Sample {
@@ -496,6 +527,18 @@ impl Sample {
             F64 => Self::Float(64),
             _ => Self::Other,
         }
+    }
+}
+
+impl Sink {
+    /// The port that plays, or `None` when the sink has no ports.
+    pub fn port(&self) -> Option<&Port> {
+        self.ports.get(self.active?)
+    }
+
+    /// The port that plays, only when the sink has more than one, so it is worth naming.
+    pub fn shown_port(&self) -> Option<&Port> {
+        self.port().filter(|_| self.ports.len() > 1)
     }
 }
 
@@ -580,6 +623,7 @@ pub fn devices() -> Vec<DeviceOption> {
                 name,
                 detail,
                 direct: false,
+                sink: None,
             };
             #[cfg(target_os = "linux")]
             let option = output_host::listed(&device, option)?;
@@ -588,6 +632,10 @@ pub fn devices() -> Vec<DeviceOption> {
         .collect();
     #[cfg(target_os = "linux")]
     if output_host::is_server(&host) {
+        let mut sinks = output_host::sinks();
+        for option in &mut options {
+            option.sink = sinks.remove(&option.id);
+        }
         options.extend(output_alsa::direct_devices());
     }
     // ALSA can list one card both by name and by number, which come out as one id
@@ -682,7 +730,7 @@ pub fn active_device_info() -> Option<DeviceInfo> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .upgrade()?;
-    Some(device.info.clone())
+    Some(device.info())
 }
 
 /// The device that last would not open, and why, if one has not opened since.
@@ -690,12 +738,13 @@ pub fn latest_device_failure() -> Option<Failure> {
     DeviceSelection::lock().latest_failure().cloned()
 }
 
-/// A watch that moves on whenever a stream opens or closes, or a device would not open.
+/// A watch that moves on whenever a stream opens or closes, a device would not open, or the sound
+/// server says something new of the sink the stream plays on.
 pub fn watch_device_changes() -> watch::Receiver<()> {
     DEVICE_CHANGES.subscribe()
 }
 
-/// Tells every `watch_device_changes` watcher that the stream opened or closed.
+/// Tells every `watch_device_changes` watcher that the stream or its sink changed.
 fn announce_device_changes() {
     DEVICE_CHANGES.send_modify(|_| {});
 }
@@ -804,18 +853,32 @@ pub fn failing() -> bool {
 
 #[cfg(target_os = "linux")]
 pub use output_alsa::missing_bridge;
-#[cfg(target_os = "linux")]
-pub use output_server::{follow, server_outputs};
 
 #[cfg(not(target_os = "linux"))]
 pub fn missing_bridge() -> Option<Server> {
     None
 }
 
-/// Every port of every sink the sound server offers. There is no sound server to ask here.
+/// The key device rules know an output by: the device's id, and for a sound server's sink the
+/// port that plays after a `#`, so headphones and speakers on one card are two outputs.
+pub fn output_key(device: &str, port: Option<&Port>) -> String {
+    match port {
+        Some(port) => format!("{device}#{}", port.id),
+        None => device.to_owned(),
+    }
+}
+
+/// What the sound server says of the sink behind the device `id`, or `None` for any other device.
+/// It asks the server, so call it off the UI thread.
+#[cfg(target_os = "linux")]
+fn read_sink(id: &str) -> Option<Sink> {
+    output_host::sink(id)
+}
+
+/// What the sound server says of the sink behind the device `id`. There is no sound server here.
 #[cfg(not(target_os = "linux"))]
-pub async fn server_outputs() -> Result<Vec<ServerOutput>> {
-    Ok(Vec::new())
+fn read_sink(_id: &str) -> Option<Sink> {
+    None
 }
 
 /// Forgets the failures of devices that have left the system, so one that comes back is tried
@@ -973,7 +1036,8 @@ fn open_stream(
 }
 
 /// Looks at `device` every `DEVICE_POLL` for as long as it is open, playing or not, and retires
-/// it once it is outdated, so its outputs reopen and a settings page reads the new stream.
+/// it once it is outdated, so its outputs reopen and a settings page reads the new stream. A sink
+/// whose port or rate moved is announced the same way.
 fn spawn_watcher(device: Weak<Device>) {
     let spawned = thread::Builder::new()
         .name("output-watch".to_owned())
@@ -987,6 +1051,9 @@ fn spawn_watcher(device: Weak<Device>) {
                     log::info!("output: {} changed, reopening", device.info.id);
                     device.retire();
                     return;
+                }
+                if device.follow_sink() {
+                    announce_device_changes();
                 }
             }
         });

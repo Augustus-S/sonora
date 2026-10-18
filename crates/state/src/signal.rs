@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{Context, Entity, Subscription, Task};
-use music::output::{DeviceInfo, Sample, Sink};
+use music::output::{DeviceInfo, Sample};
 use music::{Level, Normalisation, TrackSignal};
 
 use crate::{Equalizer, Outputs, Playback, PlaybackState};
@@ -47,11 +47,9 @@ pub struct SignalPath {
     pub level: f32,
     /// The gain the volume applies, 1 at full volume.
     pub volume: f32,
-    /// The stream Sonora plays into, which every track is resampled to. `None` while none is
-    /// open.
+    /// The stream Sonora plays into, which every track is resampled to, with what the sound
+    /// server says of the sink it plays on. `None` while none is open.
     pub stream: Option<DeviceInfo>,
-    /// The sink the sound server plays the stream on, when it says.
-    pub sink: Option<Sink>,
 }
 
 /// What the equalizer does while on.
@@ -150,8 +148,8 @@ impl SignalPath {
     /// The rate the sound server runs the sink at when it differs from the stream's, so it
     /// resamples again. `None` when it is the same or nothing says.
     pub fn server_rate(&self) -> Option<u32> {
-        let sink = self.sink.as_ref()?.format?;
         let stream = self.stream.as_ref()?;
+        let sink = stream.sink.as_ref()?.format?;
         (sink.rate != stream.format.rate).then_some(sink.rate)
     }
 }
@@ -248,7 +246,6 @@ impl Signal {
                 level: playback.volume(),
                 volume: playback.volume_gain(),
                 stream,
-                sink: outputs.sink().cloned(),
             }
         });
         if path != self.path {

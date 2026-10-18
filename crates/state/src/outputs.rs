@@ -2,9 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
-use music::output::{
-    self, DeviceInfo, DeviceOption, Failure, Opened, OutputId, ServerOutput, Sink,
-};
+use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened, OutputId, Sink};
 
 use crate::{AppSettings, Io, Outcome, Playback, Toasts, join};
 
@@ -17,20 +15,12 @@ const SWITCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Perhaps rearchitect SHARED
 const HANDOVER: Duration = Duration::from_secs(2);
 
-/// How long the first reconnect to the sound server waits, doubling up to `RETRY_MOST`. It goes
-/// away on a restart and may not be up yet when Sonora starts with the session.
-#[cfg(target_os = "linux")]
-const RETRY_FIRST: Duration = Duration::from_secs(2);
-#[cfg(target_os = "linux")]
-const RETRY_MOST: Duration = Duration::from_secs(60);
-
-/// The output devices the system offers, the one chosen, what the stream Sonora plays into
-/// runs at, and on Linux the sink the sound server plays it on. The list is read off the main
-/// thread, since that opens devices on some platforms, and both are read again whenever a stream
-/// opens or closes. A device picked here is opened first and only moved onto, and saved, once it
-/// has. One that will not open leaves everything as it was and says so in a toast. The output
-/// the sound plays on settles in `settled_binding_key`, which the equalizer follows to switch to
-/// the profile bound to it.
+/// The output devices the system offers, the one chosen, and what the stream Sonora plays into
+/// runs at. The list is read off the main thread, since that opens devices on some platforms, and
+/// both are read again whenever a stream opens or closes or its sink changes. A device picked
+/// here is opened first and only moved onto, and saved, once it has. One that will not open
+/// leaves everything as it was and says so in a toast. `binding_key` names the output the sound
+/// plays on, which the equalizer follows to play the sound its device rule asks for.
 pub struct Outputs {
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
@@ -55,23 +45,7 @@ pub struct Outputs {
     /// The picked device's stream, kept open until the engines have joined it.
     handover: Option<(Opened, Task<()>)>,
     listing: Option<Task<()>>,
-    /// Every port of every sink the sound server offers, read with `devices`. Empty where no
-    /// server answers.
-    server_outputs: Vec<ServerOutput>,
-    server_listing: Option<Task<()>>,
-    /// The sink the sound server last played Sonora on. It names the output while Sonora plays on
-    /// the device it was seen with, so the server going away and back is not a move.
-    sink: Option<Sink>,
-    /// The output the sound plays on once it settled, kept while none is known so the equalizer
-    /// following it sees no move.
-    settled: Option<OutputId>,
-    /// Whether the sound server answers, so its reports, which wait for a new stream to settle,
-    /// name the output rather than the device watch. Assumed until the server is found missing.
-    #[cfg(target_os = "linux")]
-    server: bool,
     _watch: Task<()>,
-    #[cfg(target_os = "linux")]
-    _follow: Task<()>,
 }
 
 impl Outputs {
@@ -96,7 +70,6 @@ impl Outputs {
                     this.failing = output::failing();
                     this.forget_broken(cx);
                     this.refresh(cx);
-                    this.follow_device(cx);
                     cx.notify();
                 });
                 if updated.is_err() {
@@ -120,15 +93,7 @@ impl Outputs {
             holding: None,
             handover: None,
             listing: None,
-            server_outputs: Vec::new(),
-            server_listing: None,
-            sink: None,
-            settled: None,
-            #[cfg(target_os = "linux")]
-            server: true,
             _watch: watch,
-            #[cfg(target_os = "linux")]
-            _follow: follow(cx),
         };
         outputs.refresh(cx);
         outputs
@@ -136,12 +101,6 @@ impl Outputs {
 
     pub fn devices(&self) -> &[DeviceOption] {
         &self.devices
-    }
-
-    /// Every port of every sink the sound server offers, keyed as `binding_key` keys the one that
-    /// plays. Empty where no server answers.
-    pub fn server_outputs(&self) -> &[ServerOutput] {
-        &self.server_outputs
     }
 
     /// Whether the system's devices have been read yet.
@@ -159,37 +118,34 @@ impl Outputs {
         self.active.as_ref().or(self.known.as_ref())
     }
 
-    /// The key equalizer profiles are bound to for the output the sound plays on: the sound
-    /// server's sink while it plays Sonora, otherwise the device Sonora's stream is open on, or
-    /// last was.
+    /// The key device rules know the output the sound plays on by, from `output::output_key`,
+    /// with the device's name. That is the device Sonora's stream is open on, or last was, and
+    /// before any stream opens the device one would open on, so a rule applies from the start.
     pub fn binding_key(&self) -> Option<OutputId> {
-        let (id, name) = match (self.sink(), self.current()) {
-            (Some(sink), _) => (&sink.id, &sink.name),
-            (None, Some(device)) => (&device.id, &device.name),
-            (None, None) => return None,
-        };
+        let (id, name, sink) = self.playing()?;
         Some(OutputId {
-            id: id.clone(),
-            name: name.clone(),
+            id: output::output_key(id, sink.and_then(Sink::port)),
+            name: name.to_owned(),
         })
     }
 
-    /// The binding key as last settled. Unlike `binding_key` it waits for the sound
-    /// server's report after a stream opens, so the equalizer following it never switches
-    /// profiles on a device that is only named for a moment.
-    pub fn settled_binding_key(&self) -> Option<&OutputId> {
-        self.settled.as_ref()
+    /// What the sound server says of the sink the sound plays on, for one of its own outputs.
+    pub fn playing_sink(&self) -> Option<&Sink> {
+        self.playing()?.2
     }
 
-    /// The sink the sound server plays Sonora on, while Sonora plays on the device it was seen
-    /// with, or before Sonora has played anywhere, the server's default.
-    pub fn sink(&self) -> Option<&Sink> {
-        self.sink.as_ref().filter(|sink| self.plays(sink))
-    }
-
-    /// Whether `sink` was seen with the device Sonora plays on, or last did.
-    fn plays(&self, sink: &Sink) -> bool {
-        sink.device.as_deref() == self.current().map(|device| device.id.as_str())
+    /// The id, name and sink of the device the sound plays on: the open or last open one, else
+    /// the chosen device while it is listed, else the system's default.
+    fn playing(&self) -> Option<(&str, &str, Option<&Sink>)> {
+        if let Some(device) = self.current() {
+            return Some((&device.id, &device.name, device.sink.as_ref()));
+        }
+        let device = self
+            .devices
+            .iter()
+            .find(|device| self.selected.as_deref() == Some(device.id.as_str()))
+            .or_else(|| self.devices.iter().find(|device| device.system))?;
+        Some((&device.id, &device.name, device.sink.as_ref()))
     }
 
     /// Reads the device Sonora plays on again.
@@ -379,76 +335,11 @@ impl Outputs {
             .update(cx, |settings, cx| settings.set_output_device(id, cx));
     }
 
-    /// Settles on the output played on now, notifying when it changed. While nothing names an
-    /// output the last one stays.
-    fn follow_output(&mut self, cx: &mut Context<Self>) {
-        let Some(output) = self.binding_key() else {
-            return;
-        };
-        if self.settled.as_ref() != Some(&output) {
-            self.settled = Some(output);
-            cx.notify();
-        }
-    }
-
-    /// Settles on the output once the stream has opened or closed. Where the sound server
-    /// answers it waits for the server's report instead, since a new stream takes a moment to
-    /// show up there and the device alone would name the output wrongly in between.
-    fn follow_device(&mut self, cx: &mut Context<Self>) {
-        #[cfg(target_os = "linux")]
-        if self.server {
-            return;
-        }
-        self.follow_output(cx);
-    }
-
-    /// Takes in the sink the sound server plays Sonora on, or `None` while it has no stream of
-    /// Sonora's. Either is read against the device open now, which the device watch may not have
-    /// caught up with, and a sink seen with another device than that is left out.
-    #[cfg(target_os = "linux")]
-    fn arrive(&mut self, sink: Option<Sink>, cx: &mut Context<Self>) {
-        self.server = true;
-        self.read_device();
-        if let Some(sink) = sink.filter(|sink| self.plays(sink))
-            && self.sink.as_ref() != Some(&sink)
-        {
-            log::info!("outputs: playing on {} ({})", sink.name, sink.id);
-            self.sink = Some(sink);
-        }
-        cx.notify();
-        self.follow_output(cx);
-    }
-
-    /// Lets the device watch name the output while the sound server does not answer.
-    #[cfg(target_os = "linux")]
-    fn lose(&mut self, cx: &mut Context<Self>) {
-        self.server = false;
-        self.follow_output(cx);
-    }
-
-    /// Reads the system's devices and the sound server's outputs again, as when a settings page
-    /// comes into view. A saved device that can never be found again, such as an ALSA device
-    /// saved before a sound server played, is forgotten here, and the system's default plays in
-    /// its place.
+    /// Reads the system's devices again, with what the sound server says of its sinks, as when a
+    /// settings page comes into view. A saved device that can never be found again, such as an
+    /// ALSA device saved before a sound server played, is forgotten here, and the system's
+    /// default plays in its place.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let asked = Io::global(cx).spawn(output::server_outputs());
-        self.server_listing = Some(cx.spawn(async move |this, cx| {
-            let outputs = match join(asked).await {
-                Ok(outputs) => outputs,
-                Err(error) => {
-                    log::debug!("outputs: cannot list the sound server's outputs: {error:#}");
-                    Vec::new()
-                }
-            };
-            this.update(cx, |this, cx| {
-                this.server_listing = None;
-                if this.server_outputs != outputs {
-                    this.server_outputs = outputs;
-                    cx.notify();
-                }
-            })
-            .ok();
-        }));
         let selected = self.selected.clone();
         let listed = cx.background_executor().spawn(async move {
             let retired = selected.filter(|id| output::retired(id));
@@ -477,34 +368,4 @@ impl Outputs {
             .ok();
         }));
     }
-}
-
-/// Follows the sink the sound server plays Sonora on, on tokio, reconnecting with a growing pause
-/// whenever the server is not there or hangs up.
-#[cfg(target_os = "linux")]
-fn follow(cx: &mut Context<Outputs>) -> Task<()> {
-    let io = Io::global(cx);
-    cx.spawn(async move |this, cx| {
-        let mut pause = RETRY_FIRST;
-        loop {
-            let (sender, mut sinks) = tokio::sync::mpsc::unbounded_channel();
-            let server = io.spawn(output::follow(move |sink| {
-                sender.send(sink).ok();
-            }));
-            while let Some(sink) = sinks.recv().await {
-                pause = RETRY_FIRST;
-                if this.update(cx, |this, cx| this.arrive(sink, cx)).is_err() {
-                    return;
-                }
-            }
-            if let Ok(Err(error)) = server.await {
-                log::debug!("outputs: the sound server is not answering: {error:#}");
-            }
-            if this.update(cx, |this, cx| this.lose(cx)).is_err() {
-                return;
-            }
-            cx.background_executor().timer(pause).await;
-            pause = (pause * 2).min(RETRY_MOST);
-        }
-    })
 }
