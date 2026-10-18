@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::{Album, ArtistRef, Playlist, ReleaseType, SavedArtist, Track, calendar};
+use crate::{Album, ArtistRef, Genre, Playlist, ReleaseType, SavedArtist, Track, calendar};
 
 /// The cover size used in lists, and the one used on a page header.
 pub const COVER: u32 = 320;
@@ -21,6 +21,8 @@ pub const AVATAR: u32 = 210;
 
 /// What a mix id carries in front, to tell it from a playlist uuid.
 pub const MIX: &str = "mix:";
+/// The size a genre image is asked for at. Tidal cuts genre art at 3:2 and has no square cut.
+const GENRE: &str = "640x426";
 
 /// An id, spelled as a number or as a string.
 pub fn id(value: &Value) -> Option<String> {
@@ -199,6 +201,20 @@ pub fn artist(wrapper: &Value) -> Option<SavedArtist> {
 
 pub fn artist_list(page: &Value) -> Vec<SavedArtist> {
     items(page).iter().filter_map(artist).collect()
+}
+
+/// A genre out of `/genres`. Its id is the path Tidal lists the genre's music under.
+pub fn genre(value: &Value) -> Option<Genre> {
+    Some(Genre {
+        id: text(value, "path")?.to_owned(),
+        name: text(value, "name")?.to_owned(),
+        cover: text(value, "image").map(|uuid| {
+            format!(
+                "https://resources.tidal.com/images/{}/{GENRE}.jpg",
+                uuid.replace('-', "/")
+            )
+        }),
+    })
 }
 
 /// A playlist out of a bare or wrapped playlist object. `user_id` decides whether the

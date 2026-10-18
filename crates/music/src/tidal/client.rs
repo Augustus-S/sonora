@@ -21,8 +21,8 @@ use crate::tidal::auth::{self, Credentials};
 use crate::tidal::manifest::Manifest;
 use crate::tidal::{lock, wire};
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, GenreItem,
-    GenreSection, HomeFeed, MediaKind, MusicApi, Page, Pages, Playlist, PlaylistDetail,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Genre, GenreDetail,
+    GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Page, Pages, Playlist, PlaylistDetail,
     SUGGESTIONS, SavedArtist, SignInFailure, SignInProblem, Track, UserProfile, distinct_covers,
     escape,
 };
@@ -73,6 +73,8 @@ const LOOKUPS: usize = 4;
 const RADIO: &str = "100";
 /// How many results a search asks for.
 const SEARCH: &str = "50";
+/// How many playlists, albums and tracks a genre page shows of each.
+const GENRE_SHELF: &str = "50";
 
 /// The longest a call waits out a `429` before asking once more.
 const BACKOFF_CEILING: Duration = Duration::from_secs(10);
@@ -1274,6 +1276,85 @@ impl MusicApi for TidalClient {
         self.home_feed()
             .await
             .context("cannot load the tidal home feed")
+    }
+
+    async fn genres(&self) -> Result<Vec<Genre>> {
+        let answer = self
+            .get("/genres", &[])
+            .await
+            .context("cannot load the tidal genres")?;
+        Ok(answer
+            .as_array()
+            .map(|genres| genres.iter().filter_map(wire::genre).collect())
+            .unwrap_or_default())
+    }
+
+    /// A genre's playlists, albums and tracks, one shelf each, leaving out a shelf Tidal has
+    /// nothing on. The shelves are titled with Fluent keys, which the page translates.
+    async fn genre(&self, genre_id: &str) -> Result<GenreDetail> {
+        let base = format!("/genres/{}", escape::component(genre_id));
+        let shelf = [("limit", GENRE_SHELF)];
+        let (playlists_path, albums_path, tracks_path) = (
+            format!("{base}/playlists"),
+            format!("{base}/albums"),
+            format!("{base}/tracks"),
+        );
+        let (about, playlists, albums, tracks) = tokio::join!(
+            self.get(&base, &[]),
+            self.get(&playlists_path, &shelf),
+            self.get(&albums_path, &shelf),
+            self.get(&tracks_path, &shelf),
+        );
+        let about = about.with_context(|| format!("cannot load the tidal genre {genre_id}"))?;
+        let user_id = self.user_id().await;
+        let shelves = [
+            (
+                "nav-playlists",
+                playlists.map(|page| {
+                    wire::items(&page)
+                        .iter()
+                        .filter_map(|row| wire::playlist(row, &user_id))
+                        .map(GenreItem::Playlist)
+                        .collect::<Vec<_>>()
+                }),
+            ),
+            (
+                "nav-albums",
+                albums.map(|page| {
+                    wire::album_list(&page)
+                        .into_iter()
+                        .map(GenreItem::Album)
+                        .collect()
+                }),
+            ),
+            (
+                "nav-songs",
+                tracks.map(|page| {
+                    wire::track_list(&page)
+                        .into_iter()
+                        .filter(|track| track.playable)
+                        .map(GenreItem::Track)
+                        .collect()
+                }),
+            ),
+        ];
+        let sections = shelves
+            .into_iter()
+            .filter_map(|(title, items)| {
+                // A genre lists only some kinds, and a missing shelf is no reason to fail the page.
+                let items = items
+                    .inspect_err(|error| log::debug!("tidal: genre {genre_id}: {error:#}"))
+                    .ok()?;
+                (!items.is_empty()).then(|| GenreSection {
+                    title: title.to_owned(),
+                    items,
+                })
+            })
+            .collect();
+        Ok(GenreDetail {
+            name: wire::text(&about, "name").unwrap_or(genre_id).to_owned(),
+            sections,
+        })
     }
 }
 
