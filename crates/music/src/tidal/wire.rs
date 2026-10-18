@@ -2,6 +2,7 @@
 //! contract and fields come and go between endpoints, so every read goes through tolerant
 //! helpers rather than derived structs.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -23,6 +24,29 @@ pub const AVATAR: u32 = 210;
 pub const MIX: &str = "mix:";
 /// The size a genre image is asked for at. Tidal cuts genre art at 3:2 and has no square cut.
 const GENRE: &str = "640x426";
+/// The media tag of an album whose master Tidal serves in hi-res.
+const HIRES: &str = "HIRES_LOSSLESS";
+
+/// An album as a catalogue listing reads it, before [`distinct`] folds the masters of one
+/// release into one.
+pub struct Release {
+    album: Album,
+    twin: Twin,
+    hires: bool,
+    popularity: u64,
+}
+
+/// What two masters of one release share. The title, version and artist are compared without
+/// case or spacing.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Twin {
+    title: String,
+    version: String,
+    explicit: bool,
+    main_artist: String,
+    release_date: String,
+    tracks: u64,
+}
 
 /// An id, spelled as a number or as a string.
 pub fn id(value: &Value) -> Option<String> {
@@ -186,6 +210,88 @@ pub fn album(wrapper: &Value) -> Option<Album> {
 
 pub fn album_list(page: &Value) -> Vec<Album> {
     items(page).iter().filter_map(album).collect()
+}
+
+/// A catalogue album with what [`distinct`] needs to tell the masters of one release apart.
+pub fn release(wrapper: &Value) -> Option<Release> {
+    let value = unwrap(wrapper);
+    let album = album(wrapper)?;
+    let main_artist = value
+        .get("artist")
+        .or_else(|| value.get("artists")?.as_array()?.first())
+        .and_then(|artist| {
+            artist
+                .get("id")
+                .and_then(id)
+                .or_else(|| text(artist, "name").map(normalized))
+        })
+        .unwrap_or_default();
+    let twin = Twin {
+        title: normalized(text(value, "title").unwrap_or_default()),
+        version: normalized(text(value, "version").unwrap_or_default()),
+        explicit: value
+            .get("explicit")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        main_artist,
+        release_date: text(value, "releaseDate").unwrap_or_default().to_owned(),
+        tracks: number(value, "numberOfTracks").unwrap_or(0),
+    };
+    let hires = value
+        .get("mediaMetadata")
+        .and_then(|metadata| metadata.get("tags"))
+        .and_then(Value::as_array)
+        .is_some_and(|tags| tags.iter().any(|tag| tag.as_str() == Some(HIRES)));
+    Some(Release {
+        album,
+        twin,
+        hires,
+        popularity: number(value, "popularity").unwrap_or(0),
+    })
+}
+
+pub fn release_list(page: &Value) -> Vec<Release> {
+    items(page).iter().filter_map(release).collect()
+}
+
+/// The releases without the album `album_id` and every twin of it, for a rail beside that
+/// album's own page.
+pub fn without(releases: Vec<Release>, album_id: &str) -> Vec<Release> {
+    let Some(twin) = releases
+        .iter()
+        .find(|release| release.album.id == album_id)
+        .map(|release| release.twin.clone())
+    else {
+        return releases;
+    };
+    releases
+        .into_iter()
+        .filter(|release| release.twin != twin)
+        .collect()
+}
+
+/// The albums of a catalogue listing with each release shown once. Tidal lists some releases
+/// twice under different ids, one master in hi-res and one not, so of two that agree on every
+/// field of [`Twin`] the hi-res one stays, then the more popular. The kept album takes the
+/// place where the first of them appeared.
+pub fn distinct(releases: Vec<Release>) -> Vec<Album> {
+    let mut kept: Vec<Release> = Vec::with_capacity(releases.len());
+    let mut seats: HashMap<Twin, usize> = HashMap::new();
+    for release in releases {
+        match seats.get(&release.twin) {
+            Some(&seat) => {
+                let held = &kept[seat];
+                if (release.hires, release.popularity) > (held.hires, held.popularity) {
+                    kept[seat] = release;
+                }
+            }
+            None => {
+                seats.insert(release.twin.clone(), kept.len());
+                kept.push(release);
+            }
+        }
+    }
+    kept.into_iter().map(|release| release.album).collect()
 }
 
 /// An artist out of a bare or wrapped artist object.
@@ -355,6 +461,14 @@ fn artists_of(value: &Value) -> (String, Vec<ArtistRef>) {
         .collect::<Vec<_>>()
         .join(", ");
     (names, refs)
+}
+
+/// Text lowercased with its runs of whitespace made single spaces, for comparing names.
+fn normalized(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Whether a track is a Dolby Atmos copy with no stereo version behind it. Only a Widevine

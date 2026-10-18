@@ -622,28 +622,34 @@ impl TidalClient {
     }
 
     /// The first `limit` of an artist's releases of one kind, for a rail that only shows a few.
-    /// `filter` is as [`Self::discography`] takes it.
+    /// `filter` is as [`Self::discography`] takes it, and the twins are left for
+    /// [`wire::distinct`] to fold.
     async fn releases(
         &self,
         artist_id: &str,
         filter: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<Album>> {
+    ) -> Result<Vec<wire::Release>> {
         let limit = limit.to_string();
         let mut query = vec![("limit", limit.as_str())];
         query.extend(filter.map(|filter| ("filter", filter)));
         let page = self.get(&releases_path(artist_id), &query).await?;
-        Ok(wire::album_list(&page))
+        Ok(wire::release_list(&page))
     }
 
     /// Every one of an artist's releases of one kind. No `filter` lists albums,
     /// `EPSANDSINGLES` the EPs and singles, and `COMPILATIONS` what Tidal lists as appearing on.
-    async fn discography(&self, artist_id: &str, filter: Option<&str>) -> Result<Vec<Album>> {
+    /// The releases still hold their twins, which [`wire::distinct`] folds.
+    async fn discography(
+        &self,
+        artist_id: &str,
+        filter: Option<&str>,
+    ) -> Result<Vec<wire::Release>> {
         let query: Vec<(&str, &str)> = filter
             .map(|filter| ("filter", filter))
             .into_iter()
             .collect();
-        self.all(&releases_path(artist_id), &query, PAGE, wire::album_list)
+        self.all(&releases_path(artist_id), &query, PAGE, wire::release_list)
             .await
     }
 
@@ -963,7 +969,7 @@ impl MusicApi for TidalClient {
             biography,
             monthly_listeners: None,
             top_tracks: top.map(|page| wire::track_list(&page)).unwrap_or_default(),
-            albums: albums.unwrap_or_default(),
+            albums: wire::distinct(albums.unwrap_or_default()),
         })
     }
 
@@ -978,9 +984,9 @@ impl MusicApi for TidalClient {
         let mut albums = albums.context("cannot load the artist's albums")?;
         albums.extend(singles.unwrap_or_default());
         Ok(ArtistCatalogue {
-            albums,
+            albums: wire::distinct(albums),
             top_tracks: Vec::new(),
-            appears_on: appears_on.unwrap_or_default(),
+            appears_on: wire::distinct(appears_on.unwrap_or_default()),
         })
     }
 
@@ -1267,7 +1273,8 @@ impl MusicApi for TidalClient {
             return Ok(AlbumCatalogue::default());
         };
         let (more_by, similar) = tokio::join!(
-            self.releases(artist_id, None, SUGGESTIONS + 1),
+            // Twice as many as the rail shows, so twins folded away still leave it full.
+            self.releases(artist_id, None, SUGGESTIONS * 2),
             self.similar_artists(artist_id),
         );
         // Nothing read at all is an error rather than an empty rail, so the catalog does not
@@ -1277,7 +1284,7 @@ impl MusicApi for TidalClient {
             (more_by, similar) => (more_by.unwrap_or_default(), similar.unwrap_or_default()),
         };
         let mut seen = HashSet::from([album_id.to_owned()]);
-        let mut liked: Vec<Album> = more_by
+        let mut liked: Vec<Album> = wire::distinct(wire::without(more_by, album_id))
             .into_iter()
             .filter(|album| seen.insert(album.id.clone()))
             .take(SUGGESTIONS)
@@ -1289,7 +1296,15 @@ impl MusicApi for TidalClient {
                 .map(|artist| artist.id.clone())
                 .collect();
             let lent = stream::iter(lenders)
-                .map(|id| async move { self.releases(&id, None, SIMILAR_RELEASES).await })
+                .map(|id| async move {
+                    let releases = self.releases(&id, None, SIMILAR_RELEASES * 2).await?;
+                    anyhow::Ok(
+                        wire::distinct(releases)
+                            .into_iter()
+                            .take(SIMILAR_RELEASES)
+                            .collect::<Vec<_>>(),
+                    )
+                })
                 .buffered(LOOKUPS)
                 .collect::<Vec<_>>()
                 .await;
@@ -1394,7 +1409,7 @@ impl MusicApi for TidalClient {
 
     async fn search_albums(&self, query: &str) -> Result<Vec<Album>> {
         let found = self.search_kind(query, "ALBUMS", "albums").await?;
-        Ok(wire::album_list(&found))
+        Ok(wire::distinct(wire::release_list(&found)))
     }
 
     async fn search_playlists(&self, query: &str) -> Result<Vec<Playlist>> {
@@ -1455,7 +1470,7 @@ impl MusicApi for TidalClient {
             (
                 "nav-albums",
                 albums.map(|page| {
-                    wire::album_list(&page)
+                    wire::distinct(wire::release_list(&page))
                         .into_iter()
                         .map(GenreItem::Album)
                         .collect()
