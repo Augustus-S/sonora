@@ -1918,19 +1918,27 @@ impl Library {
     }
 
     /// Takes tracks out of a playlist and reports it once the provider agrees, with an Undo that
-    /// adds them back at the end, the way every provider adds.
+    /// adds them back at the end, the way every provider adds. Every copy of a named track goes,
+    /// the way the page drops every row of it, so `rows` names a track once for each copy the
+    /// playlist holds and the count and the Undo follow it.
     pub fn remove_tracks_from_playlist(
         &mut self,
         playlist_id: String,
-        track_ids: Vec<String>,
+        rows: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        if track_ids.is_empty() {
+        if rows.is_empty() {
             return;
         }
+        let mut seen = HashSet::new();
+        let track_ids: Vec<String> = rows
+            .iter()
+            .filter(|track| seen.insert(track.as_str()))
+            .cloned()
+            .collect();
         let emptied = playlist_id.clone();
-        let dropped = track_ids.clone();
-        let dropped_count = track_ids.len() as u32;
+        let gone = track_ids.clone();
+        let dropped_count = rows.len() as u32;
         let name = self
             .playlist(&playlist_id)
             .map(|playlist| playlist.name.clone());
@@ -1953,7 +1961,7 @@ impl Library {
                 Ok(())
             },
             move |this, (), cx| {
-                this.raise_rows(&emptied, name, dropped.clone(), cx);
+                this.raise_rows(&emptied, name, rows, cx);
                 this.amend_playlist(
                     &emptied,
                     |playlist| {
@@ -1962,11 +1970,11 @@ impl Library {
                     cx,
                 );
                 if let Some(ids) = this.contents.get_mut(&emptied) {
-                    for track in &dropped {
+                    for track in &gone {
                         ids.remove(track);
                     }
                 }
-                for track in dropped {
+                for track in gone {
                     cx.emit(LibraryEvent::TrackDropped {
                         playlist: emptied.clone(),
                         track,

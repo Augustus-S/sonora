@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui::{Context, Entity, Task};
@@ -277,13 +278,29 @@ impl Detail {
         self.remove_tracks_from_playlist(vec![track_id], cx);
     }
 
+    /// Takes every copy of the named tracks out of the playlist on the page. The library is
+    /// told about each row the page shows of them, so its count and Undo cover every copy.
     pub fn remove_tracks_from_playlist(&mut self, track_ids: Vec<String>, cx: &mut Context<Self>) {
         let Some(playlist_id) = self.id.clone() else {
             log::warn!("detail: cannot remove a track without a playlist");
             return;
         };
+        let named: HashSet<&str> = track_ids.iter().map(String::as_str).collect();
+        let mut rows: Vec<String> = self
+            .tracks
+            .iter()
+            .filter_map(|track| track.id.clone())
+            .filter(|id| named.contains(id.as_str()))
+            .collect();
+        let mut counted: HashSet<String> = rows.iter().cloned().collect();
+        let unseen: Vec<String> = track_ids
+            .iter()
+            .filter(|id| counted.insert((*id).clone()))
+            .cloned()
+            .collect();
+        rows.extend(unseen);
         self.library.update(cx, |library, cx| {
-            library.remove_tracks_from_playlist(playlist_id, track_ids, cx);
+            library.remove_tracks_from_playlist(playlist_id, rows, cx);
         });
     }
 
