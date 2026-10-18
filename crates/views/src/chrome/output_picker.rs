@@ -191,6 +191,8 @@ impl Render for OutputPicker {
             .scrollbar(self.scrollbar.clone());
         // a device plugged in since the list was read is only found by asking again
         let picker = Picker::new(OUTPUT_DEVICES, &self.popovers, label)
+            // a long device name is cut short rather than crowding the setting's own label
+            .max_w(Picker::WIDE)
             .on_open(cx.listener(|this, _, _, cx| {
                 this.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
             }))
