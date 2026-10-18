@@ -9,7 +9,7 @@ use music::output::OutputId;
 use state::{AppSettings, Equalizer, Outputs, Signal, SignalPath, Sonora, equalizer_profile_label};
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
-    Picker, Popovers, Room, Scrollbar, Scroller, Submit, TabBar, Text, heading,
+    Picker, Popovers, Room, Scrollbar, Scroller, Submit, Switch, TabBar, Text, heading,
 };
 
 use crate::chrome::Chrome;
@@ -312,7 +312,6 @@ impl EqualizerView {
     /// The page title and what the screen is for, with the Simple and Advanced switch on the
     /// right. The choice is remembered across launches.
     fn header(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
-        let theme = *cx.theme();
         let mode = |id: &'static str, label: SharedString, choice: bool| {
             Button::new(id)
                 .small()
@@ -336,26 +335,14 @@ impl EqualizerView {
             .items_center()
             .justify_between()
             .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .min_w_0()
-                    .child(heading(t!("settings-equalizer"), cx))
-                    .child(
-                        div()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("equalizer-subtitle")),
-                    ),
-            )
+            .child(heading(t!("settings-equalizer"), cx))
             .child(TabBar::new("equalizer-mode").flex_none().items(modes))
             .into_any_element()
     }
 
-    /// The main card: the one picker for every preset and profile with undo and redo beside it,
-    /// then the response graph with the output meter under it. Advanced mode adds what can be
-    /// done to the playing profile.
+    /// The main card: the one picker for every preset and profile with the on switch, undo and
+    /// redo beside it, then the response graph with the output meter under it. Advanced mode adds
+    /// what can be done to the playing profile.
     fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let graph = self.graph.clone().cached(
             StyleRefinement::default()
@@ -439,14 +426,6 @@ impl EqualizerView {
         });
 
         InfoCard::new(t!("equalizer-sound"))
-            .child(blurb(
-                match on {
-                    true => t!("equalizer-sound-detail"),
-                    false => t!("equalizer-sound-off"),
-                },
-                None,
-                cx,
-            ))
             .child(
                 div()
                     .flex()
@@ -455,6 +434,12 @@ impl EqualizerView {
                     .gap_x_2()
                     .gap_y_3()
                     .child(picker)
+                    .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.equalizer
+                                .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
+                        },
+                    )))
                     .child(history)
                     .children(manage),
             )
