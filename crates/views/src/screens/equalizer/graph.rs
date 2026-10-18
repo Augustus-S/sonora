@@ -32,11 +32,11 @@ const SPECTRUM_SCALE: (f32, f32) = (-90., 0.);
 const GRAPH_TALL: f32 = 2.8;
 const GRAPH_SHORT: f32 = 2.;
 /// The gain axis's half spans in decibels, narrowest first. The axis shows the narrowest one the
-/// curve, the nodes and the preamp fit in, so a gentle preset fills the plot.
-const GAIN_SPANS: [f32; 3] = [12., 18., 24.];
-/// How far past a span the curve may reach and still be shown in it, so a filter at exactly the
-/// span does not tip the axis over on the rounding of its response.
-const SPAN_SLACK: f32 = 0.05;
+/// curve, the nodes and the preamp fit in with `HEADROOM` to spare, so a gentle preset fills the
+/// plot and a dragged node can always go a little further.
+const GAIN_SPANS: [f32; 5] = [6., 9., 12., 18., 24.];
+/// How much room the axis keeps above the furthest reach, in decibels.
+const HEADROOM: f32 = 1.5;
 
 /// The response graph as a view of its own, which the screen lays out at a fixed height. It
 /// owns the ids and the selection of the filters, follows the playing curve, and plays the
@@ -532,11 +532,12 @@ fn reach(curve: &Curve, rate: u32, points: &[ResponsePoint]) -> f32 {
         .fold(0., f32::max)
 }
 
-/// The narrowest of `GAIN_SPANS` that `reach` fits in, or the widest when none does.
+/// The narrowest of `GAIN_SPANS` that `reach` fits in with `HEADROOM` to spare, or the widest
+/// when none does.
 fn fitted_span(reach: f32) -> f32 {
     GAIN_SPANS
         .into_iter()
-        .find(|span| reach <= span + SPAN_SLACK)
+        .find(|span| reach + HEADROOM <= *span)
         .unwrap_or(GAIN_SPANS[GAIN_SPANS.len() - 1])
 }
 
