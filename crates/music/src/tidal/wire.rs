@@ -295,6 +295,7 @@ pub fn mix(value: &Value) -> Option<Playlist> {
         blend: false,
         public: true,
         cover,
+        // A mix's listing carries no count, and only its page says how many tracks it holds.
         track_count: 0,
         modified_at: None,
     })
