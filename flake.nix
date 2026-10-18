@@ -68,7 +68,6 @@
                 fontconfig
                 freetype
                 alsa-lib
-                pipewire
                 dbus
                 sqlite
                 webkitgtk_4_1
@@ -148,7 +147,6 @@
                 (lib.optionals stdenv.hostPlatform.isLinux [
                   makeWrapper
                   mold
-                  rustPlatform.bindgenHook
                 ])
                 (lib.optionals stdenv.hostPlatform.isDarwin [
                   (
@@ -352,7 +350,6 @@
                 fontconfig
                 freetype
                 alsa-lib
-                pipewire
                 dbus
                 sqlite
                 openssl
@@ -378,10 +375,7 @@
                 rustToolchain
                 sccache
               ])
-              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                pkgs.mold
-                pkgs.rustPlatform.bindgenHook
-              ];
+              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.mold ];
 
             buildInputs = runtimeLibraries;
 
