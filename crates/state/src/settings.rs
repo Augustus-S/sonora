@@ -18,10 +18,10 @@ use gpui::{
     App, Bounds, Context, DisplayId, EventEmitter, Pixels, Size, Subscription, Task, Window,
     WindowBounds, point, px, size,
 };
-use music::WritingSystem;
 use music::equalizer::{self, Gains};
 use music::lyrics::LOCAL;
 use music::scrobble::Account;
+use music::{Codec, Transcode, WritingSystem};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -311,6 +311,12 @@ struct Values {
     /// The buffer to ask the output device for, in frames, or `None` for Sonora's own. A device
     /// that does not allow it gets the nearest it does.
     output_buffer: Option<u32>,
+    /// The format a Subsonic server is asked to convert tracks into, by its Subsonic name, or
+    /// `None` to take what the server sends.
+    subsonic_format: Option<String>,
+    /// The highest bitrate a Subsonic server is asked to send, in kilobits per second, or `None`
+    /// for no ceiling.
+    subsonic_bitrate: Option<u32>,
     /// Set once Local has been added to a list saved before it existed, so a user who turns it
     /// off afterwards is not given it back.
     local_lyrics_offered: bool,
@@ -473,6 +479,8 @@ impl Default for Values {
             output_device: None,
             output_rate: None,
             output_buffer: None,
+            subsonic_format: None,
+            subsonic_bitrate: None,
             local_lyrics_offered: false,
             lyrics_provider_priority: lyrics_priority(&[]),
             // Kugou and NetEase, the last two, start switched off.
@@ -853,6 +861,19 @@ impl AppSettings {
 
     pub fn output_buffer(&self) -> Option<u32> {
         self.values.output_buffer
+    }
+
+    /// How a Subsonic server is asked to convert tracks. A format this build does not know reads
+    /// as none.
+    pub fn transcode(&self) -> Transcode {
+        Transcode {
+            codec: self
+                .values
+                .subsonic_format
+                .as_deref()
+                .and_then(Codec::from_id),
+            bitrate: self.values.subsonic_bitrate,
+        }
     }
 
     pub fn lyrics_providers(&self) -> &[String] {
@@ -1302,6 +1323,12 @@ impl AppSettings {
 
     pub fn set_output_buffer(&mut self, frames: Option<u32>, cx: &mut Context<Self>) {
         self.values.output_buffer = frames;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_transcode(&mut self, transcode: Transcode, cx: &mut Context<Self>) {
+        self.values.subsonic_format = transcode.codec.map(|codec| codec.id().to_owned());
+        self.values.subsonic_bitrate = transcode.bitrate;
         self.schedule_save(cx);
     }
 

@@ -68,6 +68,7 @@ impl LocalProvider {
                 radio: false,
                 playcounts: false,
                 pins: false,
+                transcode: false,
             },
         })
     }

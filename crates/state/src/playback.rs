@@ -9,7 +9,7 @@ use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::equalizer::{Equalizer, Gains};
 use music::{
     MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents, PlaybackFactory,
-    Player, Spectrum, Track,
+    Player, Spectrum, Track, Transcode,
 };
 use ui::{Pin, PinKind};
 
@@ -397,6 +397,7 @@ pub struct Playback {
     level: f32,
     normalisation: bool,
     gapless: bool,
+    transcode: Transcode,
     /// Shared with every engine started here, so a change reaches the output without a restart.
     equalizer: Equalizer,
     repeat: Repeat,
@@ -504,6 +505,7 @@ impl Playback {
         let level = settings.read(cx).volume();
         let normalisation = settings.read(cx).normalisation();
         let gapless = settings.read(cx).gapless();
+        let transcode = settings.read(cx).transcode();
         let equalizer = Equalizer::new(
             settings.read(cx).equalizer(),
             &settings.read(cx).equalizer_gains(),
@@ -524,6 +526,7 @@ impl Playback {
             level,
             normalisation,
             gapless,
+            transcode,
             equalizer,
             repeat,
             radio,
@@ -2103,6 +2106,10 @@ impl Playback {
         self.gapless
     }
 
+    pub fn transcode(&self) -> Transcode {
+        self.transcode
+    }
+
     pub fn equalizer(&self) -> bool {
         self.equalizer.enabled()
     }
@@ -2144,6 +2151,18 @@ impl Playback {
         self.gapless = on;
         self.settings
             .update(cx, |settings, cx| settings.set_gapless(on, cx));
+        self.restart_engine(cx);
+    }
+
+    /// Changes how a converting server is asked to send tracks. The streaming engine restarts,
+    /// so the current track reloads in the new format where it was.
+    pub fn set_transcode(&mut self, transcode: Transcode, cx: &mut Context<Self>) {
+        if self.transcode == transcode {
+            return;
+        }
+        self.transcode = transcode;
+        self.settings
+            .update(cx, |settings, cx| settings.set_transcode(transcode, cx));
         self.restart_engine(cx);
     }
 
@@ -2284,6 +2303,7 @@ impl Playback {
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
             equalizer: self.equalizer.clone(),
+            transcode: self.transcode,
         };
         let (engine, events) = playback.start(config);
 
@@ -2306,6 +2326,7 @@ impl Playback {
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
             equalizer: self.equalizer.clone(),
+            transcode: self.transcode,
         };
         let (engine, events) = playback.start(config);
 
