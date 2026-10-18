@@ -848,6 +848,7 @@ toast-open-all-failed = { $count } files could not be opened
 toast-open-some-failed = Some files could not be opened
 toast-keys-refused = Spotify is not granting this account playback keys
 toast-sign-in-to-play = { $name } only streams to a signed-in listener
+toast-restore-failed = { $name } could not sign back in, so Sonora carried on without it
 toast-track-unplayable = { $name } could not be played
 toast-playback-stopped = Playback stopped after several tracks in a row could not be played
 toast-throttled = { $name } is limiting playback for now. Trying again in a moment

@@ -105,6 +105,9 @@ pub struct Session {
     active: Option<usize>,
     awaiting: Option<usize>,
     resume: Option<(usize, UserProfile)>,
+    /// The providers a restore has already given up on, so falling back never comes round to
+    /// one of them again. A sign-in that lands empties it.
+    passed: Vec<usize>,
     error: Option<(usize, Failure)>,
     settings: Entity<AppSettings>,
     client: Option<Arc<dyn MusicApi>>,
@@ -160,6 +163,7 @@ impl Session {
             active,
             awaiting: None,
             resume: None,
+            passed: Vec::new(),
             error: None,
             settings,
             client: None,
@@ -403,35 +407,125 @@ impl Session {
         )
     }
 
+    /// Opens the active provider's stored sign-in. One that cannot be opened hands over to the
+    /// next provider with an account stored and then to a guest session, so the sign-in page
+    /// comes up only when there is nothing at all to carry on with.
     pub fn restore(&mut self, cx: &mut Context<Self>) {
         if self.is_pending() {
             return;
         }
+        self.passed.clear();
         let Some(active) = self.active else {
             self.state = SessionState::SignedOut;
             cx.notify();
             cx.emit(SessionEvent::SignedOut);
             return;
         };
+        self.restore_at(active, cx);
+    }
+
+    fn restore_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.active = Some(index);
         self.state = SessionState::Restoring;
         cx.notify();
 
-        let provider = self.providers[active].clone();
+        let provider = self.providers[index].clone();
         let io = self.io.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
             let restored = join(io.spawn(async move { provider.restore().await })).await;
 
             this.update(cx, |this, cx| match restored {
-                Ok(Some(session)) => this.signed_in(session, active, cx),
-                Ok(None) => {
-                    this.state = SessionState::SignedOut;
-                    cx.notify();
-                    cx.emit(SessionEvent::SignedOut);
+                Ok(Some(session)) => this.signed_in(session, index, cx),
+                Ok(None) => this.fall_back(index, None, cx),
+                // An account that is only out of reach is kept, and the app carries on offline.
+                Err(error) if Failure::new(&error).offline() && this.stored_active() => {
+                    this.failed(&error, cx)
                 }
-                Err(error) => this.failed(&error, cx),
+                Err(error) => this.fall_back(index, Some(&error), cx),
             })
             .ok();
         }));
+    }
+
+    /// Moves past a provider whose stored sign-in did not open, to the next provider with an
+    /// account stored, or failing that to a guest session. The provider keeps its error for the
+    /// settings page, and a toast says it could not sign back in. With nowhere to go the
+    /// session ends the way it always did, on the sign-in page.
+    fn fall_back(&mut self, failed: usize, error: Option<&Error>, cx: &mut Context<Self>) {
+        let provider = self.providers[failed].clone();
+        self.passed.push(failed);
+        let next = self
+            .providers
+            .iter()
+            .enumerate()
+            .find(|(index, provider)| provider.stored() && !self.passed.contains(index))
+            .map(|(index, _)| index);
+        let guest = self
+            .providers
+            .iter()
+            .enumerate()
+            .find(|(index, provider)| {
+                !self.passed.contains(index)
+                    && provider
+                        .sign_in_options()
+                        .iter()
+                        .any(|option| matches!(option, SignIn::Anonymous))
+            })
+            .map(|(_, provider)| provider.slug());
+
+        if next.is_none() && guest.is_none() {
+            match error {
+                Some(error) => self.failed(error, cx),
+                None => {
+                    self.state = SessionState::SignedOut;
+                    cx.notify();
+                    cx.emit(SessionEvent::SignedOut);
+                }
+            }
+            return;
+        }
+
+        match error {
+            Some(error) => {
+                log::warn!(
+                    "session: cannot restore {}, falling back: {error:#}",
+                    provider.name()
+                );
+                self.error = Some((failed, Failure::new(error)));
+                Toasts::with_detail(
+                    Outcome::Failed,
+                    "toast-restore-failed",
+                    Some(provider.name().into()),
+                    format!("{error:#}"),
+                    cx,
+                );
+            }
+            None if provider.stored() => {
+                log::warn!(
+                    "session: {} refused its stored sign-in, falling back",
+                    provider.name()
+                );
+                Toasts::about(Outcome::Failed, "toast-restore-failed", provider.name(), cx);
+            }
+            None => log::debug!(
+                "session: {} has nothing stored, falling back",
+                provider.name()
+            ),
+        }
+        // The failed provider's library goes with it, as it would on the sign-in page.
+        self.client = None;
+        self.catalog = None;
+        self.playback = None;
+        cx.emit(SessionEvent::SignedOut);
+
+        if let Some(index) = next {
+            return self.restore_at(index, cx);
+        }
+        if let Some(slug) = guest {
+            // A sign-in only starts from a settled state, and nothing renders in between.
+            self.state = SessionState::SignedOut;
+            self.start_sign_in(slug, SignIn::Anonymous, SecretInput::Browser, cx);
+        }
     }
 
     pub fn sign_in(&mut self, slug: &str, method: SignIn, cx: &mut Context<Self>) {
@@ -680,7 +774,9 @@ impl Session {
         }
         self.active = Some(index);
         self.awaiting = None;
-        self.error = None;
+        // A provider passed over on the way here keeps its error until it signs in again.
+        self.error = self.error.take().filter(|(failed, _)| *failed != index);
+        self.passed.clear();
         let slug = self.providers[index].slug();
         self.settings.update(cx, |settings, cx| {
             settings.set_provider(slug, cx);

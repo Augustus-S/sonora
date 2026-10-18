@@ -47,6 +47,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- When the service you last used cannot sign back in at launch, Sonora switches to another
+  service you are connected to, or to guest mode, and tells you, instead of sending you back to
+  the sign-in page.
 - The minimize, maximize and close buttons on Windows 10 show their icons again instead of empty
   boxes.
 - On Windows, dragging the title bar, double-clicking it and the maximize button work every time
