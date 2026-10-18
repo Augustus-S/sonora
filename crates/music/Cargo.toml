@@ -62,6 +62,7 @@ alsa.workspace = true
 # cpal release sets `node.rate` (upstream commit ec35008, unreleased in 0.18) and CI builds on a
 # distro with libpipewire 0.3.53 or newer.
 cpal = { workspace = true, features = ["pulseaudio"] }
+pulseaudio.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true

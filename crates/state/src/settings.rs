@@ -5,6 +5,10 @@
 //! `state.sqlite` as [`StateValues`]. [`AppSettings`] holds both and saves each on its own
 //! debounce, so a sidebar drag never rewrites the preferences file.
 
+mod equalizer;
+
+pub use self::equalizer::equalizer_profile_label;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -18,7 +22,6 @@ use gpui::{
     App, Bounds, Context, DisplayId, EventEmitter, Pixels, Size, Subscription, Task, Window,
     WindowBounds, point, px, size,
 };
-use music::equalizer::{self, Gains};
 use music::lyrics::LOCAL;
 use music::scrobble::Account;
 use music::{Codec, Quality, Transcode, WritingSystem};
@@ -30,6 +33,8 @@ use ui::{
     Layout, Look, Mode, Pace, Pin, Rounding, Saver, Sorting, Stillness, ThemeKind, ThemeOverrides,
 };
 
+use self::equalizer::Profile;
+use crate::equalizer::DeviceRule;
 use crate::pins::PinSort;
 use crate::queue::{Resume, gap_target};
 use crate::{Outcome, Repeat, Sonora, Toasts};
@@ -289,9 +294,26 @@ struct Values {
     normalisation: bool,
     gapless: bool,
     equalizer: bool,
-    /// Per band gains in decibels, lowest band first. Kept even while `equalizer` is off, so
-    /// turning it back on restores the curve.
+    /// The ten band gains an older Sonora saved. Read once to seed the profiles when there are
+    /// none, never written back, and read leniently like the keys that replaced it.
+    #[serde(skip_serializing, deserialize_with = "equalizer::read_gains")]
     equalizer_bands: Vec<f32>,
+    /// The stored curves, kept even while `equalizer` is off. `equalizer_profile` picks the one
+    /// that plays. Both read leniently, so a hand-edited mistake never makes the file unreadable.
+    #[serde(deserialize_with = "equalizer::Profile::read_all")]
+    equalizer_profiles: Vec<Profile>,
+    #[serde(deserialize_with = "equalizer::read_index")]
+    equalizer_profile: usize,
+    /// Which sound plays once the sound moves to a device, one rule per device, read leniently
+    /// like the profiles.
+    #[serde(
+        deserialize_with = "equalizer::read_rules",
+        serialize_with = "equalizer::write_rules"
+    )]
+    equalizer_rules: Vec<DeviceRule>,
+    /// Whether the equalizer screen shows its advanced controls, off so a first look shows only
+    /// the switch, the curve and the presets.
+    equalizer_advanced: bool,
     sleep_timer: bool,
     discord_presence: bool,
     discord_name: DiscordName,
@@ -472,7 +494,11 @@ impl Default for Values {
             normalisation: false,
             gapless: true,
             equalizer: false,
-            equalizer_bands: vec![0.; equalizer::BANDS],
+            equalizer_bands: Vec::new(),
+            equalizer_profiles: Vec::new(),
+            equalizer_profile: 0,
+            equalizer_rules: Vec::new(),
+            equalizer_advanced: false,
             sleep_timer: false,
             discord_presence: false,
             discord_name: DiscordName::Sonora,
@@ -517,6 +543,14 @@ impl Default for Values {
             scrobbling: BTreeMap::new(),
             appearance: Appearance::default(),
         }
+    }
+}
+
+impl Values {
+    /// The values as they are used, with whatever a hand edit or an older Sonora left settled.
+    fn settled(mut self) -> Self {
+        self.settle_equalizer();
+        self
     }
 }
 
@@ -739,12 +773,12 @@ impl AppSettings {
         let parsed = bytes.map(|bytes| (serde_json::from_slice::<Values>(json(&bytes)), bytes));
         let parsed = parsed.map(|(values, bytes)| (values.map(offer_subsonic_lyrics), bytes));
         let (values, writable, disk, broken) = match parsed {
-            Some((Ok(values), bytes)) => (values, writable, Some(bytes), None),
+            Some((Ok(values), bytes)) => (values.settled(), writable, Some(bytes), None),
             Some((Err(error), _)) => {
                 log::warn!("settings: cannot parse {}: {error}", path.display());
-                (Values::default(), false, None, Some(error.line()))
+                (Values::default().settled(), false, None, Some(error.line()))
             }
-            None => (Values::default(), writable, None, None),
+            None => (Values::default().settled(), writable, None, None),
         };
 
         let state = match store.load() {
@@ -798,18 +832,6 @@ impl AppSettings {
 
     pub fn gapless(&self) -> bool {
         self.values.gapless
-    }
-
-    pub fn equalizer(&self) -> bool {
-        self.values.equalizer
-    }
-
-    /// The stored curve, padded flat or cut to the band count and clamped into range, so a file
-    /// written by another version still loads.
-    pub fn equalizer_gains(&self) -> Gains {
-        let stored = &self.values.equalizer_bands;
-        let gains = std::array::from_fn(|band| stored.get(band).copied().unwrap_or(0.));
-        equalizer::clamped(&gains)
     }
 
     pub fn sleep_timer(&self) -> bool {
@@ -1255,16 +1277,6 @@ impl AppSettings {
 
     pub fn set_gapless(&mut self, gapless: bool, cx: &mut Context<Self>) {
         self.values.gapless = gapless;
-        self.schedule_save(cx);
-    }
-
-    pub fn set_equalizer(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.values.equalizer = on;
-        self.schedule_save(cx);
-    }
-
-    pub fn set_equalizer_gains(&mut self, gains: &Gains, cx: &mut Context<Self>) {
-        self.values.equalizer_bands = equalizer::clamped(gains).to_vec();
         self.schedule_save(cx);
     }
 
@@ -2202,7 +2214,7 @@ impl AppSettings {
             return SettingsReload::Unchanged;
         }
         let values = match serde_json::from_slice::<Values>(json(&bytes)) {
-            Ok(values) => offer_subsonic_lyrics(values),
+            Ok(values) => offer_subsonic_lyrics(values).settled(),
             Err(error) => {
                 log::warn!("settings: cannot parse {}: {error}", self.path.display());
                 let newly_broken = self.broken != Some(error.line());

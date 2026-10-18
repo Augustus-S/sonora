@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
-use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened};
+use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened, OutputId, Sink};
 
 use crate::{AppSettings, Io, Outcome, Playback, Toasts, join};
 
@@ -17,9 +17,10 @@ const HANDOVER: Duration = Duration::from_secs(2);
 
 /// The output devices the system offers, the one chosen, and what the stream Sonora plays into
 /// runs at. The list is read off the main thread, since that opens devices on some platforms, and
-/// both are read again whenever a stream opens or closes. A device picked here is opened first
-/// and only moved onto, and saved, once it has; one that will not open leaves everything as it
-/// was and says so in a toast.
+/// both are read again whenever a stream opens or closes or its sink changes. A device picked
+/// here is opened first and only moved onto, and saved, once it has. One that will not open
+/// leaves everything as it was and says so in a toast. `binding_key` names the output the sound
+/// plays on, which the equalizer follows to play the sound its device rule asks for.
 pub struct Outputs {
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
@@ -64,10 +65,7 @@ impl Outputs {
         let watch = cx.spawn(async move |this, cx| {
             while changes.changed().await.is_ok() {
                 let updated = this.update(cx, |this, cx| {
-                    this.active = output::active_device_info();
-                    if this.active.is_some() {
-                        this.known.clone_from(&this.active);
-                    }
+                    this.read_device();
                     this.failure = output::latest_device_failure();
                     this.failing = output::failing();
                     this.forget_broken(cx);
@@ -120,6 +118,44 @@ impl Outputs {
         self.active.as_ref().or(self.known.as_ref())
     }
 
+    /// The key device rules know the output the sound plays on by, from `output::output_key`,
+    /// with the device's name. That is the device Sonora's stream is open on, or last was, and
+    /// before any stream opens the device one would open on, so a rule applies from the start.
+    pub fn binding_key(&self) -> Option<OutputId> {
+        let (id, name, sink) = self.playing()?;
+        Some(OutputId {
+            id: output::output_key(id, sink.and_then(Sink::port)),
+            name: name.to_owned(),
+        })
+    }
+
+    /// What the sound server says of the sink the sound plays on, for one of its own outputs.
+    pub fn playing_sink(&self) -> Option<&Sink> {
+        self.playing()?.2
+    }
+
+    /// The id, name and sink of the device the sound plays on: the open or last open one, else
+    /// the chosen device while it is listed, else the system's default.
+    fn playing(&self) -> Option<(&str, &str, Option<&Sink>)> {
+        if let Some(device) = self.current() {
+            return Some((&device.id, &device.name, device.sink.as_ref()));
+        }
+        let device = self
+            .devices
+            .iter()
+            .find(|device| self.selected.as_deref() == Some(device.id.as_str()))
+            .or_else(|| self.devices.iter().find(|device| device.system))?;
+        Some((&device.id, &device.name, device.sink.as_ref()))
+    }
+
+    /// Reads the device Sonora plays on again.
+    fn read_device(&mut self) {
+        self.active = output::active_device_info();
+        if self.active.is_some() {
+            self.known.clone_from(&self.active);
+        }
+    }
+
     /// Why nothing plays, when the device to play on would not open and nothing took its place.
     pub fn failure(&self) -> Option<&Failure> {
         self.failure.as_ref().filter(|_| self.active.is_none())
@@ -149,7 +185,7 @@ impl Outputs {
             .read(cx)
             .output_rate()
             .filter(|rate| active.rates.contains(rate));
-        Some(wanted.unwrap_or(active.rate))
+        Some(wanted.unwrap_or(active.format.rate))
     }
 
     /// Opens the device at `rate` from now on, and saves it. The engines reopen at it, paused or
@@ -299,9 +335,10 @@ impl Outputs {
             .update(cx, |settings, cx| settings.set_output_device(id, cx));
     }
 
-    /// Reads the system's devices again, as when a settings page comes into view. A saved device
-    /// that can never be found again, such as an ALSA device saved before a sound server played,
-    /// is forgotten here, and the system's default plays in its place.
+    /// Reads the system's devices again, with what the sound server says of its sinks, as when a
+    /// settings page comes into view. A saved device that can never be found again, such as an
+    /// ALSA device saved before a sound server played, is forgotten here, and the system's
+    /// default plays in its place.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let selected = self.selected.clone();
         let listed = cx.background_executor().spawn(async move {

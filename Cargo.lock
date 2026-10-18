@@ -4282,6 +4282,7 @@ dependencies = [
  "opensubsonic",
  "percent-encoding",
  "protobuf",
+ "pulseaudio",
  "reqwest 0.13.4",
  "rodio",
  "roxmltree 0.21.1",
@@ -8488,6 +8489,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "views"
 version = "0.43.0"
 dependencies = [
+ "dirs",
  "gpui",
  "gpui_platform",
  "i18n",

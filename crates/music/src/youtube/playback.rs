@@ -63,6 +63,8 @@ pub struct Loaded {
     edit: Option<Trim>,
     loudness_db: Option<f32>,
     duration: Option<Duration>,
+    /// The format the stream host picked, `None` when it gave no bit rate.
+    encoding: Option<Encoding>,
 }
 
 pub struct Factory {
@@ -133,6 +135,10 @@ impl Fetch for YouTube {
             lufs: REFERENCE_LUFS + db,
             peak: None,
         })
+    }
+
+    fn encoding(&self, loaded: &Loaded) -> Option<Encoding> {
+        loaded.encoding
     }
 
     fn gated(&self, error: &anyhow::Error) -> bool {
@@ -231,6 +237,7 @@ async fn attempt_open(api: &Arc<YtMusic>, id: &str, ceiling: Option<u32>) -> Res
         edit,
         loudness_db: format.loudness_db,
         duration: format.duration,
+        encoding: served(&format.codec, format.bitrate / 1000),
     })
 }
 
@@ -242,4 +249,14 @@ fn ceiling(quality: Quality) -> Option<u32> {
         Quality::Normal => Some(160_000),
         Quality::Low => Some(64_000),
     }
+}
+
+/// The encoding of the stream the host serves, by its codec name and bit rate in kilobits a
+/// second, `None` when it gave no bit rate.
+fn served(codec: &str, kbps: u32) -> Option<Encoding> {
+    (kbps > 0).then(|| match codec {
+        "opus" => Encoding::Opus { kbps },
+        codec if codec.starts_with("mp4a") => Encoding::Aac { kbps },
+        _ => Encoding::Other,
+    })
 }

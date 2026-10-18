@@ -62,6 +62,7 @@ pub(super) fn direct_devices() -> Vec<DeviceOption> {
                 detail: None,
                 system: false,
                 direct: true,
+                sink: None,
             })
         })
         .collect()

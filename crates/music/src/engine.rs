@@ -29,7 +29,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use crate::audio::{Chain, Volume};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
-use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
+use crate::{
+    Encoding, Normalisation, PlaybackConfig, PlaybackEvent, PlaybackEvents, Player, TrackSignal,
+};
 
 /// How many frames the decoder hands over at a time. Small enough that a skip is heard at once,
 /// large enough that the queue is not rebuilt for every few samples.
@@ -93,6 +95,11 @@ pub trait Fetch: Send + Sync + 'static {
     /// How loud the track is, when its source measured it. The engine turns this into the
     /// track's gain when normalisation is on.
     fn loudness(&self, _loaded: &Self::Loaded) -> Option<Loudness> {
+        None
+    }
+
+    /// How the track is encoded, when the fetch learned it. The signal path shows it.
+    fn encoding(&self, _loaded: &Self::Loaded) -> Option<Encoding> {
         None
     }
 
@@ -318,12 +325,12 @@ async fn engine_loop<F: Fetch>(
 ) {
     let (cue, mut written) = Cue::new();
     let (changed, mut gone) = unbounded_channel();
-    // The user's gain, the shared equalizer and the spectrum tap: what every engine hands the
-    // output. A track's own loudness gain is applied as it is decoded, in `Playing`.
     let chain = Chain {
         volume: Volume::new(config.gain),
         equalizer: config.equalizer.clone(),
         spectrum,
+        meter: config.meter.clone(),
+        analyzer: config.analyzer.clone(),
     };
     let (jobs, job_rx) = channel::<Job<F>>();
     let (joins, mut joined) = unbounded_channel::<Joined>();
@@ -737,7 +744,8 @@ struct Playing<F: Fetch> {
 }
 
 impl<F: Fetch> Playing<F> {
-    /// Opens a decoder for one track, or reports that it cannot be played.
+    /// Opens a decoder for one track and reports what it decodes to as a `Signal` event, or
+    /// returns `None` when it cannot be played.
     fn open(
         fetch: &F,
         id: &str,
@@ -745,13 +753,30 @@ impl<F: Fetch> Playing<F> {
         at: Duration,
         offset: u64,
         normalise: bool,
+        events: &UnboundedSender<PlaybackEvent>,
     ) -> Option<Self> {
         let (source, base) = fetch.open_near(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
+        let (channels, rate) = (source.channels().get(), source.sample_rate().get());
+        let track = TrackSignal {
+            encoding: fetch.encoding(&loaded),
+            rate,
+            channels,
+            normalisation: match normalise {
+                true => Normalisation::Gain(20. * gain.log10()),
+                false => Normalisation::Off,
+            },
+        };
+        events
+            .send(PlaybackEvent::Signal {
+                id: id.to_owned(),
+                track,
+            })
+            .ok();
         Some(Self {
             id: id.to_owned(),
-            channels: source.channels().get(),
-            rate: source.sample_rate().get(),
+            channels,
+            rate,
             loaded,
             source,
             base,
@@ -919,7 +944,7 @@ fn audio_loop<F: Fetch>(
                     queued = None;
                     joining = None;
                     written = 0;
-                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise);
+                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise, &events);
                     heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     playing = start && current.is_some();
                     match playing {
@@ -988,6 +1013,7 @@ fn audio_loop<F: Fetch>(
                         position,
                         0,
                         normalise,
+                        &events,
                     );
                     if current.is_none() {
                         log::warn!("playback: cannot seek {}", join.ended);
@@ -1010,8 +1036,15 @@ fn audio_loop<F: Fetch>(
                         // has moved.
                         true => {
                             let (id, loaded) = (held.id.clone(), held.loaded.clone());
-                            match Playing::open(fetch.as_ref(), &id, loaded, position, 0, normalise)
-                            {
+                            match Playing::open(
+                                fetch.as_ref(),
+                                &id,
+                                loaded,
+                                position,
+                                0,
+                                normalise,
+                                &events,
+                            ) {
                                 Some(fresh) => current = Some(fresh),
                                 None => {
                                     log::warn!("playback: cannot seek {id}");
@@ -1053,7 +1086,15 @@ fn audio_loop<F: Fetch>(
             };
             let next = queued.take().and_then(|(id, loaded)| {
                 let duration = fetch.length(&loaded);
-                current = Playing::open(fetch.as_ref(), &id, loaded, Duration::ZERO, 0, normalise);
+                current = Playing::open(
+                    fetch.as_ref(),
+                    &id,
+                    loaded,
+                    Duration::ZERO,
+                    0,
+                    normalise,
+                    &events,
+                );
                 current.as_ref().map(|_| (id, duration))
             });
             // A track that follows is written straight in behind this one, so the resampler

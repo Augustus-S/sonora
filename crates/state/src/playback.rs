@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6,10 +6,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
-use music::equalizer::{Equalizer, Gains};
 use music::{
-    MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents, PlaybackFactory,
-    Player, Quality, Spectrum, Track, Transcode,
+    Analyzer, Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
+    PlaybackFactory, Player, Quality, Spectrum, Track, TrackSignal, Transcode,
 };
 use ui::{Pin, PinKind};
 
@@ -89,7 +88,8 @@ use crate::queue::Queue;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppSettings, Io, Network, Outcome, Session, SessionEvent, Sonora, Target, Toast, Toasts, join,
+    AppSettings, Equalizer, Io, Network, Outcome, Session, SessionEvent, Sonora, Target, Toast,
+    Toasts, join,
 };
 
 const POSITION_INTERVAL: Duration = Duration::from_millis(500);
@@ -139,6 +139,9 @@ const STATION_DRY_LIMIT: u8 = 3;
 
 /// How many unreadable files a toast names before it cuts the list short.
 const LISTED_FILES: usize = 5;
+/// How many tracks' signal reports are kept: the one playing, the one queued behind it, and
+/// room for a skip that has not been heard yet.
+const SIGNALS: usize = 4;
 
 /// A track the engine was asked to fetch ahead, and whether it was also lined up to follow the
 /// current one gaplessly.
@@ -399,8 +402,17 @@ pub struct Playback {
     gapless: bool,
     transcode: Transcode,
     quality: Quality,
-    /// Shared with every engine started here, so a change reaches the output without a restart.
-    equalizer: Equalizer,
+    /// The `state::Equalizer`'s reader, shared with every engine started here, so a change
+    /// reaches the output without a restart.
+    equalizer: music::Equalizer,
+    /// Shared with every engine like the equalizer's reader, and read only while watched.
+    meter: Meter,
+    /// Shared with every engine like the meter, so the equalizer screen can hear the music ahead
+    /// of the equalizer.
+    analyzer: Analyzer,
+    /// What the engines reported about the sound of the last few tracks they opened, newest
+    /// last, for the signal path.
+    signals: VecDeque<(String, TrackSignal)>,
     repeat: Repeat,
     radio: bool,
     /// The track the current similar-tracks suggestions were drawn from.
@@ -471,6 +483,7 @@ impl Playback {
         session: Entity<Session>,
         queue: Entity<Queue>,
         settings: Entity<AppSettings>,
+        equalizer: &Entity<Equalizer>,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, session, event, cx| match event {
@@ -508,10 +521,7 @@ impl Playback {
         let gapless = settings.read(cx).gapless();
         let transcode = settings.read(cx).transcode();
         let quality = settings.read(cx).quality();
-        let equalizer = Equalizer::new(
-            settings.read(cx).equalizer(),
-            &settings.read(cx).equalizer_gains(),
-        );
+        let (equalizer, meter) = (equalizer.read(cx).reader(), equalizer.read(cx).meter());
         let repeat = settings.read(cx).repeat();
         let radio = settings.read(cx).radio();
 
@@ -531,6 +541,9 @@ impl Playback {
             transcode,
             quality,
             equalizer,
+            meter,
+            analyzer: Analyzer::default(),
+            signals: VecDeque::new(),
             repeat,
             radio,
             seeded: None,
@@ -589,12 +602,42 @@ impl Playback {
         self.engine_for(id)
     }
 
+    /// The spectrum of the music on its way into the equalizer, on every output.
+    pub fn analyzer(&self) -> &Analyzer {
+        &self.analyzer
+    }
+
     /// The playing engine's spectrum, set to hear the track before or after the volume as the
     /// visualizer setting asks.
     pub fn spectrum(&self, cx: &App) -> Option<Spectrum> {
         let spectrum = self.active_engine()?.spectrum()?;
         spectrum.set_absolute(self.settings.read(cx).visualizer_absolute());
         Some(spectrum)
+    }
+
+    /// For the signal path, `None` while no engine is up for the track loaded now. Otherwise
+    /// what its engine reported about the track's sound, `None` inside until it opened it.
+    pub fn track_signal(&self) -> Option<Option<&TrackSignal>> {
+        let id = self.track.as_ref()?.id.as_deref()?;
+        self.engine_for(id)?;
+        Some(
+            self.signals
+                .iter()
+                .rev()
+                .find(|(known, _)| known == id)
+                .map(|(_, track)| track),
+        )
+    }
+
+    /// Keeps what an engine reported about the sound of track `id`, in place of any older
+    /// report for it.
+    fn learn_signal(&mut self, id: String, track: TrackSignal, cx: &mut Context<Self>) {
+        self.signals.retain(|(known, _)| *known != id);
+        if self.signals.len() == SIGNALS {
+            self.signals.pop_front();
+        }
+        self.signals.push_back((id, track));
+        cx.notify();
     }
 
     /// Pauses the engine the new track does not belong to, so the two never sound at once.
@@ -2087,6 +2130,11 @@ impl Playback {
         self.level
     }
 
+    /// The gain the volume applies, 1 at full volume.
+    pub fn volume_gain(&self) -> f32 {
+        gain(self.level)
+    }
+
     pub fn set_volume(&mut self, level: f32, cx: &mut Context<Self>) {
         self.level = level.clamp(0., 1.);
         self.settings
@@ -2115,40 +2163,6 @@ impl Playback {
 
     pub fn quality(&self) -> Quality {
         self.quality
-    }
-
-    pub fn equalizer(&self) -> bool {
-        self.equalizer.enabled()
-    }
-
-    pub fn equalizer_gains(&self) -> Gains {
-        self.equalizer.gains()
-    }
-
-    /// Turns the equalizer on or off. The engines pick the change up on their next frame and
-    /// glide to it, so no restart and no click.
-    pub fn set_equalizer(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.equalizer.set_enabled(on);
-        self.settings
-            .update(cx, |settings, cx| settings.set_equalizer(on, cx));
-        cx.notify();
-    }
-
-    pub fn set_equalizer_gains(&mut self, gains: &Gains, cx: &mut Context<Self>) {
-        self.equalizer.set_gains(gains);
-        self.settings
-            .update(cx, |settings, cx| settings.set_equalizer_gains(gains, cx));
-        cx.notify();
-    }
-
-    /// Moves one band, leaving the rest of the curve as it is.
-    pub fn set_equalizer_gain(&mut self, band: usize, gain: f32, cx: &mut Context<Self>) {
-        let mut gains = self.equalizer.gains();
-        let Some(slot) = gains.get_mut(band) else {
-            return;
-        };
-        *slot = gain;
-        self.set_equalizer_gains(&gains, cx);
     }
 
     pub fn set_gapless(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -2321,9 +2335,11 @@ impl Playback {
             gapless: self.gapless,
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
-            equalizer: self.equalizer.clone(),
             transcode: self.transcode,
             quality: self.quality,
+            equalizer: self.equalizer.clone(),
+            meter: self.meter.clone(),
+            analyzer: self.analyzer.clone(),
         };
         let (engine, events) = playback.start(config);
 
@@ -2345,9 +2361,11 @@ impl Playback {
             gapless: self.gapless,
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
-            equalizer: self.equalizer.clone(),
             transcode: self.transcode,
             quality: self.quality,
+            equalizer: self.equalizer.clone(),
+            meter: self.meter.clone(),
+            analyzer: self.analyzer.clone(),
         };
         let (engine, events) = playback.start(config);
 
@@ -2384,6 +2402,11 @@ impl Playback {
             self.restart_output(local, cx);
             return;
         }
+        // kept for whichever track it names, since a queued track reports before it plays
+        if let BackendEvent::Signal { id, track } = event {
+            self.learn_signal(id, track, cx);
+            return;
+        }
         if local != self.local_active() {
             return;
         }
@@ -2411,8 +2434,8 @@ impl Playback {
             }
         }
         match event {
-            // rebuilt before the filters above
-            BackendEvent::OutputChanged => {}
+            // rebuilt or kept before the filters above
+            BackendEvent::OutputChanged | BackendEvent::Signal { .. } => {}
             BackendEvent::Unavailable { .. }
             | BackendEvent::Throttled { .. }
             | BackendEvent::Refused
@@ -2583,6 +2606,7 @@ impl Playback {
     fn teardown(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.engine = None;
+        self.signals.retain(|(id, _)| music::is_local_id(id));
 
         if !self.local_active() {
             self.load = None;

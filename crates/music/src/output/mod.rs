@@ -30,10 +30,11 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use cpal::traits::{DeviceTrait as _, HostTrait as _};
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
-use crate::audio::Chain;
+use crate::audio::{self, Chain};
 #[cfg(target_os = "linux")]
 use output_host::host;
 
@@ -46,7 +47,7 @@ const BUFFER_FRAMES: u32 = 1024;
 const BUFFERS: [u32; 6] = [128, 256, 512, 1024, 2048, 4096];
 
 /// How often an open stream checks that its device is still the one `resolve_device` names and
-/// still runs at the stream's rate.
+/// still runs at the stream's rate, and reads its sink again.
 const DEVICE_POLL: Duration = Duration::from_millis(500);
 
 /// The device stream every output in the process mixes into.
@@ -59,8 +60,8 @@ static DEVICE_OPEN: Mutex<()> = Mutex::new(());
 /// Which device was chosen in settings, and which devices would not open.
 static DEVICE_SELECTION: Mutex<DeviceSelection> = Mutex::new(DeviceSelection::new());
 
-/// Triggers watchers whenever a stream opens or closes, so a settings page can read
-/// `active_device_info` again.
+/// Triggers watchers whenever a stream opens or closes, or the sound server says something new of
+/// the sink it plays on, so a settings page can read `active_device_info` again.
 static DEVICE_CHANGES: LazyLock<watch::Sender<()>> = LazyLock::new(|| watch::Sender::new(()));
 
 /// An output device the system offers.
@@ -92,6 +93,57 @@ pub struct DeviceOption {
     /// output. Nothing else can play on the card while Sonora holds it, and it does not open
     /// while the server does.
     pub direct: bool,
+
+    /// What the sound server says of the sink, for one of its own outputs.
+    pub sink: Option<Sink>,
+}
+
+/// An output as device rules know it: its key, from `output_key`, and its name when it was seen,
+/// so a rule for an output that is not connected can still be shown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputId {
+    pub id: String,
+    pub name: String,
+}
+
+/// One port of a sound server's sink, such as headphones or speakers on one card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Port {
+    /// The server's name for it, which `output_key` keys it by.
+    pub id: String,
+    /// What the user knows it as.
+    pub name: String,
+    /// Whether something is plugged into it. Only false when the server knows it is not.
+    pub available: bool,
+}
+
+/// What a sound server says of one of its sinks: its ports, the one that plays, and the format
+/// it runs at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sink {
+    pub ports: Vec<Port>,
+    /// Where the port that plays is in `ports`, or `None` when the sink has no ports.
+    pub active: Option<usize>,
+    /// The format the server runs the sink at, when it says. The server converts a stream at
+    /// another rate to it.
+    pub format: Option<Format>,
+}
+
+/// A rate, a channel count and a sample format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Format {
+    pub rate: u32,
+    pub channels: u16,
+    pub sample: Sample,
+}
+
+/// How each sample is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sample {
+    Integer(u8),
+    Float(u8),
+    /// A format without a plain bit depth, such as a-law.
+    Other,
 }
 
 /// A device that would not open, and why.
@@ -220,24 +272,30 @@ pub struct DeviceInfo {
     /// Human-readable device name.
     pub name: String,
 
-    /// The rate the device runs at, which every track is resampled to.
-    pub rate: u32,
+    /// What the stream runs at. Every track is resampled to its rate and remixed to its
+    /// channels, and integer samples wrap past full scale where floats clip.
+    pub format: Format,
 
     /// The buffer Sonora asks the device for, in frames.
     pub buffer: u32,
 
-    /// The rates `choose_rate` can open the device at, lowest first, `rate` among them. Only
-    /// `rate` where the system sets the rate itself.
+    /// The rates `choose_rate` can open the device at, lowest first, the format's among them.
+    /// Only that one where the system sets the rate itself.
     pub rates: Vec<u32>,
 
     /// The buffers `choose_buffer` can open the device with, in frames, lowest first, `buffer`
     /// among them.
     pub buffers: Vec<u32>,
+
+    /// What the sound server says of the sink the stream plays on, read again while it is open,
+    /// for one of the server's own outputs.
+    pub sink: Option<Sink>,
 }
 
 /// One open stream on an output device, with the mixer the engines' chains play into.
 struct Device {
-    /// Which device it is, and the rate and buffer the stream runs at.
+    /// Which device it is, and the rate and buffer the stream runs at. Its `sink` stays `None`,
+    /// since `sink` holds the one kept up to date.
     info: DeviceInfo,
 
     /// Set by cpal's error callback, on the audio thread, when the stream reports any error but
@@ -251,6 +309,9 @@ struct Device {
 
     /// Where each output on the stream hears that it has to reopen.
     listeners: Mutex<Vec<UnboundedSender<()>>>,
+
+    /// What the sound server last said of the sink, which `info` hands out in place of its own.
+    sink: Mutex<Option<Sink>>,
 
     /// rodio's handle on the open cpal stream, and the mixer every engine's chain is added to.
     /// Dropping it closes the stream, which happens when the last output lets go of this device.
@@ -325,7 +386,7 @@ impl Device {
         if let Some(open) = current.filter(|open| {
             open.info.id == id
                 && open.live()
-                && !output_rate::moved(&device, open.info.rate, wanted)
+                && !output_rate::moved(&device, open.info.format.rate, wanted)
         }) {
             return Ok(open);
         }
@@ -354,18 +415,25 @@ impl Device {
         let failed = Arc::new(AtomicBool::new(false));
         let (stream, buffer) = open_stream(device, &id, &config, frames, &failed)?;
         let buffers = buffers(&config, buffer);
+        let sink = read_sink(&id);
         Ok(Self {
             info: DeviceInfo {
                 id,
                 name,
-                rate: config.sample_rate(),
+                format: Format {
+                    rate: config.sample_rate(),
+                    channels: config.channels(),
+                    sample: Sample::of(config.sample_format()),
+                },
                 buffer,
                 rates,
                 buffers,
+                sink: None,
             },
             failed,
             stale: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
+            sink: Mutex::new(sink),
             stream,
         })
     }
@@ -388,7 +456,7 @@ impl Device {
         };
         let wanted = DeviceSelection::lock().rate;
         cpal_ident(&device).as_deref() != Some(self.info.id.as_str())
-            || output_rate::moved(&device, self.info.rate, wanted)
+            || output_rate::moved(&device, self.info.format.rate, wanted)
     }
 
     /// Has `changed` hear when the stream has to reopen.
@@ -419,6 +487,59 @@ impl Device {
     fn add(&self, source: impl Source + Send + 'static) {
         self.stream.mixer().add(source);
     }
+
+    /// Which device it is and what its stream runs at, with what the sound server last said of
+    /// the sink.
+    fn info(&self) -> DeviceInfo {
+        DeviceInfo {
+            sink: self
+                .sink
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+            ..self.info.clone()
+        }
+    }
+
+    /// Asks the sound server about the sink again, returning whether it says something new, such
+    /// as another port playing or another rate.
+    fn follow_sink(&self) -> bool {
+        let now = read_sink(&self.info.id);
+        let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        if *sink == now {
+            return false;
+        }
+        *sink = now;
+        true
+    }
+}
+
+impl Sample {
+    fn of(format: cpal::SampleFormat) -> Self {
+        use cpal::SampleFormat::*;
+        match format {
+            I8 | U8 => Self::Integer(8),
+            I16 | U16 => Self::Integer(16),
+            I24 | U24 => Self::Integer(24),
+            I32 | U32 => Self::Integer(32),
+            I64 | U64 => Self::Integer(64),
+            F32 => Self::Float(32),
+            F64 => Self::Float(64),
+            _ => Self::Other,
+        }
+    }
+}
+
+impl Sink {
+    /// The port that plays, or `None` when the sink has no ports.
+    pub fn port(&self) -> Option<&Port> {
+        self.ports.get(self.active?)
+    }
+
+    /// The port that plays, only when the sink has more than one, so it is worth naming.
+    pub fn shown_port(&self) -> Option<&Port> {
+        self.port().filter(|_| self.ports.len() > 1)
+    }
 }
 
 impl Drop for Device {
@@ -432,6 +553,8 @@ impl Drop for Device {
 pub(crate) struct Output {
     chain: Chain,
     sink: Arc<rodio::Player>,
+    /// What every chunk appended to `sink` publishes its format into.
+    format: audio::PublishedFormat,
     device: Arc<Device>,
 }
 
@@ -443,10 +566,13 @@ impl Output {
         let device = Device::acquire()?;
         device.listen(changed);
         let (sink, source) = rodio::Player::new();
-        device.add(chain.apply(source));
+        let format = audio::PublishedFormat::default();
+        let integer = matches!(device.info.format.sample, Sample::Integer(_));
+        device.add(chain.apply(source, format.clone(), integer));
         Ok(Self {
             chain,
             sink: Arc::new(sink),
+            format,
             device,
         })
     }
@@ -455,9 +581,14 @@ impl Output {
         &self.sink
     }
 
+    /// Where a chunk appended to `sink` publishes its format, so the chain knows what it plays.
+    pub fn format(&self) -> &audio::PublishedFormat {
+        &self.format
+    }
+
     /// The rate the device runs at, which every packet is resampled to before it is heard.
     pub fn rate(&self) -> u32 {
-        self.device.info.rate
+        self.device.info.format.rate
     }
 
     pub fn set_volume(&self, gain: f32) {
@@ -492,6 +623,7 @@ pub fn devices() -> Vec<DeviceOption> {
                 name,
                 detail,
                 direct: false,
+                sink: None,
             };
             #[cfg(target_os = "linux")]
             let option = output_host::listed(&device, option)?;
@@ -500,6 +632,10 @@ pub fn devices() -> Vec<DeviceOption> {
         .collect();
     #[cfg(target_os = "linux")]
     if output_host::is_server(&host) {
+        let mut sinks = output_host::sinks();
+        for option in &mut options {
+            option.sink = sinks.remove(&option.id);
+        }
         options.extend(output_alsa::direct_devices());
     }
     // ALSA can list one card both by name and by number, which come out as one id
@@ -561,7 +697,7 @@ pub fn choose_rate(rate: Option<u32>) {
         .upgrade();
     if let Some(rate) = rate
         && let Some(open) = open
-        && rate != open.info.rate
+        && rate != open.info.format.rate
         && open.info.rates.contains(&rate)
     {
         log::info!("output: reopening {} at {rate} Hz", open.info.id);
@@ -594,7 +730,7 @@ pub fn active_device_info() -> Option<DeviceInfo> {
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .upgrade()?;
-    Some(device.info.clone())
+    Some(device.info())
 }
 
 /// The device that last would not open, and why, if one has not opened since.
@@ -602,12 +738,13 @@ pub fn latest_device_failure() -> Option<Failure> {
     DeviceSelection::lock().latest_failure().cloned()
 }
 
-/// A watch that moves on whenever a stream opens or closes, or a device would not open.
+/// A watch that moves on whenever a stream opens or closes, a device would not open, or the sound
+/// server says something new of the sink the stream plays on.
 pub fn watch_device_changes() -> watch::Receiver<()> {
     DEVICE_CHANGES.subscribe()
 }
 
-/// Tells every `watch_device_changes` watcher that the stream opened or closed.
+/// Tells every `watch_device_changes` watcher that the stream or its sink changed.
 fn announce_device_changes() {
     DEVICE_CHANGES.send_modify(|_| {});
 }
@@ -719,6 +856,47 @@ pub use output_alsa::missing_bridge;
 
 #[cfg(not(target_os = "linux"))]
 pub fn missing_bridge() -> Option<Server> {
+    None
+}
+
+/// The key device rules know an output by: the device's id, and for a sound server's sink the
+/// port that plays after a `#`, so headphones and speakers on one card are two outputs.
+pub fn output_key(device: &str, port: Option<&Port>) -> String {
+    match port {
+        Some(port) => format!("{device}#{}", port.id),
+        None => device.to_owned(),
+    }
+}
+
+/// The key an output saved by an older Sonora goes by now, or `None` when `key` is current.
+/// Device rules once keyed a sound server's sink by its bare name, which cpal now puts behind its
+/// `pulseaudio` host.
+#[cfg(target_os = "linux")]
+pub fn upgrade_output_key(key: &str) -> Option<String> {
+    let device = key.split_once('#').map_or(key, |(device, _)| device);
+    if device.parse::<cpal::DeviceId>().is_ok() {
+        return None;
+    }
+    Some(format!("{}:{key}", cpal::HostId::PulseAudio))
+}
+
+/// The key an output saved by an older Sonora goes by now. Every key is current here, since only
+/// Linux ever keyed a sound server's sink.
+#[cfg(not(target_os = "linux"))]
+pub fn upgrade_output_key(_key: &str) -> Option<String> {
+    None
+}
+
+/// What the sound server says of the sink behind the device `id`, or `None` for any other device.
+/// It asks the server, so call it off the UI thread.
+#[cfg(target_os = "linux")]
+fn read_sink(id: &str) -> Option<Sink> {
+    output_host::sink(id)
+}
+
+/// What the sound server says of the sink behind the device `id`. There is no sound server here.
+#[cfg(not(target_os = "linux"))]
+fn read_sink(_id: &str) -> Option<Sink> {
     None
 }
 
@@ -877,7 +1055,8 @@ fn open_stream(
 }
 
 /// Looks at `device` every `DEVICE_POLL` for as long as it is open, playing or not, and retires
-/// it once it is outdated, so its outputs reopen and a settings page reads the new stream.
+/// it once it is outdated, so its outputs reopen and a settings page reads the new stream. A sink
+/// whose port or rate moved is announced the same way.
 fn spawn_watcher(device: Weak<Device>) {
     let spawned = thread::Builder::new()
         .name("output-watch".to_owned())
@@ -891,6 +1070,9 @@ fn spawn_watcher(device: Weak<Device>) {
                     log::info!("output: {} changed, reopening", device.info.id);
                     device.retire();
                     return;
+                }
+                if device.follow_sink() {
+                    announce_device_changes();
                 }
             }
         });

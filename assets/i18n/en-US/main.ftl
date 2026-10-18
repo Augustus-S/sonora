@@ -673,10 +673,11 @@ widevine-prompt-later = Not now
 widevine-prompt-accept = Accept and install
 widevine-prompt-decline = Decline
 settings-equalizer = Equalizer
-settings-equalizer-detail = Shapes the sound across ten bands, one per octave
+settings-equalizer-detail = Shapes the sound with a preset or a curve of your own
 settings-equalizer-preset = Preset
-settings-equalizer-preset-detail = A ready-made curve for the bands below
+settings-equalizer-preset-detail = A ready-made sound, or one of your own profiles
 settings-equalizer-custom = Custom
+settings-equalizer-editor = Customize
 settings-equalizer-flat = Flat
 settings-equalizer-bass-boost = Bass boost
 settings-equalizer-bass-reducer = Bass reducer
@@ -689,9 +690,130 @@ settings-equalizer-classical = Classical
 settings-equalizer-electronic = Electronic
 settings-equalizer-acoustic = Acoustic
 settings-equalizer-loudness = Loudness
-settings-equalizer-decibels = { $db } dB
-settings-equalizer-hertz = { $hz } Hz
-settings-equalizer-kilohertz = { $khz } kHz
+equalizer-enabled = On
+equalizer-advanced = Advanced
+equalizer-simple = Simple
+equalizer-sound = Sound
+equalizer-profile-default = Default
+equalizer-profile-new = Profile { $number }
+equalizer-profile-pasted = Pasted profile
+equalizer-profile-name-hint = Profile name
+equalizer-save-as = Save as profile
+equalizer-rename = Rename profile
+equalizer-delete = Delete profile
+equalizer-delete-confirm = Delete “{ $name }”? This cannot be undone.
+equalizer-undo = Undo
+equalizer-redo = Redo
+equalizer-preamp = Preamp
+equalizer-preamp-detail = Lowers the level before the filters, so a boost has room and does not clip
+equalizer-preamp-auto = Automatic
+equalizer-preamp-manual = Manual
+equalizer-decibels = dB
+equalizer-decibels-value = { $db } dB
+equalizer-hertz = Hz
+equalizer-q = Q
+equalizer-octaves = oct
+equalizer-no-gain = —
+equalizer-filters = Filters
+equalizer-filters-detail = Drag a point on the graph or type exact values. A profile holds up to { $max } filters.
+equalizer-filter-type = Type
+equalizer-filter-frequency = Frequency
+equalizer-filter-gain = Gain
+equalizer-filter-width = Width
+equalizer-no-filters = No filters yet. Add one, pick a preset above, or import a profile.
+equalizer-add-filter = Add filter
+equalizer-remove-filter = Remove filter
+equalizer-kind-peak = Peak
+equalizer-kind-low-shelf = Low shelf
+equalizer-kind-high-shelf = High shelf
+equalizer-kind-low-pass = Low pass
+equalizer-kind-high-pass = High pass
+equalizer-kind-notch = Notch
+equalizer-kind-band-pass = Band pass
+equalizer-kind-all-pass = All pass
+equalizer-transfer = Import and export
+equalizer-transfer-detail = Equalizer APO text, the format AutoEQ publishes headphone profiles in. An import becomes a new profile.
+equalizer-import-file = Import file…
+equalizer-paste = Paste
+equalizer-copy = Copy
+equalizer-export-file = Export file…
+equalizer-imported = Imported { $name }
+equalizer-imported-skipped = Imported { $name } without { $count ->
+        [one] one line
+       *[other] { $count } lines
+    }
+equalizer-import-nothing = Found no equalizer settings to import
+equalizer-import-too-many = Not imported: { $count ->
+        [one] one filter is on
+       *[other] { $count } filters are on
+    }, more than a profile holds
+equalizer-filter-limit = A profile holds up to { $max } filters.
+equalizer-paste-empty = The clipboard holds no text
+equalizer-copied = Copied the profile as Equalizer APO text
+equalizer-exported = Exported the profile
+equalizer-dialog-failed = Could not open the file dialog
+equalizer-file-unreadable = Could not read the file
+equalizer-file-unwritable = Could not write the file
+equalizer-value-refused = Kept the previous value
+equalizer-skipped-line = Line { $line }: { $reason }
+equalizer-skipped-more = and { $count ->
+        [one] one more
+       *[other] { $count } more
+    }
+equalizer-skip-unknown-type = unknown filter type { $name }
+equalizer-skip-unreadable = not a filter Sonora can read
+equalizer-skip-no-frequency = no frequency
+equalizer-skip-no-gain = no gain
+equalizer-skip-no-width = no Q or bandwidth
+equalizer-skip-expression = a value written as an expression
+equalizer-skip-no-preamp = the preamp is not a number
+equalizer-skip-unsupported = { $name } is not supported
+equalizer-rules = Device rules
+equalizer-rules-detail = Play a sound by itself when you switch to a device
+equalizer-rule-other = Any other device
+equalizer-rule-playing = Playing now
+equalizer-rule-disconnected = Not connected
+equalizer-rule-replaces = Replaces its rule
+equalizer-rule-choose-device = Choose a device
+equalizer-rule-choose-sound = Choose a sound
+equalizer-rule-add = Add rule
+equalizer-rule-remove = Remove rule
+equalizer-output-port = { $device } · { $port }
+signal-path-codec-alac = ALAC
+signal-path-codec-pcm = PCM
+signal-path-codec-other = Other codec
+equalizer-invalid-frequency = Frequency must be between { $low } and { $high } Hz
+equalizer-invalid-gain = Gain must be between { $low } and { $high } dB
+equalizer-invalid-q = Q must be between { $low } and { $high }
+equalizer-invalid-octaves = Bandwidth must be between { $low } and { $high } octaves
+equalizer-invalid-shelf-octaves = A shelf takes a Q, not a bandwidth
+equalizer-invalid-preamp = Preamp must be between { $low } and { $high } dB
+equalizer-overload = Clipping by { $db } dB
+equalizer-overload-slight = Clipping by under 0.1 dB
+equalizer-graph-preamp = { $db } dB
+equalizer-lower-preamp = Lower preamp
+equalizer-level = Level
+equalizer-status-bit-perfect = Bit-perfect
+equalizer-status-bit-perfect-detail = Bit-perfect from Sonora
+equalizer-status-server = The sound server then converts it to { $khz } kHz
+equalizer-status-altered = Not bit-perfect due to:
+equalizer-status-separator = {", "}
+equalizer-status-more = +{ $count }
+equalizer-status-equalized = EQ
+equalizer-status-volume = Volume
+equalizer-status-normalized = Normalized
+equalizer-status-rate = { $from } → { $to } kHz
+equalizer-status-bits = { $from } → { $to } bit
+equalizer-status-float = Float → { $to } bit
+equalizer-status-channels = { $from ->
+    [1] Mono
+    [2] Stereo
+   *[other] { $from } ch
+} → { $to ->
+    [1] mono
+    [2] stereo
+   *[other] { $to } ch
+}
 settings-panel-lyrics-size = Lyrics size (panel)
 settings-panel-lyrics-size-detail = Size of the lyrics text in the side panel, on top of the base font size
 settings-fullscreen-lyrics-size = Lyrics size (fullscreen)
@@ -1049,3 +1171,13 @@ toast-sample-save-failed = { $name } could not be saved
 toast-sample-save-failed-detail = The server answered 503 Service Unavailable
 toast-sample-lasting = This one stays until you close it
 toast-sample-burst = Toast number { $name }
+
+# Frequency response graph
+response-graph-hz = { $value } Hz
+response-graph-khz = { $value } kHz
+response-graph-db = { $value } dB
+response-graph-readout = { $frequency } · { $direction ->
+        [up] +{ $gain }
+        [down] -{ $gain }
+       *[flat] { $gain }
+    } dB

@@ -46,10 +46,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as ones embedded in the files, show for its tracks.
 - On Linux, Direct to hardware in the output picker plays straight to a sound card, past PipeWire
   or PulseAudio, for bit-perfect output.
+- The equalizer is now fully parametric, on its own screen: shape up to 20 filters of eight
+  kinds, keep several named profiles, and import an AutoEQ or Equalizer APO profile for your
+  headphones from a file or the clipboard. You can export a profile the same way.
+- The equalizer screen draws your filters' curve, with the preamp as a line across it. Drag a
+  filter to move it, scroll over it to make it wider or narrower, double-click to add one and
+  right-click to remove it. When the sound clips, the screen says by how much and can lower the
+  preamp for you.
+- The equalizer screen shows the spectrum of the music behind the curve, as it is before the
+  equalizer, so you can see what you are shaping. Its scale on the right reads in dBFS.
+- Give your headphones, DAC or speakers their own sound with device rules on the equalizer
+  screen. When Sonora starts playing on that output, the equalizer switches to the preset or
+  profile its rule names, and one rule can cover every other device.
+- The equalizer screen can show the signal path: the track's format, what Sonora does to the
+  sound, what it sends to your device, and whether that is bit-perfect or why not.
+- Undo and redo your equalizer edits with the buttons next to the profile, or with Ctrl+Z and
+  Ctrl+Shift+Z.
 
 ### Changed
 
 - With YouTube Music Premium, songs stream at 256 kbps instead of 128 kbps.
+- An equalizer preset that boosts no longer distorts loud passages. Sonora lowers the level by
+  the curve's highest boost, so the balance you chose is what you hear.
 - The Prefer local lyrics switch is gone. Lyrics in a file's own tags now compete with the
   online providers, so synced lyrics found online beat plain ones in the file. Rank Local first
   to have it win when both are equally good.
@@ -96,6 +114,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unavailable in your library and playlists.
 - On Windows, maximizing Sonora on a monitor bigger than your main one fills the whole screen
   instead of stopping at the main monitor's size.
+- Songs on YouTube Music and Apple Music no longer sometimes play with left and right swapped
+  after you seek or pick up partway through.
+- The fullscreen visualizer no longer mixes up the left and right channels after a mono track.
 
 ## [0.43.0] - 2026-10-13
 

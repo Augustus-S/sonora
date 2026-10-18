@@ -252,11 +252,11 @@ impl Render for Input {
         };
 
         let empty = self.selected_range.is_empty();
-        let paste = cx
-            .read_from_clipboard()
-            .and_then(|item| item.text())
-            .is_some();
         let context_menu = self.context_menu.map(|position| {
+            let paste = cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some();
             Popup::new(
                 position,
                 Menu::new("input-context-menu")

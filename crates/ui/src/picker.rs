@@ -4,6 +4,7 @@ use gpui::{App, ClickEvent, Hsla, Pixels, SharedString, StyleRefinement, Window,
 use crate::button::Button;
 use crate::menu::{Menu, MenuItem, TRIGGER_GAP};
 use crate::popover::{Open, Popover, Popovers};
+use crate::scrollbar::Scrollbar;
 use crate::theme::ActiveTheme as _;
 
 enum Face {
@@ -29,6 +30,8 @@ pub struct Picker {
     disabled: bool,
     items: Vec<MenuItem>,
     menu: Option<Menu>,
+    /// How tall the menu grows before it scrolls, unbounded when `None`.
+    scroll_after: Option<Pixels>,
     on_open: Option<Open>,
 }
 
@@ -54,6 +57,7 @@ impl Picker {
             disabled: false,
             items: Vec::new(),
             menu: None,
+            scroll_after: None,
             on_open: None,
         }
     }
@@ -144,6 +148,13 @@ impl Picker {
         self.menu = Some(menu);
         self
     }
+
+    /// Caps the menu at `height` and scrolls what does not fit. Ignored when a whole `menu` is
+    /// given, which brings its own.
+    pub fn scroll_after(mut self, height: Pixels) -> Self {
+        self.scroll_after = Some(height);
+        self
+    }
 }
 
 impl Styled for Picker {
@@ -153,7 +164,7 @@ impl Styled for Picker {
 }
 
 impl RenderOnce for Picker {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self {
             style,
             key,
@@ -170,6 +181,7 @@ impl RenderOnce for Picker {
             disabled,
             items,
             menu,
+            scroll_after,
             on_open,
         } = self;
 
@@ -200,11 +212,26 @@ impl RenderOnce for Picker {
             .when_some(tint, Button::tint)
             .disabled(disabled);
 
-        let menu = menu
-            .unwrap_or_else(|| Menu::new(SharedString::from(format!("{key}-menu"))).w(width))
-            .items(items)
-            .top(drop)
-            .when_else(left, |menu| menu.left_0(), |menu| menu.right_0());
+        let menu = menu.unwrap_or_else(|| {
+            let menu = Menu::new(SharedString::from(format!("{key}-menu"))).w(width);
+            match scroll_after {
+                Some(height) => {
+                    let view = window.current_view();
+                    let scrollbar = window.use_keyed_state(
+                        SharedString::from(format!("{key}-menu-scroll")),
+                        cx,
+                        |_, _| Scrollbar::inset().watching(view),
+                    );
+                    menu.max_h(height).scrollbar(scrollbar)
+                }
+                None => menu,
+            }
+        });
+        let menu = menu.items(items).top(drop).when_else(
+            left,
+            |menu| menu.left_0(),
+            |menu| menu.right_0(),
+        );
 
         let mut popover = Popover::new(key, group)
             .button(button)

@@ -4,7 +4,6 @@ use gpui::{
 };
 
 use crate::label::eyebrow;
-use crate::separator::Separator;
 use crate::theme::ActiveTheme as _;
 
 #[derive(IntoElement)]
@@ -14,6 +13,7 @@ pub struct InfoCard {
     children: Vec<AnyElement>,
     borderless: bool,
     stretch: bool,
+    plain: bool,
 }
 
 impl InfoCard {
@@ -24,6 +24,7 @@ impl InfoCard {
             children: Vec::new(),
             borderless: false,
             stretch: false,
+            plain: false,
         }
     }
 
@@ -34,6 +35,13 @@ impl InfoCard {
 
     pub fn stretch(mut self) -> Self {
         self.stretch = true;
+        self
+    }
+
+    /// Lays the title and the content out as the card does, with no frame, fill or inset around
+    /// them, for a page that separates its parts by space alone.
+    pub fn plain(mut self) -> Self {
+        self.plain = true;
         self
     }
 }
@@ -64,6 +72,7 @@ impl RenderOnce for InfoCard {
             children,
             borderless,
             stretch,
+            plain,
         } = self;
 
         let theme = *cx.theme();
@@ -76,20 +85,15 @@ impl RenderOnce for InfoCard {
             .overflow_hidden()
             .when(stretch, |this| this.h_full())
             .gap_4()
-            .p_5()
-            .rounded(theme.radius)
-            .when(!borderless, |this| {
-                this.border_1().border_color(theme.border)
+            .when(!plain, |this| {
+                this.p_5()
+                    .rounded(theme.radius)
+                    .bg(theme.secondary.opacity(0.45))
+                    .when(!borderless, |this| {
+                        this.border_1().border_color(theme.border)
+                    })
             })
-            .bg(theme.secondary.opacity(0.45))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(eyebrow(title, cx))
-                    .child(Separator::horizontal().flex_1()),
-            )
+            .child(eyebrow(title, cx))
             .children(children);
 
         card.style().refine(&overrides);
