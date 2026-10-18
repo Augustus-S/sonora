@@ -81,8 +81,9 @@ const BACKOFF_CEILING: Duration = Duration::from_secs(10);
 const CONNECT: Duration = Duration::from_secs(10);
 const STALL: Duration = Duration::from_secs(20);
 
-/// The sub-statuses of a `401` that a renewed token clears: invalid, and expired.
-const TOKEN_TROUBLE: [u64; 2] = [11002, 11003];
+/// The sub-statuses of a `401` that a renewed token clears: a token whose session Tidal has
+/// ended, an invalid one, and an expired one.
+const TOKEN_TROUBLE: [u64; 3] = [6004, 11002, 11003];
 
 /// A signed-in Tidal session: the api calls behind [`MusicApi`] and the playback lookup. Clones
 /// share one session, so a token renewed by one is the token every clone uses next.
