@@ -13,7 +13,7 @@ use ui::{
 
 use crate::chrome::Chrome;
 use crate::shared::confirm::{self, Confirm};
-use crate::shared::equalizer::profile_picker;
+use crate::shared::equalizer::{preset_key, profile_picker};
 
 use graph::Graph;
 use rows::{Row, figure};
@@ -34,8 +34,9 @@ const FIELD: f32 = 0.6;
 /// How wide the rename dialog is, in cover sizes.
 const DIALOG: f32 = 2.8;
 
-/// The equalizer's own screen: the profile that plays and the others, its preamp and filters,
-/// each typed in and heard as soon as it is entered, and Equalizer APO text in and out.
+/// The equalizer's own screen. Simple mode shows the response graph, the presets and undo, and
+/// advanced mode adds profiles, the signal path, the preamp and filter fields, and Equalizer APO
+/// text in and out.
 pub(crate) struct EqualizerView {
     playback: Entity<Playback>,
     settings: Entity<AppSettings>,
@@ -58,7 +59,7 @@ pub(crate) struct EqualizerView {
     /// The output meter's reads and the spectrum's, held while the screen is the one shown and
     /// dropped with it.
     metering: Option<[Task<()>; 2]>,
-    /// The signal path's reads, held while it is open.
+    /// The signal path's reads, held while it is open in advanced mode.
     path: Option<Task<()>>,
     /// The file being read in or written out.
     file: Option<Task<()>>,
@@ -82,7 +83,13 @@ impl EqualizerView {
             cx.notify();
         })
         .detach();
-        cx.observe(&settings, |_, _, cx| cx.notify()).detach();
+        cx.observe(&settings, |this, settings, cx| {
+            if !settings.read(cx).equalizer_advanced() {
+                this.path = None;
+            }
+            cx.notify();
+        })
+        .detach();
         cx.observe(&signal, |_, _, cx| cx.notify()).detach();
         cx.observe(&outputs, |_, _, cx| cx.notify()).detach();
         let chrome = Chrome::entity(cx);
@@ -239,7 +246,7 @@ impl EqualizerView {
         );
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn header(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let on = self.playback.read(cx).equalizer();
         div()
@@ -250,7 +257,8 @@ impl EqualizerView {
             .child(heading(t!("settings-equalizer"), cx))
             .child(div().flex_1())
             .children(self.overload(cx))
-            .child(self.path_button(cx))
+            .when(advanced, |this| this.child(self.path_button(cx)))
+            .child(self.advanced_button(advanced, cx))
             .child(
                 div()
                     .flex()
@@ -266,6 +274,26 @@ impl EqualizerView {
                         },
                     ))),
             )
+            .into_any_element()
+    }
+
+    /// The button that switches between the simple screen and the advanced one, remembered
+    /// across launches.
+    fn advanced_button(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("equalizer-advanced")
+            .small()
+            .outline()
+            .selected(advanced)
+            .label(t!("equalizer-advanced"))
+            .trailing(match advanced {
+                true => "icons/chevron-up.svg",
+                false => "icons/chevron-down.svg",
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.settings.update(cx, |settings, cx| {
+                    settings.set_equalizer_advanced(!advanced, cx)
+                })
+            }))
             .into_any_element()
     }
 
@@ -311,16 +339,24 @@ impl EqualizerView {
         )
     }
 
-    /// The profile that plays with the others to choose from, what can be done to it, and the
-    /// presets to load into it.
-    fn profiles(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The profile that plays with the others to choose from, the presets to load into it, and
+    /// undo and redo. Advanced mode adds what can be done to the profile, and simple mode leaves
+    /// out the profile picker while there is only one profile.
+    fn profiles(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let only = self.settings.read(cx).equalizer_profiles().count() < 2;
         let (undo, redo) = self.playback.read(cx).equalizer_history();
         let preset = Preset::matching(self.playback.read(cx).equalizer_curve());
 
-        let profiles = profile_picker(PROFILES, &self.popovers, &self.playback, &self.settings, cx)
-            .width(Picker::WIDE);
-        let presets = Picker::new(PRESETS, &self.popovers, t!("equalizer-load-preset"))
+        let profiles = (advanced || !only).then(|| {
+            profile_picker(PROFILES, &self.popovers, &self.playback, &self.settings, cx)
+                .width(Picker::WIDE)
+        });
+        let label = match (advanced, preset) {
+            (true, _) => t!("equalizer-load-preset"),
+            (false, Some(preset)) => i18n::lookup(preset_key(preset), None),
+            (false, None) => t!("settings-equalizer-custom"),
+        };
+        let presets = Picker::new(PRESETS, &self.popovers, label)
             .width(Picker::NARROW)
             .items(Preset::ALL.map(|chosen| {
                 MenuItem::new(chosen.id(), i18n::lookup(preset_key(chosen), None))
@@ -331,6 +367,10 @@ impl EqualizerView {
                         })
                     }))
             }));
+        let (leading, trailing) = match advanced {
+            true => (None, Some(presets)),
+            false => (Some(presets), None),
+        };
         let action = |id: &'static str, icon: &'static str, tooltip: &'static str| {
             Button::new(id).small().ghost().icon(icon).tooltip(tooltip)
         };
@@ -340,32 +380,35 @@ impl EqualizerView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .child(profiles)
-            .child(
-                action(
-                    "equalizer-new",
-                    "icons/plus.svg",
-                    "equalizer-profile-new-tooltip",
+            .children(profiles)
+            .when(advanced, |this| {
+                this.child(
+                    action(
+                        "equalizer-new",
+                        "icons/plus.svg",
+                        "equalizer-profile-new-tooltip",
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.new_profile(cx))),
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.new_profile(cx))),
-            )
-            .child(
-                action(
-                    "equalizer-duplicate",
-                    "icons/copy.svg",
-                    "equalizer-duplicate",
+                .child(
+                    action(
+                        "equalizer-duplicate",
+                        "icons/copy.svg",
+                        "equalizer-duplicate",
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.duplicate_profile(cx))),
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.duplicate_profile(cx))),
-            )
-            .child(
-                action("equalizer-rename", "icons/pencil.svg", "equalizer-rename")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_rename(window, cx))),
-            )
-            .child(
-                action("equalizer-delete", "icons/trash-2.svg", "equalizer-delete")
-                    .disabled(only)
-                    .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
-            )
+                .child(
+                    action("equalizer-rename", "icons/pencil.svg", "equalizer-rename")
+                        .on_click(cx.listener(|this, _, window, cx| this.open_rename(window, cx))),
+                )
+                .child(
+                    action("equalizer-delete", "icons/trash-2.svg", "equalizer-delete")
+                        .disabled(only)
+                        .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
+                )
+            })
+            .children(leading)
             .child(
                 action("equalizer-undo", "icons/undo-2.svg", "equalizer-undo")
                     .disabled(!undo)
@@ -382,8 +425,9 @@ impl EqualizerView {
                             .update(cx, |playback, cx| playback.redo_equalizer(cx))
                     })),
             )
-            .child(div().flex_1())
-            .child(presets)
+            .when_some(trailing, |this, presets| {
+                this.child(div().flex_1()).child(presets)
+            })
             .into_any_element()
     }
 
@@ -482,6 +526,7 @@ impl Render for EqualizerView {
         let inset = theme.metrics.inset;
         let room = Chrome::room(window, cx);
         let wide = room.fits(Room::Wide);
+        let advanced = self.settings.read(cx).equalizer_advanced();
 
         let page = Scroller::new("equalizer-page", &self.scrollbar)
             .p(inset)
@@ -490,51 +535,36 @@ impl Render for EqualizerView {
                     .flex()
                     .flex_col()
                     .gap_6()
-                    .child(self.header(cx))
+                    .child(self.header(advanced, cx))
                     .child(self.graph(room, cx))
-                    .children(self.signal_path(cx))
-                    .child(self.profiles(cx))
-                    .children(self.outputs(cx))
-                    .child(
-                        div()
-                            .key_context(FORM_CONTEXT)
-                            .on_action(cx.listener(|this, _: &Submit, window, cx| {
-                                cx.stop_propagation();
-                                this.submit(window, cx);
-                            }))
-                            .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
-                                cx.stop_propagation();
-                                this.revert(window, cx);
-                            }))
-                            .flex()
-                            .flex_col()
-                            .gap_6()
-                            .child(self.preamp_row(cx))
-                            .child(self.filters(wide, cx)),
-                    )
-                    .child(self.transfer(cx)),
+                    .when(advanced, |this| this.children(self.signal_path(cx)))
+                    .child(self.profiles(advanced, cx))
+                    .when(advanced, |this| {
+                        this.children(self.outputs(cx))
+                            .child(
+                                div()
+                                    .key_context(FORM_CONTEXT)
+                                    .on_action(cx.listener(|this, _: &Submit, window, cx| {
+                                        cx.stop_propagation();
+                                        this.submit(window, cx);
+                                    }))
+                                    .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                                        cx.stop_propagation();
+                                        this.revert(window, cx);
+                                    }))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_6()
+                                    .child(self.preamp_row(cx))
+                                    .child(self.filters(wide, cx)),
+                            )
+                            .child(self.transfer(cx))
+                    }),
             );
 
         div()
             .size_full()
             .child(page)
             .children(self.rename_dialog(cx))
-    }
-}
-
-fn preset_key(preset: Preset) -> &'static str {
-    match preset {
-        Preset::Flat => "settings-equalizer-flat",
-        Preset::BassBoost => "settings-equalizer-bass-boost",
-        Preset::BassReducer => "settings-equalizer-bass-reducer",
-        Preset::TrebleBoost => "settings-equalizer-treble-boost",
-        Preset::Vocal => "settings-equalizer-vocal",
-        Preset::Rock => "settings-equalizer-rock",
-        Preset::Pop => "settings-equalizer-pop",
-        Preset::Jazz => "settings-equalizer-jazz",
-        Preset::Classical => "settings-equalizer-classical",
-        Preset::Electronic => "settings-equalizer-electronic",
-        Preset::Acoustic => "settings-equalizer-acoustic",
-        Preset::Loudness => "settings-equalizer-loudness",
     }
 }

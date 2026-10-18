@@ -1,4 +1,5 @@
 use gpui::{App, Entity, SharedString};
+use music::equalizer::Preset;
 use state::{AppSettings, Playback, equalizer_profile_label};
 use ui::{MenuItem, Picker, Popovers};
 
@@ -27,4 +28,22 @@ pub(crate) fn profile_picker(
                 });
             })
     }))
+}
+
+/// The Fluent key naming a built-in preset.
+pub(crate) fn preset_key(preset: Preset) -> &'static str {
+    match preset {
+        Preset::Flat => "settings-equalizer-flat",
+        Preset::BassBoost => "settings-equalizer-bass-boost",
+        Preset::BassReducer => "settings-equalizer-bass-reducer",
+        Preset::TrebleBoost => "settings-equalizer-treble-boost",
+        Preset::Vocal => "settings-equalizer-vocal",
+        Preset::Rock => "settings-equalizer-rock",
+        Preset::Pop => "settings-equalizer-pop",
+        Preset::Jazz => "settings-equalizer-jazz",
+        Preset::Classical => "settings-equalizer-classical",
+        Preset::Electronic => "settings-equalizer-electronic",
+        Preset::Acoustic => "settings-equalizer-acoustic",
+        Preset::Loudness => "settings-equalizer-loudness",
+    }
 }

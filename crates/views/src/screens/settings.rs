@@ -9,7 +9,7 @@ use crate::chrome::OutputPicker;
 use crate::shared::confirm::{Confirm, Kind};
 use crate::shared::device_code::device_code;
 use crate::shared::effects;
-use crate::shared::equalizer::profile_picker;
+use crate::shared::equalizer::{preset_key, profile_picker};
 use crate::shared::local;
 use crate::shared::popups::{AccountPicker, CookiePrompt, SearchPopup, matches_query};
 use crate::shared::text;
@@ -22,6 +22,7 @@ use gpui::{
 use gpui::{ScrollHandle, prelude::*, svg};
 use i18n::{Language, t};
 use music::drm::Origin;
+use music::equalizer::Preset;
 use music::scrobble::{Link, Secret};
 use music::{
     AccountChoice, Codec, Encoding, Offer, Quality, SignIn, SignInPrompt, Transcode, WritingSystem,
@@ -89,6 +90,7 @@ const SLEEP: &str = "sleep";
 const STREAM_QUALITIES: &str = "stream-qualities";
 const STREAM_FORMATS: &str = "stream-formats";
 const STREAM_BITRATES: &str = "stream-bitrates";
+const EQUALIZER_PRESETS: &str = "equalizer-presets";
 const EQUALIZER_PROFILES: &str = "equalizer-profiles";
 const SLEEP_MAX_MINUTES: u64 = 120;
 const SLEEP_MAGNETS: [u64; 4] = [15, 30, 45, 60];
@@ -195,6 +197,7 @@ enum Slot {
     SampleRate,
     Buffer,
     Equalizer,
+    EqualizerPreset,
     EqualizerProfile,
     EqualizerScreen,
     LyricsProviders,
@@ -683,12 +686,14 @@ impl SettingsView {
                 if outputs.failure().is_none() {
                     slots.extend([Slot::SampleRate, Slot::Buffer]);
                 }
-                slots.extend([
-                    Slot::Title("settings-group-equalizer"),
-                    Slot::Equalizer,
-                    Slot::EqualizerProfile,
-                    Slot::EqualizerScreen,
-                ]);
+                slots.extend([Slot::Title("settings-group-equalizer"), Slot::Equalizer]);
+                if self.playback.read(cx).equalizer() {
+                    slots.push(Slot::EqualizerPreset);
+                    if self.settings.read(cx).equalizer_profiles().count() >= 2 {
+                        slots.push(Slot::EqualizerProfile);
+                    }
+                }
+                slots.push(Slot::EqualizerScreen);
                 slots.extend([Slot::Title("settings-group-lyrics"), Slot::LyricsProviders]);
                 if self
                     .settings
@@ -874,6 +879,10 @@ impl SettingsView {
             ),
             Slot::Buffer => (t!("settings-buffer"), t!("settings-buffer-detail")),
             Slot::Equalizer => (t!("settings-equalizer"), t!("settings-equalizer-detail")),
+            Slot::EqualizerPreset => (
+                t!("settings-equalizer-preset"),
+                t!("settings-equalizer-preset-detail"),
+            ),
             Slot::EqualizerProfile => (
                 t!("settings-equalizer-profile"),
                 t!("settings-equalizer-profile-detail"),
@@ -1098,6 +1107,7 @@ impl SettingsView {
             Slot::Buffer => self.buffer_row(cx).element,
             Slot::Widevine => self.widevine_row(cx).element,
             Slot::Equalizer => self.equalizer_row(cx).element,
+            Slot::EqualizerPreset => self.equalizer_preset_row(cx).element,
             Slot::EqualizerProfile => self.equalizer_profile_row(cx).element,
             Slot::EqualizerScreen => self.equalizer_screen_row(cx).element,
             Slot::LyricsProviders => self.lyrics_providers_row(cx).element,
@@ -2691,6 +2701,37 @@ impl SettingsView {
                         .update(cx, |playback, cx| playback.set_equalizer(!on, cx));
                 }))
                 .into_any_element(),
+        )
+    }
+
+    /// The built-in presets, showing the one the playing curve matches or Custom when it matches
+    /// none. Picking one replaces the playing profile's curve with it.
+    fn equalizer_preset_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let chosen = Preset::matching(self.playback.read(cx).equalizer_curve());
+        let label = match chosen {
+            Some(preset) => i18n::lookup(preset_key(preset), None),
+            None => t!("settings-equalizer-custom"),
+        };
+
+        let picker = Picker::new(EQUALIZER_PRESETS, &self.popovers, label)
+            .width(Picker::REGULAR)
+            .items(Preset::ALL.map(|preset| {
+                MenuItem::new(preset.id(), i18n::lookup(preset_key(preset), None))
+                    .selected(chosen == Some(preset))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.playback.update(cx, |playback, cx| {
+                            playback.set_equalizer_curve(preset.curve(), cx)
+                        });
+                    }))
+            }));
+
+        self.row(
+            t!("settings-equalizer-preset"),
+            t!("settings-equalizer-preset-detail"),
+            theme.muted_foreground,
+            theme.text(Text::Small),
+            picker.into_any_element(),
         )
     }
 

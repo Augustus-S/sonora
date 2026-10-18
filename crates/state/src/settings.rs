@@ -300,6 +300,9 @@ struct Values {
     equalizer_profiles: Vec<Profile>,
     #[serde(deserialize_with = "read_index")]
     equalizer_profile: usize,
+    /// Whether the equalizer screen shows its advanced controls, off so a first look shows only
+    /// the switch, the curve and the presets.
+    equalizer_advanced: bool,
     sleep_timer: bool,
     discord_presence: bool,
     discord_name: DiscordName,
@@ -527,6 +530,7 @@ impl Default for Values {
             equalizer_bands: Vec::new(),
             equalizer_profiles: Vec::new(),
             equalizer_profile: 0,
+            equalizer_advanced: false,
             sleep_timer: false,
             discord_presence: false,
             discord_name: DiscordName::Sonora,
@@ -1519,6 +1523,11 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
+    pub fn set_equalizer_advanced(&mut self, advanced: bool, cx: &mut Context<Self>) {
+        self.values.equalizer_advanced = advanced;
+        self.schedule_save(cx);
+    }
+
     /// The names of the equalizer profiles in order, empty for the one Sonora made.
     pub fn equalizer_profiles(&self) -> impl Iterator<Item = &str> {
         self.values
@@ -1530,6 +1539,10 @@ impl AppSettings {
     /// Which of `equalizer_profiles` plays.
     pub fn equalizer_profile(&self) -> usize {
         self.values.equalizer_profile
+    }
+
+    pub fn equalizer_advanced(&self) -> bool {
+        self.values.equalizer_advanced
     }
 
     /// The name of the profile that plays, empty for the one Sonora made.
