@@ -89,7 +89,7 @@ use crate::queue::Queue;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppSettings, Io, Network, Outcome, Session, SessionEvent, Target, Toast, Toasts, join,
+    AppSettings, Io, Network, Outcome, Session, SessionEvent, Sonora, Target, Toast, Toasts, join,
 };
 
 const POSITION_INTERVAL: Duration = Duration::from_millis(500);
@@ -2493,7 +2493,16 @@ impl Playback {
                 match exhausted {
                     true => {
                         log::warn!("playback: {FAILURE_LIMIT} tracks failed in a row, stopping");
-                        Toasts::show(Outcome::Failed, "toast-playback-stopped", cx);
+                        match self.module_suspect(cx) {
+                            true => {
+                                let toast = Toast::new(Outcome::Failed, "toast-widevine-failed")
+                                    .note("toast-widevine-borrowed")
+                                    .open("toast-open-settings", Target::PlaybackSettings)
+                                    .lasting();
+                                Toasts::post(toast, cx);
+                            }
+                            false => Toasts::show(Outcome::Failed, "toast-playback-stopped", cx),
+                        }
                     }
                     false => {
                         Toasts::linked(Outcome::Failed, "toast-track-unplayable", name, target, cx)
@@ -2516,6 +2525,15 @@ impl Playback {
             }
         }
         cx.notify();
+    }
+
+    /// Whether failing tracks point at the Widevine module: the current provider needs one,
+    /// and the one in use is a browser's copy rather than one the user downloaded.
+    fn module_suspect(&self, cx: &App) -> bool {
+        self.session.read(cx).wants_drm()
+            && cx
+                .try_global::<Sonora>()
+                .is_some_and(|sonora| sonora.drm.read(cx).borrowed())
     }
 
     /// Drops the streaming engine and everything derived from its session on sign-out. A local
