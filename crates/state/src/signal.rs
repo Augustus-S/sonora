@@ -122,13 +122,13 @@ impl SignalPath {
             changes.push(Change::Volume(self.volume));
         }
         if let (Some(track), Some(stream)) = (&self.track, &self.stream) {
-            if track.channels != stream.channels {
+            if track.channels != stream.format.channels {
                 changes.push(Change::Remixed {
                     from: track.channels,
-                    to: stream.channels,
+                    to: stream.format.channels,
                 });
             }
-            if let Sample::Integer(to) = stream.sample
+            if let Sample::Integer(to) = stream.format.sample
                 && bits.is_none_or(|bits| bits.min(FLOAT_BITS) > to)
             {
                 changes.push(Change::Requantized { to });
@@ -139,7 +139,7 @@ impl SignalPath {
 
     /// The track's rate and the stream's, when Sonora resamples one to the other.
     pub fn resampled(&self) -> Option<(u32, u32)> {
-        let (from, to) = (self.track.as_ref()?.rate, self.stream.as_ref()?.rate);
+        let (from, to) = (self.track.as_ref()?.rate, self.stream.as_ref()?.format.rate);
         (from != to).then_some((from, to))
     }
 
@@ -148,7 +148,7 @@ impl SignalPath {
     pub fn server_rate(&self) -> Option<u32> {
         let sink = self.sink.as_ref()?.format?;
         let stream = self.stream.as_ref()?;
-        (sink.rate != stream.rate).then_some(sink.rate)
+        (sink.rate != stream.format.rate).then_some(sink.rate)
     }
 }
 
@@ -236,7 +236,7 @@ impl Signal {
                 preamp_db: eq.preamp_db(),
                 passes_through: stream
                     .as_ref()
-                    .is_some_and(|stream| eq.curve().passes_through(stream.rate)),
+                    .is_some_and(|stream| eq.curve().passes_through(stream.format.rate)),
             });
             SignalPath {
                 track: track.cloned(),

@@ -5,10 +5,8 @@ use gpui::{
 };
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
-use state::{
-    AppSettings, BoundOutput, Equalizer, Outputs, Signal, SignalPath, Sonora,
-    equalizer_profile_label,
-};
+use music::output::OutputId;
+use state::{AppSettings, Equalizer, Outputs, Signal, SignalPath, Sonora, equalizer_profile_label};
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, MenuItem, Modal, Picker,
     Popovers, Room, Scrollbar, Scroller, Submit, TabBar, Text, heading,
@@ -89,7 +87,7 @@ struct Drawn {
     on: bool,
     history: (bool, bool),
     preamp: f64,
-    output: Option<BoundOutput>,
+    output: Option<OutputId>,
     port: Option<String>,
     path: Option<SignalPath>,
 }
@@ -215,7 +213,7 @@ impl EqualizerView {
             on: equalizer.enabled(),
             history: equalizer.history(),
             preamp: equalizer.preamp_db(),
-            output: outputs.output(),
+            output: outputs.binding_key(),
             port: outputs.sink().and_then(|sink| sink.port.clone()),
             path: self
                 .path
@@ -592,7 +590,7 @@ impl Render for EqualizerView {
         let room = Chrome::room(window, cx);
         let advanced = self.settings.read(cx).equalizer_advanced();
         let sound = self.sound(room, advanced, cx);
-        let routed = self.outputs.read(cx).output().is_some();
+        let routed = self.outputs.read(cx).binding_key().is_some();
 
         let page = Scroller::new("equalizer-page", &self.scrollbar)
             .p(inset)

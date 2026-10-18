@@ -13,7 +13,7 @@ use ardftsrc::RealtimeResampler;
 use rodio::{ChannelCount, SampleRate, Source};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::audio::{Chain, Format};
+use crate::audio::{Chain, PublishedFormat};
 use crate::output::{self, Output};
 
 /// How many packets stay queued before a write blocks. This is what paces the decoder to real
@@ -194,7 +194,7 @@ struct Chunk {
     channels: ChannelCount,
     rate: SampleRate,
     /// Where the chunk announces its format to the chain as it starts playing.
-    format: Format,
+    format: PublishedFormat,
     born: u32,
     generation: Arc<AtomicU32>,
     played: Arc<AtomicU64>,
@@ -205,7 +205,7 @@ struct Chunk {
 impl Chunk {
     fn new(
         packet: Packet,
-        format: &Format,
+        format: &PublishedFormat,
         cue: &Cue,
         live: &Arc<AtomicUsize>,
         spares: &Spares,
@@ -533,10 +533,11 @@ mod tests {
     fn a_new_track_starts_on_a_fresh_frame() {
         let (cue, _) = Cue::new();
         let (live, spares) = (Arc::default(), Spares::new());
-        let append = |player: &rodio::Player, format: &Format, samples: &[f32], channels| {
-            let packet = packet(samples.to_vec(), channels, 48_000).unwrap();
-            player.append(Chunk::new(packet, format, &cue, &live, &spares));
-        };
+        let append =
+            |player: &rodio::Player, format: &PublishedFormat, samples: &[f32], channels| {
+                let packet = packet(samples.to_vec(), channels, 48_000).unwrap();
+                player.append(Chunk::new(packet, format, &cue, &live, &spares));
+            };
         let tone = |i: usize| (i as f32 * 0.05).sin();
         let mono: Vec<f32> = (0..256).map(tone).collect();
         let stereo: Vec<f32> = (1..1_025).flat_map(|i| [tone(i), 0.]).collect();
@@ -570,9 +571,9 @@ mod tests {
     }
 
     /// A player and the chain its queue plays through, as an output opens them.
-    fn open() -> (rodio::Player, impl Iterator<Item = f32>, Format) {
+    fn open() -> (rodio::Player, impl Iterator<Item = f32>, PublishedFormat) {
         let (player, queue) = rodio::Player::new();
-        let format = Format::default();
+        let format = PublishedFormat::default();
         let writer = EqualizerWriter::new(true, Curve::bands(&[12.; 10]));
         let chain = Chain {
             volume: Volume::new(0.5),

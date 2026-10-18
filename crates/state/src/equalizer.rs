@@ -8,9 +8,10 @@ use gpui::prelude::*;
 use gpui::{Context, Entity, Subscription, Task};
 use music::Meter;
 use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, Preset, apo};
+use music::output::OutputId;
 
 use crate::overload::{OutputLevel, Overload};
-use crate::{AppSettings, BoundOutput, Outputs, Playback, Reloaded};
+use crate::{AppSettings, Outputs, Playback, Reloaded};
 
 /// How long after the last glided edit the curve is stored, so a drag or a run of wheel steps
 /// reaches the settings once, when it pauses.
@@ -121,7 +122,7 @@ impl Equalizer {
             .push(cx.observe(outputs, |this, outputs, cx| {
                 let settled = outputs
                     .read(cx)
-                    .settled_output()
+                    .settled_binding_key()
                     .map(|output| output.id.clone());
                 if let Some(id) = settled {
                     this.follow_output(id, cx);
@@ -262,12 +263,7 @@ impl Equalizer {
 
     /// Binds `output`, the one played on now, to profile `index`, or unbinds it with `None`,
     /// and plays the profile the output then asks for.
-    pub fn bind_output(
-        &mut self,
-        output: &BoundOutput,
-        index: Option<usize>,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn bind_output(&mut self, output: &OutputId, index: Option<usize>, cx: &mut Context<Self>) {
         self.settings.update(cx, |settings, cx| {
             settings.bind_equalizer_output(output.clone(), index, cx)
         });

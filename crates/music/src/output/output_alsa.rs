@@ -120,7 +120,8 @@ fn server() -> Option<Server> {
     if runtime.join("pipewire-0").exists() {
         return Some(Server::PipeWire);
     }
-    let pulse = std::env::var_os("PULSE_SERVER").is_some() || runtime.join("pulse/native").exists();
+    let pulse = std::env::var_os("PULSE_SERVER").is_some()
+        || super::output_server::pulse_sockets().any(|socket| socket.exists());
     pulse.then_some(Server::PulseAudio)
 }
 

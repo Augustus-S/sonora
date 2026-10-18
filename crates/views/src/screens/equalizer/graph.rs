@@ -473,7 +473,7 @@ fn rate(outputs: &Entity<Outputs>, cx: &App) -> u32 {
     outputs
         .read(cx)
         .current()
-        .map_or(IDLE_RATE, |device| device.rate)
+        .map_or(IDLE_RATE, |device| device.format.rate)
 }
 
 /// The response sampled on a log grid up to the axis's high end or the rate's Nyquist frequency,

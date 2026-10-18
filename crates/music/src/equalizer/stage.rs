@@ -20,7 +20,7 @@ const FLUSH_EVERY: u32 = 64;
 const FLUSH_BELOW: f64 = 1e-25;
 
 /// The equalizer with the rodio plumbing left out, so it can be driven frame by frame.
-pub(crate) struct Engine {
+pub(crate) struct FilterStage {
     reader: Equalizer,
     seen: u32,
     replaces: u32,
@@ -71,7 +71,7 @@ enum Phase {
     },
 }
 
-/// A gain that falls as soon as it is asked to and rises only once the engine lets it. Its
+/// A gain that falls as soon as it is asked to and rises only once the stage lets it. Its
 /// reciprocal moves linearly: a filter crossfades linearly too, so the level at any frequency
 /// is a ratio of two lines, which moves one way and never overshoots.
 struct Ramp {
@@ -85,8 +85,8 @@ struct Ramp {
     left: u32,
 }
 
-impl Engine {
-    /// An engine holding the current curve, which it takes up without a ramp at its first
+impl FilterStage {
+    /// A stage holding the current curve, which it takes up without a ramp at its first
     /// format. Built off the audio thread, so it may wait out a write under way.
     pub(crate) fn new(reader: Equalizer) -> Self {
         let mut engine = Self {
@@ -572,13 +572,13 @@ mod tests {
             .map(Shape::of)
     }
 
-    fn preamp_db(engine: &Engine) -> f64 {
+    fn preamp_db(engine: &FilterStage) -> f64 {
         20. * engine.preamp.current.log10()
     }
 
-    fn build(enabled: bool, curve: Curve, channels: u16) -> (EqualizerWriter, Engine) {
+    fn build(enabled: bool, curve: Curve, channels: u16) -> (EqualizerWriter, FilterStage) {
         let writer = EqualizerWriter::new(enabled, curve);
-        let mut engine = Engine::new(writer.reader());
+        let mut engine = FilterStage::new(writer.reader());
         engine.set_format(RATE, channels);
         engine.begin();
         (writer, engine)
@@ -969,7 +969,7 @@ mod tests {
     }
 
     /// Plays `frames` frames on two channels, each sample from `sample`.
-    fn play(engine: &mut Engine, frames: u32, mut sample: impl FnMut() -> f32) {
+    fn play(engine: &mut FilterStage, frames: u32, mut sample: impl FnMut() -> f32) {
         for _ in 0..frames {
             engine.begin();
             for channel in 0..2 {
@@ -978,8 +978,14 @@ mod tests {
         }
     }
 
-    /// Plays the same noise through both engines, which must agree bit for bit.
-    fn same(engine: &mut Engine, fresh: &mut Engine, frames: u32, seed: &mut u64, what: &str) {
+    /// Plays the same noise through both stages, which must agree bit for bit.
+    fn same(
+        engine: &mut FilterStage,
+        fresh: &mut FilterStage,
+        frames: u32,
+        seed: &mut u64,
+        what: &str,
+    ) {
         for i in 0..frames {
             engine.begin();
             fresh.begin();
@@ -999,7 +1005,7 @@ mod tests {
     }
 
     /// Plays awkward values, then noise, which must come out bit for bit as they went in.
-    fn through(engine: &mut Engine, seed: &mut u64, what: &str) {
+    fn through(engine: &mut FilterStage, seed: &mut u64, what: &str) {
         let odd = [
             0.,
             -0.,
@@ -1048,7 +1054,7 @@ mod tests {
         );
 
         // A filter that glided to 0 dB stops running and forgets what it heard, so gliding it
-        // back up sounds exactly like a fresh engine. The preamp keeps the chain busy meanwhile.
+        // back up sounds exactly like a fresh stage. The preamp keeps the chain busy meanwhile.
         let dip = |gain| under(Preamp::Manual(-6.), Kind::Peak, 1_000., gain, 1.);
         let (mut writer, mut engine) = build(true, dip(6.), 2);
         writer.set_curve(dip(0.), Edit::Glide);
@@ -1073,7 +1079,7 @@ mod tests {
     fn a_decayed_filter_is_flushed_to_exact_zero() {
         let shelf = one(Kind::LowShelf, 10., 24., 0.05);
         let writer = EqualizerWriter::new(true, shelf);
-        let mut engine = Engine::new(writer.reader());
+        let mut engine = FilterStage::new(writer.reader());
         engine.set_format(44_100, 1);
         engine.begin();
         engine.process(0, 1.);

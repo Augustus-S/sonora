@@ -228,11 +228,7 @@ fn encoding(encoding: Encoding) -> Vec<SharedString> {
 
 /// The device, then the stream's rate, channels and sample format, and the buffer it is handed in.
 fn stream(stream: &DeviceInfo) -> SharedString {
-    let format = format(Format {
-        rate: stream.rate,
-        channels: stream.channels,
-        sample: stream.sample,
-    });
+    let format = format(stream.format);
     join(vec![
         stream.name.clone().into(),
         format,

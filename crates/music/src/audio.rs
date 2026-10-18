@@ -6,7 +6,7 @@ use std::time::Duration;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 
-use crate::equalizer::{Engine, Equalizer};
+use crate::equalizer::{Equalizer, FilterStage};
 use crate::spectrum::{Analyzer, Probe, Spectrum, Tap};
 
 pub const RAMP: Duration = Duration::from_millis(25);
@@ -58,9 +58,9 @@ impl Meter {
 /// yields its first sample. The queue's own answer depends on how the previous chunk ended, so
 /// the chain follows this instead. Zero means no chunk has played yet.
 #[derive(Clone, Default)]
-pub(crate) struct Format(Arc<AtomicU64>);
+pub(crate) struct PublishedFormat(Arc<AtomicU64>);
 
-impl Format {
+impl PublishedFormat {
     pub(crate) fn publish(&self, rate: SampleRate, channels: ChannelCount) {
         let word = u64::from(rate.get()) << 16 | u64::from(channels.get());
         self.0.store(word, Ordering::Relaxed);
@@ -70,7 +70,7 @@ impl Format {
 /// Which channel of its frame each sample a chain stage pulls belongs to, counted from the
 /// format the playing chunk published. A change of format starts a new frame.
 pub(crate) struct Frames {
-    format: Format,
+    format: PublishedFormat,
     /// The word last read, so a change is noticed on the sample that brings it.
     seen: u64,
     channel: u16,
@@ -84,7 +84,7 @@ pub(crate) struct Place {
 }
 
 impl Frames {
-    pub(crate) fn new(format: Format) -> Self {
+    pub(crate) fn new(format: PublishedFormat) -> Self {
         Self {
             format,
             seen: 0,
@@ -144,7 +144,12 @@ impl Chain {
     /// `source` run through the equalizer and then the volume ramp, with the spectrum tap at the
     /// end, ready for the mixer. Every chunk queued on `source` publishes into `format`, and
     /// `clamped` holds it within full scale, for a device whose integer samples would wrap.
-    pub(crate) fn apply<S: Source>(&self, source: S, format: Format, clamped: bool) -> Chained<S> {
+    pub(crate) fn apply<S: Source>(
+        &self,
+        source: S,
+        format: PublishedFormat,
+        clamped: bool,
+    ) -> Chained<S> {
         Chained::new(source, self, format, clamped)
     }
 }
@@ -156,7 +161,7 @@ pub(crate) struct Chained<I> {
     input: I,
     frames: Frames,
     probe: Probe,
-    equalizer: Engine,
+    equalizer: FilterStage,
     volume: Volume,
     tap: Tap,
     /// Whether the tap hears the samples from before the gain. It is read once per frame so
@@ -175,13 +180,13 @@ pub(crate) struct Chained<I> {
 }
 
 impl<I: Source> Chained<I> {
-    fn new(input: I, chain: &Chain, format: Format, clamped: bool) -> Self {
+    fn new(input: I, chain: &Chain, format: PublishedFormat, clamped: bool) -> Self {
         let gain = chain.volume.get();
         Self {
             input,
             frames: Frames::new(format),
             probe: chain.analyzer.probe(),
-            equalizer: Engine::new(chain.equalizer.clone()),
+            equalizer: FilterStage::new(chain.equalizer.clone()),
             volume: chain.volume.clone(),
             tap: chain.spectrum.attach(),
             unscaled: false,

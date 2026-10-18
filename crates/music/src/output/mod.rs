@@ -32,6 +32,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use cpal::traits::{DeviceTrait as _, HostTrait as _};
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
@@ -94,6 +95,15 @@ pub struct DeviceOption {
     /// output. Nothing else can play on the card while Sonora holds it, and it does not open
     /// while the server does.
     pub direct: bool,
+}
+
+/// An output as equalizer profiles are bound to it, whether a sound server's sink or a device:
+/// its stable id, and its name when it was seen, so a binding to an output that is not
+/// connected can still be shown.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputId {
+    pub id: String,
+    pub name: String,
 }
 
 /// The sink a sound server plays Sonora's stream on, as the server names it.
@@ -256,20 +266,15 @@ pub struct DeviceInfo {
     /// Human-readable device name.
     pub name: String,
 
-    /// The rate the device runs at, which every track is resampled to.
-    pub rate: u32,
+    /// What the stream runs at. Every track is resampled to its rate and remixed to its
+    /// channels, and integer samples wrap past full scale where floats clip.
+    pub format: Format,
 
     /// The buffer Sonora asks the device for, in frames.
     pub buffer: u32,
 
-    /// How many channels the stream carries. The mixer remixes a track with others to these.
-    pub channels: u16,
-
-    /// How the stream takes each sample. Integer samples wrap past full scale where floats clip.
-    pub sample: Sample,
-
-    /// The rates `choose_rate` can open the device at, lowest first, `rate` among them. Only
-    /// `rate` where the system sets the rate itself.
+    /// The rates `choose_rate` can open the device at, lowest first, the format's among them.
+    /// Only that one where the system sets the rate itself.
     pub rates: Vec<u32>,
 
     /// The buffers `choose_buffer` can open the device with, in frames, lowest first, `buffer`
@@ -367,7 +372,7 @@ impl Device {
         if let Some(open) = current.filter(|open| {
             open.info.id == id
                 && open.live()
-                && !output_rate::moved(&device, open.info.rate, wanted)
+                && !output_rate::moved(&device, open.info.format.rate, wanted)
         }) {
             return Ok(open);
         }
@@ -400,10 +405,12 @@ impl Device {
             info: DeviceInfo {
                 id,
                 name,
-                rate: config.sample_rate(),
+                format: Format {
+                    rate: config.sample_rate(),
+                    channels: config.channels(),
+                    sample: Sample::of(config.sample_format()),
+                },
                 buffer,
-                channels: config.channels(),
-                sample: Sample::of(config.sample_format()),
                 rates,
                 buffers,
             },
@@ -432,7 +439,7 @@ impl Device {
         };
         let wanted = DeviceSelection::lock().rate;
         cpal_ident(&device).as_deref() != Some(self.info.id.as_str())
-            || output_rate::moved(&device, self.info.rate, wanted)
+            || output_rate::moved(&device, self.info.format.rate, wanted)
     }
 
     /// Has `changed` hear when the stream has to reopen.
@@ -493,7 +500,7 @@ pub(crate) struct Output {
     chain: Chain,
     sink: Arc<rodio::Player>,
     /// What every chunk appended to `sink` publishes its format into.
-    format: audio::Format,
+    format: audio::PublishedFormat,
     device: Arc<Device>,
 }
 
@@ -505,8 +512,8 @@ impl Output {
         let device = Device::acquire()?;
         device.listen(changed);
         let (sink, source) = rodio::Player::new();
-        let format = audio::Format::default();
-        let integer = matches!(device.info.sample, Sample::Integer(_));
+        let format = audio::PublishedFormat::default();
+        let integer = matches!(device.info.format.sample, Sample::Integer(_));
         device.add(chain.apply(source, format.clone(), integer));
         Ok(Self {
             chain,
@@ -521,13 +528,13 @@ impl Output {
     }
 
     /// Where a chunk appended to `sink` publishes its format, so the chain knows what it plays.
-    pub fn format(&self) -> &audio::Format {
+    pub fn format(&self) -> &audio::PublishedFormat {
         &self.format
     }
 
     /// The rate the device runs at, which every packet is resampled to before it is heard.
     pub fn rate(&self) -> u32 {
-        self.device.info.rate
+        self.device.info.format.rate
     }
 
     pub fn set_volume(&self, gain: f32) {
@@ -631,7 +638,7 @@ pub fn choose_rate(rate: Option<u32>) {
         .upgrade();
     if let Some(rate) = rate
         && let Some(open) = open
-        && rate != open.info.rate
+        && rate != open.info.format.rate
         && open.info.rates.contains(&rate)
     {
         log::info!("output: reopening {} at {rate} Hz", open.info.id);

@@ -7,7 +7,7 @@
 
 mod equalizer;
 
-pub use self::equalizer::{BoundOutput, equalizer_profile_label};
+pub use self::equalizer::equalizer_profile_label;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};

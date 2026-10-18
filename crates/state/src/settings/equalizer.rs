@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use anyhow::{Context as _, Result};
 use gpui::{Context, SharedString};
 use music::equalizer::{Curve, Filter, Kind, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, Width};
+use music::output::OutputId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -21,18 +22,10 @@ pub(super) struct Profile {
     filters: Vec<StoredFilter>,
     /// The output devices this profile plays on. A device is named by one profile at most.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    outputs: Vec<BoundOutput>,
+    outputs: Vec<OutputId>,
     /// Whether this profile plays on every output no profile names. One profile at most.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     other_outputs: bool,
-}
-
-/// An output device a profile is bound to: its stable id, and its name when it was bound, so
-/// a binding to a device that is not connected can still be shown.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BoundOutput {
-    pub id: String,
-    pub name: String,
 }
 
 /// `"auto"` or a number of decibels.
@@ -160,7 +153,7 @@ impl Profile {
             profile_field(&mut fields, "outputs").unwrap_or_default();
         profile.outputs = outputs
             .into_iter()
-            .filter_map(|output| match serde_json::from_value::<BoundOutput>(output) {
+            .filter_map(|output| match serde_json::from_value::<OutputId>(output) {
                 Ok(output) if !output.id.is_empty() => Some(output),
                 _ => {
                     log::warn!(
@@ -458,7 +451,7 @@ impl AppSettings {
     /// Binds `output` to profile `index`, taking it from any other, or unbinds it with `None`.
     pub fn bind_equalizer_output(
         &mut self,
-        output: BoundOutput,
+        output: OutputId,
         index: Option<usize>,
         cx: &mut Context<Self>,
     ) {

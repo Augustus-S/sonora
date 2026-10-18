@@ -304,9 +304,19 @@ fn own_names() -> Vec<String> {
         .collect()
 }
 
-/// The server's socket, found the way libpulse looks for it: `PULSE_SERVER` when it names
-/// a local socket, then the runtime directories, each tried in turn.
+/// The server's socket, the first of `pulse_sockets` that answers.
 async fn connect() -> Result<UnixStream> {
+    for path in pulse_sockets() {
+        if let Ok(socket) = UnixStream::connect(&path).await {
+            return Ok(socket);
+        }
+    }
+    bail!("no sound server socket answers")
+}
+
+/// Where the PulseAudio socket may be, in the order libpulse looks: `PULSE_SERVER` when it
+/// names a local socket, then the runtime directories. PipeWire answers there too.
+pub(super) fn pulse_sockets() -> impl Iterator<Item = PathBuf> {
     let server = std::env::var("PULSE_SERVER").ok();
     let named = server
         .as_deref()
@@ -316,12 +326,7 @@ async fn connect() -> Result<UnixStream> {
         std::env::var_os("PULSE_RUNTIME_PATH").map(|path| PathBuf::from(path).join("native")),
         std::env::var_os("XDG_RUNTIME_DIR").map(|path| PathBuf::from(path).join("pulse/native")),
     ];
-    for path in named.into_iter().chain(runtime.into_iter().flatten()) {
-        if let Ok(socket) = UnixStream::connect(&path).await {
-            return Ok(socket);
-        }
-    }
-    bail!("no sound server socket answers")
+    named.into_iter().chain(runtime.into_iter().flatten())
 }
 
 /// The authentication cookie from where libpulse keeps it, or zeros.

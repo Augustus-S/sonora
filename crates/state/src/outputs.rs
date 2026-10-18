@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
-use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened, Sink};
+use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened, OutputId, Sink};
 
-use crate::{AppSettings, BoundOutput, Io, Outcome, Playback, Toasts, join};
+use crate::{AppSettings, Io, Outcome, Playback, Toasts, join};
 
 /// How long a newly picked device holds the picker before it is let go, whether or not it has
 /// answered. CoreAudio takes about ten seconds to give up on a device that will not start.
@@ -26,9 +26,9 @@ const RETRY_MOST: Duration = Duration::from_secs(60);
 /// runs at, and on Linux the sink the sound server plays it on. The list is read off the main
 /// thread, since that opens devices on some platforms, and both are read again whenever a stream
 /// opens or closes. A device picked here is opened first and only moved onto, and saved, once it
-/// has; one that will not open leaves everything as it was and says so in a toast. The output the
-/// sound plays on is settled in `settled_output`, which the equalizer follows to switch to the
-/// profile bound to it.
+/// has. One that will not open leaves everything as it was and says so in a toast. The output
+/// the sound plays on settles in `settled_binding_key`, which the equalizer follows to switch to
+/// the profile bound to it.
 pub struct Outputs {
     settings: Entity<AppSettings>,
     playback: Entity<Playback>,
@@ -58,7 +58,7 @@ pub struct Outputs {
     sink: Option<Sink>,
     /// The output the sound plays on once it settled, kept while none is known so the equalizer
     /// following it sees no move.
-    settled: Option<BoundOutput>,
+    settled: Option<OutputId>,
     /// Whether the sound server answers, so its reports, which wait for a new stream to settle,
     /// name the output rather than the device watch. Assumed until the server is found missing.
     #[cfg(target_os = "linux")]
@@ -145,24 +145,25 @@ impl Outputs {
         self.active.as_ref().or(self.known.as_ref())
     }
 
-    /// The output the sound plays on, as equalizer profiles are bound to it: the sound server's
-    /// sink while it plays Sonora, otherwise the device Sonora's stream is open on, or last was.
-    pub fn output(&self) -> Option<BoundOutput> {
+    /// The key equalizer profiles are bound to for the output the sound plays on: the sound
+    /// server's sink while it plays Sonora, otherwise the device Sonora's stream is open on, or
+    /// last was.
+    pub fn binding_key(&self) -> Option<OutputId> {
         let (id, name) = match (self.sink(), self.current()) {
             (Some(sink), _) => (&sink.id, &sink.name),
             (None, Some(device)) => (&device.id, &device.name),
             (None, None) => return None,
         };
-        Some(BoundOutput {
+        Some(OutputId {
             id: id.clone(),
             name: name.clone(),
         })
     }
 
-    /// The output the sound plays on as last settled. Unlike `output` it waits for the sound
+    /// The binding key as last settled. Unlike `binding_key` it waits for the sound
     /// server's report after a stream opens, so the equalizer following it never switches
     /// profiles on a device that is only named for a moment.
-    pub fn settled_output(&self) -> Option<&BoundOutput> {
+    pub fn settled_binding_key(&self) -> Option<&OutputId> {
         self.settled.as_ref()
     }
 
@@ -214,7 +215,7 @@ impl Outputs {
             .read(cx)
             .output_rate()
             .filter(|rate| active.rates.contains(rate));
-        Some(wanted.unwrap_or(active.rate))
+        Some(wanted.unwrap_or(active.format.rate))
     }
 
     /// Opens the device at `rate` from now on, and saves it. The engines reopen at it, paused or
@@ -367,7 +368,7 @@ impl Outputs {
     /// Settles on the output played on now, notifying when it changed. While nothing names an
     /// output the last one stays.
     fn follow_output(&mut self, cx: &mut Context<Self>) {
-        let Some(output) = self.output() else {
+        let Some(output) = self.binding_key() else {
             return;
         };
         if self.settled.as_ref() != Some(&output) {

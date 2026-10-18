@@ -1,7 +1,8 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, div};
 use i18n::t;
-use state::{BoundOutput, equalizer_profile_label};
+use music::output::OutputId;
+use state::equalizer_profile_label;
 use ui::{InfoCard, MenuItem, Picker, Separator};
 
 use super::{EqualizerView, blurb, entry};
@@ -14,7 +15,7 @@ impl EqualizerView {
     /// output with none of its own plays. Left out while nothing says which output plays.
     pub(super) fn outputs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let outputs = self.outputs.read(cx);
-        let output = outputs.output()?;
+        let output = outputs.binding_key()?;
         let port = outputs.sink().and_then(|sink| sink.port.clone());
         let settings = self.settings.read(cx);
         let names: Vec<SharedString> = settings
@@ -111,7 +112,7 @@ impl EqualizerView {
             .collect()
     }
 
-    fn bind(&mut self, output: &BoundOutput, index: Option<usize>, cx: &mut Context<Self>) {
+    fn bind(&mut self, output: &OutputId, index: Option<usize>, cx: &mut Context<Self>) {
         self.equalizer
             .update(cx, |equalizer, cx| equalizer.bind_output(output, index, cx));
     }

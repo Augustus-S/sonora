@@ -65,8 +65,8 @@ pub use scrobble::{ScrobbleRow, ScrobbleState, Scrobbling};
 pub use search::{AlbumHit, ArtistHit, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
-    AppSettings, BoundOutput, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES,
-    Reloaded, RomanizationScripts, SYSTEM_FONT, SideTab, equalizer_profile_label, remember_window,
+    AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES, Reloaded,
+    RomanizationScripts, SYSTEM_FONT, SideTab, equalizer_profile_label, remember_window,
     window_placement,
 };
 pub use signal::{Change, Equalizing, Signal, SignalPath};

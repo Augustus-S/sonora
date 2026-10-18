@@ -1,20 +1,20 @@
 //! The parametric equalizer: the curve a user edits and the settings keep, the response that
-//! curve promises, and the presets. `engine` runs the filters and `shared` carries a curve from
+//! curve promises, and the presets. `stage` runs the filters and `shared` carries a curve from
 //! its one writer to every output.
 
 pub mod apo;
 mod design;
-mod engine;
 mod shared;
+mod stage;
 
 use std::f64::consts::{LN_2, SQRT_2};
 use std::fmt;
 use std::ops::RangeInclusive;
 
 use design::{Biquad, Coefficients, Shape, phi};
-pub(crate) use engine::Engine;
-pub use engine::MAX_CHANNELS;
 pub use shared::{Edit, Equalizer, EqualizerWriter};
+pub(crate) use stage::FilterStage;
+pub use stage::MAX_CHANNELS;
 
 /// How many filters a curve holds at most, which is also how many the audio thread reserves.
 pub const MAX_FILTERS: usize = 20;
@@ -321,7 +321,7 @@ impl Curve {
         &mut self.filters
     }
 
-    /// The preamp in decibels the engine applies. An automatic one is lowered by the curve's
+    /// The preamp in decibels the filter stage applies. An automatic one is lowered by the curve's
     /// highest boost at any rate it may play at, so no steady tone leaves above full scale.
     pub fn preamp_db(&self) -> f64 {
         match self.preamp {
