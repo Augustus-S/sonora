@@ -200,23 +200,6 @@ impl EqualizerView {
         self.apply(curve, cx);
     }
 
-    /// A number field and its unit after it.
-    pub(super) fn number(&self, input: &Entity<Input>, unit: SharedString, cx: &App) -> AnyElement {
-        let theme = cx.theme();
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(div().w(theme.metrics.cover * FIELD).child(input.clone()))
-            .child(
-                div()
-                    .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(unit),
-            )
-            .into_any_element()
-    }
-
     fn filter_row(
         &self,
         index: usize,
@@ -247,7 +230,7 @@ impl EqualizerView {
                     }))
             }));
         let gain = match filter.kind().has_gain() {
-            true => self.number(&row.gain, t!("equalizer-decibels"), cx),
+            true => measured(row.gain.clone(), t!("equalizer-decibels"), cx),
             false => div()
                 .text_color(theme.muted_foreground)
                 .child(t!("equalizer-no-gain"))
@@ -271,13 +254,13 @@ impl EqualizerView {
             .flex_wrap()
             .items_center()
             .gap_3()
-            .child(cell(cover * NUMBER).child(self.number(
-                &row.frequency,
+            .child(cell(cover * NUMBER).child(measured(
+                row.frequency.clone(),
                 t!("equalizer-hertz"),
                 cx,
             )))
             .child(cell(cover * NUMBER).child(gain))
-            .child(cell(cover * NUMBER).child(self.number(&row.width, width_unit, cx)));
+            .child(cell(cover * NUMBER).child(measured(row.width.clone(), width_unit, cx)));
         let controls = div()
             .flex()
             .items_center()
@@ -383,9 +366,10 @@ impl EqualizerView {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .mx_neg_2()
                     .when(wide, |this| {
                         this.child(self.columns(cx))
-                            .child(Separator::horizontal().my_1())
+                            .child(Separator::horizontal().mx_2().my_1())
                     })
                     .children(rows),
             ),
@@ -494,6 +478,29 @@ fn kind_name(kind: Kind) -> SharedString {
         Kind::AllPass => "equalizer-kind-all-pass",
     };
     i18n::lookup(key, None)
+}
+
+/// A field-wide `value` with `unit` after it, so a read-only figure in place of a number field
+/// takes the same room and nothing beside it moves.
+pub(super) fn measured(value: impl IntoElement, unit: SharedString, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .flex_none()
+                .w(theme.metrics.cover * FIELD)
+                .child(value),
+        )
+        .child(
+            div()
+                .text_size(theme.text(Text::Small))
+                .text_color(theme.muted_foreground)
+                .child(unit),
+        )
+        .into_any_element()
 }
 
 /// A fixed-width column of the filter table.

@@ -72,6 +72,7 @@ impl EqualizerView {
                     div()
                         .flex()
                         .flex_col()
+                        .my_neg_3()
                         .child(entry(
                             t!("equalizer-output-this"),
                             output_name(&output.name, port.as_deref()),

@@ -18,7 +18,7 @@ use crate::shared::equalizer::sound_picker;
 
 use graph::{EqualizerGraph, Selected};
 use meter::OutputMeter;
-use rows::{Row, figure};
+use rows::{Row, figure, measured};
 
 mod graph;
 mod meter;
@@ -331,7 +331,6 @@ impl EqualizerView {
                 .w_full()
                 .h(theme.metrics.control_small),
         );
-        let wide = room.fits(Room::Wide);
         let on = self.equalizer.read(cx).enabled();
         let only = self.settings.read(cx).equalizer_profiles().count() < 2;
         let (undo, redo) = self.equalizer.read(cx).history();
@@ -341,9 +340,13 @@ impl EqualizerView {
             .large()
             .left()
             .width(width)
-            .map(|picker| match wide {
-                true => picker.w(width),
-                false => picker.flex_1().min_w_0(),
+            .map(|picker| match room {
+                Room::Wide | Room::Vast => picker.w(width),
+                Room::Roomy => picker.flex_1().min_w_0(),
+                Room::Tight | Room::Snug => match advanced {
+                    true => picker.w_full(),
+                    false => picker.flex_1().min_w_0(),
+                },
             });
         let action = |id: &'static str, icon: &'static str, tooltip: &'static str| {
             Button::new(id).ghost().icon(icon).tooltip(tooltip)
@@ -452,12 +455,16 @@ impl EqualizerView {
             }),
         );
         let value = match auto {
-            true => div()
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(t!("equalizer-decibels-value", db = figure(resolved, 1)))
-                .into_any_element(),
-            false => self.number(&self.preamp, t!("equalizer-decibels"), cx),
+            true => measured(
+                div()
+                    .text_right()
+                    .text_size(theme.text(Text::Small))
+                    .text_color(theme.muted_foreground)
+                    .child(figure(resolved, 1)),
+                t!("equalizer-decibels"),
+                cx,
+            ),
+            false => measured(self.preamp.clone(), t!("equalizer-decibels"), cx),
         };
         let controls = div()
             .flex()
