@@ -722,6 +722,16 @@ impl TidalClient {
         Ok(())
     }
 
+    /// The listener's name as their profile shows it, which owns their playlists. It is empty
+    /// when the profile cannot be read.
+    async fn listener_name(&self) -> String {
+        self.profile()
+            .await
+            .map(|profile| profile.display_name)
+            .inspect_err(|error| log::debug!("tidal: no name for the listener: {error:#}"))
+            .unwrap_or_default()
+    }
+
     /// Marks the session as gone when Tidal refused to renew it.
     fn revoke_if_refused(&self, error: &anyhow::Error) {
         if auth::refused(error) {
@@ -1057,7 +1067,7 @@ impl MusicApi for TidalClient {
             "/users/{}/playlistsAndFavoritePlaylists",
             escape::component(&user_id)
         );
-        let (playlists, mixes) = tokio::join!(
+        let (playlists, mixes, listener) = tokio::join!(
             self.all(&path, LATEST, PLAYLIST_PAGE, |page| {
                 wire::items(page)
                     .iter()
@@ -1065,8 +1075,12 @@ impl MusicApi for TidalClient {
                     .collect()
             }),
             self.saved_mixes(),
+            self.listener_name(),
         );
-        let mut playlists = playlists.context("cannot load the playlists")?;
+        let mut playlists: Vec<Playlist> = playlists.context("cannot load the playlists")?;
+        for playlist in &mut playlists {
+            wire::credit(playlist, &listener);
+        }
         match mixes {
             Ok(mixes) => playlists.extend(mixes),
             Err(error) => log::warn!("tidal: cannot load the saved mixes: {error:#}"),
@@ -1301,15 +1315,17 @@ impl MusicApi for TidalClient {
         }
         let detail_path = format!("/playlists/{}", escape::component(playlist_id));
         let items_path = format!("{detail_path}/items");
-        let (detail, tracks) = tokio::join!(
+        let (detail, tracks, listener) = tokio::join!(
             self.get(&detail_path, &[]),
             self.all(&items_path, &[], PAGE, wire::track_list),
+            self.listener_name(),
         );
         let detail = detail.with_context(|| format!("cannot load the playlist {playlist_id}"))?;
         let tracks = tracks.with_context(|| format!("cannot load the playlist {playlist_id}"))?;
         let user_id = self.user_id().await;
         let mut playlist = wire::playlist(&detail, &user_id)
             .with_context(|| format!("cannot read the playlist {playlist_id}"))?;
+        wire::credit(&mut playlist, &listener);
         if playlist.cover.is_none() {
             playlist.cover = tracks.iter().find_map(|track| track.cover.clone());
         }

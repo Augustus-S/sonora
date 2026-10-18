@@ -218,7 +218,7 @@ pub fn genre(value: &Value) -> Option<Genre> {
 }
 
 /// A playlist out of a bare or wrapped playlist object. `user_id` decides whether the
-/// listener owns it.
+/// listener owns it. One of the listener's comes with no owner name, which [`credit`] fills.
 pub fn playlist(wrapper: &Value, user_id: &str) -> Option<Playlist> {
     let value = unwrap(wrapper);
     let id = text(value, "uuid")?.to_owned();
@@ -251,6 +251,14 @@ pub fn playlist(wrapper: &Value, user_id: &str) -> Option<Playlist> {
         modified_at,
         id,
     })
+}
+
+/// Names the listener as the owner of a playlist of theirs whose creator Tidal left unnamed,
+/// which it does for every playlist a listener makes.
+pub fn credit(playlist: &mut Playlist, listener: &str) {
+    if playlist.owned && playlist.owner.is_empty() {
+        playlist.owner = listener.to_owned();
+    }
 }
 
 /// A mix as a playlist the listener does not own. Its id carries `MIX` in front, so a later
