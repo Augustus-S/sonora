@@ -58,10 +58,7 @@ ytmusic.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-core-audio.workspace = true
-objc2-core-foundation.workspace = true
+cpal = { workspace = true, features = ["pipewire", "pulseaudio"] }
 
 [dev-dependencies]
 env_logger.workspace = true

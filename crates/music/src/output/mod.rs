@@ -10,13 +10,17 @@
 //! or leaves the system and comes back. Opening one can take CoreAudio ten seconds to give up on.
 //! A device the system no longer lists is gone, which is not a failure: the default plays in its
 //! place without trying it, and it is played on again once it is back.
+//!
+//! On Linux cpal plays through PipeWire when it runs, then PulseAudio, then ALSA. A sound server
+//! offers its own outputs, and a sound card's own ALSA device can still be picked to play past it.
 
 #[cfg(target_os = "linux")]
 mod output_alsa;
+#[cfg(target_os = "linux")]
+mod output_host;
 mod output_rate;
-#[cfg(target_os = "macos")]
-mod output_rate_macos;
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
@@ -80,6 +84,11 @@ pub struct DeviceOption {
     /// Whether it is the system's default output right now. No device in the list is when the
     /// default is not a device of its own, as on ALSA, where it is left out of the list.
     pub system: bool,
+
+    /// Whether it is a sound card's own device, opened past the sound server for bit-perfect
+    /// output. Nothing else can play on the card while Sonora holds it, and it does not open
+    /// while the server does.
+    pub direct: bool,
 }
 
 /// A device that would not open, and why.
@@ -305,12 +314,15 @@ impl Device {
     /// The open stream on `device`, or a new one.
     fn join(device: cpal::Device) -> Result<Arc<Self>> {
         let id = cpal_ident(&device).context("the output device has no id")?;
+        let wanted = DeviceSelection::lock().rate;
         let current = ACTIVE_DEVICE
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .upgrade();
         if let Some(open) = current.filter(|open| {
-            open.info.id == id && open.live() && !output_rate::moved(&device, open.info.rate)
+            open.info.id == id
+                && open.live()
+                && !output_rate::moved(&device, open.info.rate, wanted)
         }) {
             return Ok(open);
         }
@@ -371,8 +383,9 @@ impl Device {
         let Ok(device) = resolve_device() else {
             return true;
         };
+        let wanted = DeviceSelection::lock().rate;
         cpal_ident(&device).as_deref() != Some(self.info.id.as_str())
-            || output_rate::moved(&device, self.info.rate)
+            || output_rate::moved(&device, self.info.rate, wanted)
     }
 
     /// Has `changed` hear when the stream has to reopen.
@@ -455,38 +468,59 @@ impl Output {
     }
 }
 
-/// Every output device the system offers. This opens devices on some platforms, so call it off
-/// the UI thread.
+/// Every output device the system offers. On Linux with a sound server that is the server's own
+/// outputs, followed by each sound card's direct device. This opens devices on some platforms, so
+/// call it off the UI thread.
 pub fn devices() -> Vec<DeviceOption> {
     let host = cpal::default_host();
-    let system = host
-        .default_output_device()
-        .and_then(|device| device.id().ok());
+    let system = system_default(&host);
     let Ok(devices) = host.output_devices() else {
         return Vec::new();
     };
-    #[cfg(target_os = "linux")]
-    let alsa = output_alsa::is_alsa(&host);
-    devices
+    let mut options: Vec<DeviceOption> = devices
         .filter_map(|device| {
-            let id = device.id().ok()?;
+            let id = cpal_ident(&device)?;
             let (name, detail) = cpal_describe(&device);
             let option = DeviceOption {
                 system: system.as_ref() == Some(&id),
-                id: id.to_string(),
+                id,
                 card: None,
                 label: name.clone(),
                 name,
                 detail,
+                direct: false,
             };
             #[cfg(target_os = "linux")]
-            let option = match alsa {
-                true => output_alsa::tidy(&id.1, option)?,
-                false => option,
-            };
+            let option = output_host::listed(&device, option)?;
             Some(option)
         })
-        .collect()
+        .collect();
+    #[cfg(target_os = "linux")]
+    if output_host::is_server(&host) {
+        options.extend(output_alsa::direct_devices());
+    }
+    // ALSA can list one card both by name and by number, which come out as one id
+    let mut seen = HashSet::new();
+    options.retain(|option| seen.insert(option.id.clone()));
+    options
+}
+
+/// Whether a device id saved in settings can never name a device here again, so it should be
+/// forgotten rather than waited for. That is an id that does not parse, or an ALSA device other
+/// than a sound card's own once a sound server plays. Asks the system, so call it off the UI
+/// thread.
+pub fn retired(id: &str) -> bool {
+    match id.parse::<cpal::DeviceId>() {
+        Err(_) => true,
+        #[cfg(target_os = "linux")]
+        Ok(id) => {
+            id.host() == cpal::HostId::Alsa
+                && !output_alsa::is_direct(id.id())
+                && output_host::is_server(&cpal::default_host())
+        }
+        #[cfg(not(target_os = "linux"))]
+        Ok(_) => false,
+    }
 }
 
 /// Opens the device with `id`, or the system's default when `id` is `None`, as a device picked in
@@ -496,11 +530,7 @@ pub fn devices() -> Vec<DeviceOption> {
 pub fn open(id: Option<&str>) -> Result<Opened> {
     let host = cpal::default_host();
     let device = match id {
-        Some(id) => id
-            .parse()
-            .ok()
-            .and_then(|id| host.device_by_id(&id))
-            .context("the device is not connected")?,
+        Some(id) => find_device(&host, id).context("the device is not connected")?,
         None => host
             .default_output_device()
             .context("no audio output device")?,
@@ -589,7 +619,7 @@ pub fn system_audio_settings_uri(device: Option<&str>) -> Option<String> {
         // a WASAPI id is the endpoint id the device properties page takes
         let endpoint = device
             .and_then(|id| id.parse::<cpal::DeviceId>().ok())
-            .map(|id| id.1);
+            .map(|id| id.id().to_owned());
         Some(match endpoint {
             Some(endpoint) => format!("ms-settings:sound-properties?endpointId={endpoint}"),
             None => "ms-settings:sound".to_owned(),
@@ -624,8 +654,7 @@ fn resolve_device() -> Result<cpal::Device> {
             .filter(|id| !selection.has_failed(id))
     };
     if let Some(id) = chosen
-        && let Ok(id) = id.parse()
-        && let Some(device) = host.device_by_id(&id)
+        && let Some(device) = find_device(&host, &id)
     {
         return Ok(device);
     }
@@ -698,21 +727,51 @@ fn forget_gone(host: &cpal::Host) {
     let ids = DeviceSelection::lock().failed_ids();
     let gone: Vec<String> = ids
         .into_iter()
-        .filter(|id| {
-            id.parse()
-                .ok()
-                .and_then(|id| host.device_by_id(&id))
-                .is_none()
-        })
+        .filter(|id| find_device(host, id).is_none())
         .collect();
     if !gone.is_empty() {
         DeviceSelection::lock().forget(&gone);
     }
 }
 
-/// cpal's id for `device` as a string, or `None` when cpal cannot read one.
+/// The id of the device the system plays its default output on, as `devices` lists it, or `None`
+/// when the default is not one of the listed devices.
+#[cfg(target_os = "linux")]
+fn system_default(host: &cpal::Host) -> Option<String> {
+    output_host::system_default(host)
+}
+
+/// The id of the device the system plays its default output on, as `devices` lists it.
+#[cfg(not(target_os = "linux"))]
+fn system_default(host: &cpal::Host) -> Option<String> {
+    host.default_output_device()
+        .and_then(|device| cpal_ident(&device))
+}
+
+/// The device saved as `id`, looked up on `host`, or on Linux on the ALSA host for a sound card's
+/// own device. `None` when it is not connected or `id` names nothing here.
+fn find_device(host: &cpal::Host, id: &str) -> Option<cpal::Device> {
+    let id: cpal::DeviceId = id.parse().ok()?;
+    #[cfg(target_os = "linux")]
+    if id.host() == cpal::HostId::Alsa {
+        return output_alsa::device(host, id.id());
+    }
+    if id.host() != host.id() {
+        return None;
+    }
+    host.device_by_id(&id)
+}
+
+/// The id Sonora saves for `device`, or `None` when cpal cannot read one. It is cpal's id, with an
+/// ALSA sound card named rather than numbered, since the numbers change as cards come and go.
 fn cpal_ident(device: &cpal::Device) -> Option<String> {
-    device.id().ok().map(|id| id.to_string())
+    let id = device.id().ok()?;
+    #[cfg(target_os = "linux")]
+    if id.host() == cpal::HostId::Alsa {
+        let pcm = output_alsa::named(id.id());
+        return Some(cpal::DeviceId::new(cpal::HostId::Alsa, &pcm).to_string());
+    }
+    Some(id.to_string())
 }
 
 /// The name the system shows for `device`, or its id when it has none, and the lines of its
@@ -728,8 +787,7 @@ fn cpal_describe(device: &cpal::Device) -> (String, Option<String>) {
     let name = description.name();
     let lines: Vec<&str> = description
         .extended()
-        .iter()
-        .map(|line| line.trim())
+        .map(str::trim)
         .filter(|line| !line.is_empty() && *line != name)
         .collect();
     let detail = match lines.is_empty() {
@@ -744,16 +802,23 @@ fn cpal_describe(device: &cpal::Device) -> (String, Option<String>) {
 fn buffers(config: &cpal::SupportedStreamConfig, buffer: u32) -> Vec<u32> {
     let mut buffers: Vec<u32> = BUFFERS
         .into_iter()
-        .filter(|frames| match *config.buffer_size() {
-            cpal::SupportedBufferSize::Range { min, max } => (min..=max).contains(frames),
-            cpal::SupportedBufferSize::Unknown => true,
-        })
+        .filter(|frames| buffer_range(config).is_none_or(|(min, max)| (min..=max).contains(frames)))
         .collect();
     if !buffers.contains(&buffer) {
         buffers.push(buffer);
         buffers.sort_unstable();
     }
     buffers
+}
+
+/// The buffers `config` allows, in frames, as `(min, max)`, or `None` when the device does not
+/// say. PipeWire reports an empty range until it has sent its clock settings, which says nothing.
+fn buffer_range(config: &cpal::SupportedStreamConfig) -> Option<(u32, u32)> {
+    match *config.buffer_size() {
+        cpal::SupportedBufferSize::Range { max: 0, .. } => None,
+        cpal::SupportedBufferSize::Range { min, max } => Some((min, max.max(min))),
+        cpal::SupportedBufferSize::Unknown => None,
+    }
 }
 
 /// Opens the stream on `device` in `config` with a buffer of `frames`, as far as the device
@@ -766,9 +831,9 @@ fn open_stream(
     frames: u32,
     failed: &Arc<AtomicBool>,
 ) -> Result<(MixerDeviceSink, u32)> {
-    let frames = match *config.buffer_size() {
-        cpal::SupportedBufferSize::Range { min, max } => frames.clamp(min, max.max(min)),
-        cpal::SupportedBufferSize::Unknown => frames,
+    let frames = match buffer_range(config) {
+        Some((min, max)) => frames.clamp(min, max),
+        None => frames,
     };
     let latency = f64::from(frames) * 1_000. / f64::from(config.sample_rate().max(1));
     log::info!(
@@ -785,9 +850,12 @@ fn open_stream(
         .with_config(&config.config())
         .with_buffer_size(cpal::BufferSize::Fixed(frames))
         .with_sample_format(config.sample_format())
-        .with_error_callback(move |error| match error {
-            cpal::StreamError::BufferUnderrun => log::debug!("output: buffer underrun"),
-            error => {
+        .with_error_callback(move |error| match error.kind() {
+            cpal::ErrorKind::Xrun => log::debug!("output: buffer underrun"),
+            // the server moves a stream that follows the default on its own
+            cpal::ErrorKind::DeviceChanged => log::info!("output: the system default moved"),
+            cpal::ErrorKind::RealtimeDenied => log::debug!("output: {error}"),
+            _ => {
                 log::warn!("output: audio output failed: {error}");
                 stream_failed.store(true, Ordering::Release);
             }

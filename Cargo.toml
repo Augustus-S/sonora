@@ -22,9 +22,9 @@ views = { path = "crates/views" }
 webview = { path = "crates/webview" }
 widevine = { path = "crates/widevine" }
 
-alsa = "0.10"
+alsa = "0.11"
 anyhow = "1.0"
-ardftsrc = { version = "0.4.4", features = ["rodio"] }
+ardftsrc = "0.4.4"
 async-trait = "0.1"
 base64 = "0.22"
 blowfish = "0.9"
@@ -32,7 +32,7 @@ bytes = "1"
 cbc = "0.1"
 cc = "1"
 flate2 = "1"
-cpal = "0.17"
+cpal = "0.18"
 dirs = "6.0"
 discord-rich-presence = "1.1"
 deunicode = "1.6"
@@ -118,11 +118,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSStatusItem",
   "NSWorkspace",
 ] }
-objc2-core-audio = { version = "0.3", default-features = false, features = [
-  "std",
-  "AudioHardware",
-  "objc2-core-audio-types",
-] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "CFString",
@@ -174,7 +169,6 @@ librespot-oauth = { version = "0.8.0", default-features = false, features = [
   "rustls-tls-native-roots",
 ] }
 librespot-playback = { version = "0.8.0", default-features = false, features = [
-  "rodio-backend",
   "rustls-tls-native-roots",
 ] }
 librespot-protocol = "0.8.0"
@@ -198,7 +192,7 @@ librespot-metadata = { git = "https://github.com/sonorahq/librespot", rev = "f5d
 librespot-oauth = { git = "https://github.com/sonorahq/librespot", rev = "f5da0664e93b601cafa48ea41b5f08153b3c4f31" }
 librespot-playback = { git = "https://github.com/sonorahq/librespot", rev = "f5da0664e93b601cafa48ea41b5f08153b3c4f31" }
 librespot-protocol = { git = "https://github.com/sonorahq/librespot", rev = "f5da0664e93b601cafa48ea41b5f08153b3c4f31" }
-rodio = { git = "https://github.com/RustAudio/rodio", rev = "4aa22e85e5ad5565c45dfdda95051158eb6b56c3" }
+rodio = { git = "https://github.com/RustAudio/rodio", rev = "880aaba54b00aead53651ed1ccbdb672d1375a95" }
 
 [profile.release]
 lto = "thin"

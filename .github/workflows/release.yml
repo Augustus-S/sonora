@@ -62,7 +62,7 @@ jobs:
             libasound2-dev libfontconfig1-dev libfreetype-dev libsqlite3-dev \
             libx11-dev libxcb1-dev libxcursor-dev libxi-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
-            libvulkan-dev libdbus-1-dev
+            libvulkan-dev libdbus-1-dev libpipewire-0.3-dev libclang-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -326,7 +326,7 @@ jobs:
             libasound2 libfontconfig1 libfreetype6 libsqlite3-0 \
             libx11-6 libxcb1 libxcursor1 libxi6 \
             libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 \
-            libvulkan1 libdbus-1-3
+            libvulkan1 libdbus-1-3 libpipewire-0.3-0
 
       - name: fetch the AppImage tools
         run: |
