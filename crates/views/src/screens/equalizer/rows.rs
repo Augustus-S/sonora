@@ -1,7 +1,6 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, Focusable as _, MouseDownEvent, Pixels, SharedString,
-    Window, div,
+    AnyElement, App, Context, Div, Entity, Focusable as _, Pixels, SharedString, Window, div,
 };
 use i18n::t;
 use music::equalizer::{
@@ -9,10 +8,7 @@ use music::equalizer::{
     PREAMP_RANGE, Preamp, Q_RANGE, Width, apo,
 };
 use state::{Outcome, Toast, Toasts};
-use ui::{
-    ActiveTheme as _, Button, InfoCard, Input, MenuItem, Picker, Separator, Switch, Text, faint,
-    vacant,
-};
+use ui::{ActiveTheme as _, Button, Input, MenuItem, Picker, Switch, Text, faint, vacant};
 
 use super::{EqualizerView, FIELD, blurb};
 
@@ -207,9 +203,6 @@ impl EqualizerView {
         wide: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let graph = self.graph.read(cx);
-        let id = graph.id(index);
-        let selected = id.is_some() && id == graph.selected();
         let theme = *cx.theme();
         let cover = theme.metrics.cover;
         let row = &self.rows[index];
@@ -287,14 +280,6 @@ impl EqualizerView {
         .py_1()
         .px_2()
         .rounded(theme.radius)
-        .when(selected, |row| row.bg(theme.table_active))
-        // In the capture phase, since the fields and the kind picker keep their mouse-down.
-        .when_some(id, |row, id| {
-            row.capture_any_mouse_down(cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                this.graph
-                    .update(cx, |graph, cx| graph.select(Some(id), cx))
-            }))
-        })
         .into_any_element()
     }
 
@@ -349,7 +334,7 @@ impl EqualizerView {
         });
         let description = t!("equalizer-filters-detail", max = MAX_FILTERS);
 
-        let card = InfoCard::new(t!("equalizer-filters")).child(blurb(description, add, cx));
+        let card = super::section(t!("equalizer-filters")).child(blurb(description, add, cx));
         match empty {
             true => card.child(
                 vacant(t!("equalizer-no-filters"), cx)
@@ -367,10 +352,7 @@ impl EqualizerView {
                     .flex_col()
                     .gap_1()
                     .mx_neg_2()
-                    .when(wide, |this| {
-                        this.child(self.columns(cx))
-                            .child(Separator::horizontal().mx_2().my_1())
-                    })
+                    .when(wide, |this| this.child(self.columns(cx)))
                     .children(rows),
             ),
         }

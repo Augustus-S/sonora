@@ -3,7 +3,7 @@ use gpui::{AnyElement, Context, SharedString, div};
 use i18n::t;
 use music::output::OutputId;
 use state::equalizer_profile_label;
-use ui::{InfoCard, MenuItem, Picker, Separator};
+use ui::{MenuItem, Picker, Separator};
 
 use super::{EqualizerView, blurb, entry};
 
@@ -66,7 +66,7 @@ impl EqualizerView {
         ));
 
         Some(
-            InfoCard::new(t!("equalizer-devices"))
+            super::section(t!("equalizer-devices"))
                 .child(blurb(t!("equalizer-devices-detail"), None, cx))
                 .child(
                     div()

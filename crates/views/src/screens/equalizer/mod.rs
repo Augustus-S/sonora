@@ -16,7 +16,7 @@ use crate::chrome::Chrome;
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::{preset_key, sound_picker};
 
-use graph::{EqualizerGraph, Selected};
+use graph::EqualizerGraph;
 use meter::OutputMeter;
 use rows::{Row, figure, measured};
 
@@ -125,8 +125,6 @@ impl EqualizerView {
         .detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
-        cx.subscribe(&graph, |_, _, _: &Selected, cx| cx.notify())
-            .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 
@@ -437,7 +435,7 @@ impl EqualizerView {
                 )
         });
 
-        InfoCard::new(t!("equalizer-sound"))
+        section(t!("equalizer-sound"))
             .child(
                 div()
                     .flex()
@@ -505,7 +503,7 @@ impl EqualizerView {
             .child(value)
             .into_any_element();
 
-        InfoCard::new(t!("equalizer-preamp"))
+        section(t!("equalizer-preamp"))
             .child(blurb(t!("equalizer-preamp-detail"), Some(controls), cx))
             .into_any_element()
     }
@@ -678,4 +676,9 @@ fn card(
     Lazy::new(id, move |window, cx| {
         view.update(cx, |this, cx| build(this, window, cx))
     })
+}
+
+/// A part of the screen under its title, laid out like a card without the card around it.
+fn section(title: SharedString) -> InfoCard {
+    InfoCard::new(title).plain()
 }

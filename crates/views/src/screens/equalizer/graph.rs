@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Window};
+use gpui::{App, Context, Entity, Pixels, Render, Window};
 use i18n::t;
 use music::Level;
 use music::equalizer::{
@@ -56,9 +56,6 @@ pub(super) struct EqualizerGraph {
     /// When the spectrum last arrived after none, which its rise counts from.
     spectrum_since: Option<Instant>,
 }
-
-/// Emitted when the selected filter changes, which the filter list highlights too.
-pub(super) struct Selected;
 
 /// What the graph shows from the equalizer, the output and the spectrum.
 #[derive(PartialEq)]
@@ -214,8 +211,6 @@ impl Graph {
     }
 }
 
-impl EventEmitter<Selected> for EqualizerGraph {}
-
 impl EqualizerGraph {
     pub(super) fn new(
         equalizer: Entity<Equalizer>,
@@ -269,19 +264,9 @@ impl EqualizerGraph {
         cx.notify();
     }
 
-    /// The id of filter `index` of the playing curve.
-    pub(super) fn id(&self, index: usize) -> Option<u64> {
-        self.graph.ids.get(index).copied()
-    }
-
-    pub(super) fn selected(&self) -> Option<u64> {
-        self.graph.selected
-    }
-
-    /// Selects filter `id`, or none, and tells the screen when that changed the selection.
+    /// Selects filter `id`, or none.
     pub(super) fn select(&mut self, id: Option<u64>, cx: &mut Context<Self>) {
         if self.graph.select(id) {
-            cx.emit(Selected);
             cx.notify();
         }
     }

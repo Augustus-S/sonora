@@ -4,7 +4,7 @@ use i18n::t;
 use music::equalizer::MAX_FILTERS;
 use music::equalizer::apo::{self, Reason, Refused, Skipped};
 use state::{Outcome, Toast, Toasts, equalizer_profile_label};
-use ui::{Button, InfoCard};
+use ui::Button;
 
 use super::rows::invalid_text;
 use super::{EqualizerView, blurb};
@@ -158,7 +158,7 @@ impl EqualizerView {
     pub(super) fn transfer(&self, cx: &mut Context<Self>) -> AnyElement {
         let button =
             |id: &'static str, label: SharedString| Button::new(id).small().outline().label(label);
-        InfoCard::new(t!("equalizer-transfer"))
+        super::section(t!("equalizer-transfer"))
             .child(blurb(t!("equalizer-transfer-detail"), None, cx))
             .child(
                 div()
