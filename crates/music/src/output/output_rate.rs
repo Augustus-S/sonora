@@ -9,11 +9,9 @@
 //! on a stream opened on a named device, but not on one that follows the system default, so the
 //! rate is watched there.
 //!
-//! On Linux a sound server's default config is the rate it runs the device at. PipeWire only
-//! moves its graph to a stream's rate when the stream sets `node.rate`, which cpal sets from 0.19
-//! on but not in 0.18, so a picked rate would be converted back. A PipeWire device is opened at
-//! the graph's rate alone, and a change of that rate reopens it. PulseAudio, `pipewire-pulse`
-//! included, and ALSA open at the picked rate.
+//! On Linux a sound server's default config is the rate it runs the device at. A picked rate
+//! opens the stream at that rate, on PulseAudio, `pipewire-pulse` included, and on ALSA alike, and
+//! the server moves the device to it where it allows that rate.
 
 use cpal::SupportedStreamConfig;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -40,7 +38,7 @@ pub(crate) fn config(
 
 /// The config to open `device` in, given `default`, its default one: the same at `wanted` when
 /// the device offers it in the default's channels and sample format. A sound server is asked for
-/// stereo in float, which it mixes in anyway, and PipeWire is never asked for another rate.
+/// stereo in float, which it mixes in anyway.
 #[cfg(target_os = "linux")]
 pub(crate) fn config(
     device: &cpal::Device,
@@ -51,9 +49,6 @@ pub(crate) fn config(
         true => for_server(default),
         false => default,
     };
-    if follows_graph(device) {
-        return default;
-    }
     wanted
         .and_then(|rate| at_rate(device, &default, rate))
         .unwrap_or(default)
@@ -67,12 +62,9 @@ pub(crate) fn rates(_device: &cpal::Device, config: &SupportedStreamConfig) -> V
 }
 
 /// The rates in `RATES` that `device` can be opened at in `config`'s channels and sample format,
-/// with the rate `config` runs at, lowest first. PipeWire's device only offers its graph's rate.
+/// with the rate `config` runs at, lowest first.
 #[cfg(target_os = "linux")]
 pub(crate) fn rates(device: &cpal::Device, config: &SupportedStreamConfig) -> Vec<u32> {
-    if follows_graph(device) {
-        return vec![config.sample_rate()];
-    }
     let Ok(ranges) = device.supported_output_configs() else {
         return vec![config.sample_rate()];
     };
@@ -120,14 +112,6 @@ pub(crate) fn moved(device: &cpal::Device, rate: u32, _wanted: Option<u32>) -> b
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn moved(_device: &cpal::Device, _rate: u32, _wanted: Option<u32>) -> bool {
     false
-}
-
-/// Whether `device` is PipeWire's, whose stream always runs at the graph's rate.
-#[cfg(target_os = "linux")]
-fn follows_graph(device: &cpal::Device) -> bool {
-    device
-        .id()
-        .is_ok_and(|id| id.host() == cpal::HostId::PipeWire)
 }
 
 /// `config` in stereo, or mono for a mono sink, and in 32-bit float.
