@@ -15,8 +15,7 @@ use rodio::Source as _;
 use super::{tags, wire};
 use crate::aac::Aac;
 use crate::engine::{self, Fetch, Loudness};
-use crate::route::Encoding;
-use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
+use crate::{Encoding, PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
 
 /// A file that opened and decodes, how long the decoder says it is, and the ReplayGain its tags
 /// carry.
@@ -57,7 +56,7 @@ impl Fetch for Local {
             Ok(Loaded {
                 length,
                 loudness: tagged.as_ref().and_then(tags::loudness),
-                encoding: tagged.as_ref().map(tags::encoding),
+                encoding: tagged.as_ref().and_then(tags::encoding),
             })
         })
         .await

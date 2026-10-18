@@ -11,13 +11,13 @@ use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
-use crate::route::{self, Normalisation, TrackSignal};
+
 use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
 use crate::{
-    Encoding, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
-    Player as MusicPlayer, Quality,
+    Encoding, Normalisation, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
+    Player as MusicPlayer, Quality, TrackSignal,
 };
 
 const TRACK_PREFIX: &str = "spotify:track:";
@@ -138,6 +138,8 @@ pub struct Engine {
     signals: UnboundedSender<PlaybackEvent>,
     gapless: bool,
     normalisation: bool,
+    /// The encoding of the offer the quality asks librespot for.
+    encoding: Option<Encoding>,
 }
 
 impl Engine {
@@ -184,6 +186,7 @@ impl Engine {
             signals,
             gapless: config.gapless,
             normalisation: config.normalisation,
+            encoding: offered(config.quality),
         };
         (engine, events)
     }
@@ -234,16 +237,11 @@ impl Engine {
         self.spectrum.clone()
     }
 
-    /// Reports what every Spotify track is: Ogg Vorbis, decoded by librespot to 44.1 kHz stereo
-    /// and normalised there.
+    /// Reports what every Spotify track is: Ogg Vorbis at the offer asked for, decoded by
+    /// librespot to 44.1 kHz stereo and normalised there.
     fn learn(&self, track_id: &str) {
-        let encoding = route::Encoding {
-            codec: route::Codec::Vorbis,
-            bits: None,
-            kbps: None,
-        };
         let track = TrackSignal {
-            encoding: Some(encoding),
+            encoding: self.encoding,
             rate: SAMPLE_RATE,
             channels: NUM_CHANNELS.into(),
             normalisation: match self.normalisation {
@@ -373,4 +371,13 @@ fn bitrate(quality: Quality) -> Bitrate {
         Quality::Normal => Bitrate::Bitrate160,
         Quality::Low => Bitrate::Bitrate96,
     }
+}
+
+/// The encoding of the offer librespot is asked for at a level.
+fn offered(quality: Quality) -> Option<Encoding> {
+    let level = quality.within(QUALITIES);
+    QUALITIES
+        .iter()
+        .find(|offer| offer.quality == level)
+        .map(|offer| offer.encoding)
 }

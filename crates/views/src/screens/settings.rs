@@ -5298,6 +5298,11 @@ fn encoding_label(offer: &Offer) -> SharedString {
         Encoding::Aac { kbps } => lossy("AAC", kbps),
         Encoding::Vorbis { kbps } => lossy("Ogg Vorbis", kbps),
         Encoding::Mp3 { kbps } => lossy("MP3", kbps),
+        Encoding::Opus { kbps } => lossy("Opus", kbps),
+        // No service offers these. They name a local file's encoding in the signal path.
+        Encoding::Alac { .. } => t!("signal-path-codec-alac"),
+        Encoding::Pcm { .. } => t!("signal-path-codec-pcm"),
+        Encoding::Other => t!("signal-path-codec-other"),
     }
 }
 

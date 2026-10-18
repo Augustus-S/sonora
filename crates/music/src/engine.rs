@@ -27,10 +27,11 @@ use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
-use crate::route::{Encoding, Normalisation, TrackSignal};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
-use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
+use crate::{
+    Encoding, Normalisation, PlaybackConfig, PlaybackEvent, PlaybackEvents, Player, TrackSignal,
+};
 
 /// How many frames the decoder hands over at a time. Small enough that a skip is heard at once,
 /// large enough that the queue is not rebuilt for every few samples.

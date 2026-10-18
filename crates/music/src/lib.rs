@@ -22,7 +22,6 @@ pub mod netease;
 pub mod output;
 pub mod potoken;
 pub mod progress;
-pub mod route;
 pub mod scrobble;
 mod sink;
 mod spectrum;
@@ -56,7 +55,6 @@ pub use models::{
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use output::{Server as SoundServer, missing_bridge};
-pub use route::{Normalisation, TrackSignal};
 pub use spectrum::{Analyzer, Level, Spectrum, Watch};
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
@@ -426,13 +424,22 @@ pub struct Offer {
     pub up_to: bool,
 }
 
-/// What a stream is encoded as.
+/// What a stream or a file is encoded as: a lossless encoding with its bit depth, a lossy one
+/// with its bit rate in kilobits a second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
     /// FLAC at this bit depth and sample rate in hertz.
     Flac {
         depth: u8,
         rate: u32,
+    },
+    /// Apple Lossless at this bit depth.
+    Alac {
+        depth: u8,
+    },
+    /// Uncompressed, as in WAV or AIFF, at this bit depth.
+    Pcm {
+        depth: u8,
     },
     Aac {
         kbps: u32,
@@ -443,6 +450,34 @@ pub enum Encoding {
     Mp3 {
         kbps: u32,
     },
+    Opus {
+        kbps: u32,
+    },
+    /// A codec Sonora has no name for.
+    Other,
+}
+
+/// What an engine knows about one track, reported as `PlaybackEvent::Signal` as it starts
+/// decoding it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackSignal {
+    /// How the provider encodes it, when it says.
+    pub encoding: Option<Encoding>,
+    /// The rate and channel count it decodes to, before Sonora resamples it to the device's.
+    pub rate: u32,
+    pub channels: u16,
+    pub normalisation: Normalisation,
+}
+
+/// What loudness normalisation does to a track.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Normalisation {
+    Off,
+    /// A fixed gain in decibels, zero when nothing says how loud the track is.
+    Gain(f32),
+    /// librespot normalises inside its own player with a limiter, so the gain is not known
+    /// and changes with the music.
+    Limited,
 }
 
 /// What a server that converts audio on request is asked to send. Only Subsonic honours it, and
@@ -452,6 +487,16 @@ pub struct Transcode {
     pub codec: Option<Codec>,
     /// The highest bitrate to send, in kilobits per second.
     pub bitrate: Option<u32>,
+}
+
+impl Encoding {
+    /// The bits per sample of a lossless encoding, which a lossy one has none of.
+    pub fn depth(self) -> Option<u8> {
+        match self {
+            Self::Flac { depth, .. } | Self::Alac { depth } | Self::Pcm { depth } => Some(depth),
+            _ => None,
+        }
+    }
 }
 
 impl Transcode {

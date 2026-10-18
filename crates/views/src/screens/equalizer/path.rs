@@ -1,9 +1,8 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, div, svg};
 use i18n::t;
-use music::Normalisation;
 use music::output::{DeviceInfo, Format, Sample};
-use music::route::{Codec, Encoding};
+use music::{Encoding, Normalisation};
 use state::{Change, SignalPath};
 use ui::{ActiveTheme as _, Button, Fact, InfoCard, Text};
 
@@ -212,20 +211,17 @@ fn change(change: Change) -> SharedString {
 
 /// The codec and, for a lossless one, its bit depth or, for a lossy one, its bit rate.
 fn encoding(encoding: Encoding) -> Vec<SharedString> {
-    let codec = match encoding.codec {
-        Codec::Flac => t!("signal-path-codec-flac"),
-        Codec::Alac => t!("signal-path-codec-alac"),
-        Codec::Pcm => t!("signal-path-codec-pcm"),
-        Codec::Mp3 => t!("signal-path-codec-mp3"),
-        Codec::Aac => t!("signal-path-codec-aac"),
-        Codec::Vorbis => t!("signal-path-codec-vorbis"),
-        Codec::Opus => t!("signal-path-codec-opus"),
-        Codec::Other => t!("signal-path-codec-other"),
-    };
-    let detail = match (encoding.bits, encoding.kbps) {
-        (Some(bits), _) => Some(t!("signal-path-bits", bits = bits)),
-        (None, Some(kbps)) => Some(t!("signal-path-kbps", kbps = kbps)),
-        (None, None) => None,
+    let bits = |bits: u8| Some(t!("signal-path-bits", bits = bits));
+    let kbps = |kbps: u32| Some(t!("signal-path-kbps", kbps = kbps));
+    let (codec, detail) = match encoding {
+        Encoding::Flac { depth, .. } => (t!("signal-path-codec-flac"), bits(depth)),
+        Encoding::Alac { depth } => (t!("signal-path-codec-alac"), bits(depth)),
+        Encoding::Pcm { depth } => (t!("signal-path-codec-pcm"), bits(depth)),
+        Encoding::Mp3 { kbps: rate } => (t!("signal-path-codec-mp3"), kbps(rate)),
+        Encoding::Aac { kbps: rate } => (t!("signal-path-codec-aac"), kbps(rate)),
+        Encoding::Vorbis { kbps: rate } => (t!("signal-path-codec-vorbis"), kbps(rate)),
+        Encoding::Opus { kbps: rate } => (t!("signal-path-codec-opus"), kbps(rate)),
+        Encoding::Other => (t!("signal-path-codec-other"), None),
     };
     std::iter::once(codec).chain(detail).collect()
 }

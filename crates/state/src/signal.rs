@@ -97,7 +97,10 @@ impl SignalPath {
     /// the order it happens. Empty means bit-perfect from Sonora.
     pub fn changes(&self) -> Vec<Change> {
         let mut changes = Vec::new();
-        let bits = self.track.as_ref().and_then(|track| track.encoding?.bits);
+        let bits = self
+            .track
+            .as_ref()
+            .and_then(|track| track.encoding?.depth());
         if let Some(from) = bits.filter(|bits| *bits > FLOAT_BITS) {
             changes.push(Change::Rounded { from });
         }

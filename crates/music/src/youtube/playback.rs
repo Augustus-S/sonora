@@ -17,7 +17,6 @@ use ytmusic::{AudioStream, YtMusic};
 use crate::aac::Aac;
 use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
-use crate::route;
 use crate::stream::{PREROLL, Plain, Reader, Source, Stream};
 use crate::trim::{self, Trim};
 use crate::youtube::segments::Segments;
@@ -64,7 +63,8 @@ pub struct Loaded {
     edit: Option<Trim>,
     loudness_db: Option<f32>,
     duration: Option<Duration>,
-    encoding: route::Encoding,
+    /// The format the stream host picked, `None` when it gave no bit rate.
+    encoding: Option<Encoding>,
 }
 
 pub struct Factory {
@@ -137,8 +137,8 @@ impl Fetch for YouTube {
         })
     }
 
-    fn encoding(&self, loaded: &Loaded) -> Option<route::Encoding> {
-        Some(loaded.encoding)
+    fn encoding(&self, loaded: &Loaded) -> Option<Encoding> {
+        loaded.encoding
     }
 
     fn gated(&self, error: &anyhow::Error) -> bool {
@@ -237,15 +237,7 @@ async fn attempt_open(api: &Arc<YtMusic>, id: &str, ceiling: Option<u32>) -> Res
         edit,
         loudness_db: format.loudness_db,
         duration: format.duration,
-        encoding: route::Encoding {
-            codec: match format.codec.as_str() {
-                "opus" => route::Codec::Opus,
-                codec if codec.starts_with("mp4a") => route::Codec::Aac,
-                _ => route::Codec::Other,
-            },
-            bits: None,
-            kbps: (format.bitrate > 0).then_some(format.bitrate / 1000),
-        },
+        encoding: served(&format.codec, format.bitrate / 1000),
     })
 }
 
@@ -257,4 +249,14 @@ fn ceiling(quality: Quality) -> Option<u32> {
         Quality::Normal => Some(160_000),
         Quality::Low => Some(64_000),
     }
+}
+
+/// The encoding of the stream the host serves, by its codec name and bit rate in kilobits a
+/// second, `None` when it gave no bit rate.
+fn served(codec: &str, kbps: u32) -> Option<Encoding> {
+    (kbps > 0).then(|| match codec {
+        "opus" => Encoding::Opus { kbps },
+        codec if codec.starts_with("mp4a") => Encoding::Aac { kbps },
+        _ => Encoding::Other,
+    })
 }

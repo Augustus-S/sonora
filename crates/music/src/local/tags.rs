@@ -15,8 +15,7 @@ use lofty::tag::{ItemValue, Tag, TagItem};
 
 use crate::engine::Loudness;
 use crate::lyrics::lrc;
-use crate::route::{Codec, Encoding};
-use crate::{Lyrics, LyricsLine, LyricsWord, TrackTags, Voice};
+use crate::{Encoding, Lyrics, LyricsLine, LyricsWord, TrackTags, Voice};
 
 use super::wire;
 
@@ -63,29 +62,29 @@ pub fn tagged(path: &Path) -> Option<TaggedFile> {
         .ok()
 }
 
-/// How a file is encoded: its codec, and the bit depth of a lossless one or the bit rate of a
-/// lossy one.
-pub fn encoding(tagged: &TaggedFile) -> Encoding {
+/// How a file is encoded, with the bit depth of a lossless codec or the bit rate of a lossy one.
+/// `None` when the file leaves out the figure its codec is shown with.
+pub fn encoding(tagged: &TaggedFile) -> Option<Encoding> {
     let properties = tagged.properties();
-    let bits = properties.bit_depth();
-    let codec = match tagged.file_type() {
-        FileType::Flac => Codec::Flac,
-        FileType::Wav | FileType::Aiff => Codec::Pcm,
-        FileType::Mpeg => Codec::Mp3,
-        FileType::Aac => Codec::Aac,
+    let depth = properties.bit_depth();
+    let kbps = properties.audio_bitrate();
+    Some(match tagged.file_type() {
+        FileType::Flac => Encoding::Flac {
+            depth: depth?,
+            rate: properties.sample_rate()?,
+        },
+        FileType::Wav | FileType::Aiff => Encoding::Pcm { depth: depth? },
+        FileType::Mpeg => Encoding::Mp3 { kbps: kbps? },
+        FileType::Aac => Encoding::Aac { kbps: kbps? },
         // An MP4 holds AAC or ALAC, and only ALAC has a bit depth.
-        FileType::Mp4 if bits.is_some() => Codec::Alac,
-        FileType::Mp4 => Codec::Aac,
-        FileType::Vorbis => Codec::Vorbis,
-        FileType::Opus => Codec::Opus,
-        _ => Codec::Other,
-    };
-    let lossless = matches!(codec, Codec::Flac | Codec::Pcm | Codec::Alac);
-    Encoding {
-        codec,
-        bits: bits.filter(|_| lossless),
-        kbps: properties.audio_bitrate().filter(|_| !lossless),
-    }
+        FileType::Mp4 => match depth {
+            Some(depth) => Encoding::Alac { depth },
+            None => Encoding::Aac { kbps: kbps? },
+        },
+        FileType::Vorbis => Encoding::Vorbis { kbps: kbps? },
+        FileType::Opus => Encoding::Opus { kbps: kbps? },
+        _ => Encoding::Other,
+    })
 }
 
 /// The ReplayGain a file's tags carry, from whichever of its tags has it. The track gain wins,
