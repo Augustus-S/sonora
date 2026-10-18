@@ -49,7 +49,10 @@ impl SubsonicProvider {
             playback: Arc::new(Factory::new(client)),
             shape: Shape::Catalog(Catalog::Fixed),
             authenticated: true,
-            capabilities: Capabilities::ALL,
+            capabilities: Capabilities {
+                transcode: true,
+                ..Capabilities::ALL
+            },
         })
     }
 
@@ -77,7 +80,10 @@ impl SubsonicProvider {
                 playback: Arc::new(Factory::new(client)),
                 shape: Shape::Catalog(Catalog::Fixed),
                 authenticated: true,
-                capabilities: Capabilities::ALL,
+                capabilities: Capabilities {
+                    transcode: true,
+                    ..Capabilities::ALL
+                },
             })),
             Err(error) if crate::trouble::offline(&format!("{error:#}")) => Err(error),
             Err(error) => {

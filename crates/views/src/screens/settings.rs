@@ -22,7 +22,7 @@ use i18n::{Language, t};
 use music::drm::Origin;
 use music::equalizer::{self, Preset};
 use music::scrobble::{Link, Secret};
-use music::{AccountChoice, SignIn, SignInPrompt, WritingSystem};
+use music::{AccountChoice, Codec, SignIn, SignInPrompt, Transcode, WritingSystem};
 use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
     AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io,
@@ -84,6 +84,8 @@ const PACE: &str = "pace";
 const SAVER: &str = "saver";
 const SLEEP: &str = "sleep";
 const EQUALIZER_PRESETS: &str = "equalizer-presets";
+const STREAM_FORMATS: &str = "stream-formats";
+const STREAM_BITRATES: &str = "stream-bitrates";
 // the step a dragged band snaps to, in decibels
 const EQUALIZER_STEP: f32 = 0.5;
 const SLEEP_MAX_MINUTES: u64 = 120;
@@ -180,6 +182,8 @@ enum Slot {
     AdaptiveMenu,
     Normalisation,
     Gapless,
+    StreamFormat,
+    StreamBitrate,
     Sleep,
     StayAwake,
     Widevine,
@@ -661,6 +665,13 @@ impl SettingsView {
                 if self.drm.read(cx).shown(cx) {
                     slots.push(Slot::Widevine);
                 }
+                if self.session.read(cx).capabilities().transcode {
+                    slots.extend([
+                        Slot::Title("settings-group-streaming"),
+                        Slot::StreamFormat,
+                        Slot::StreamBitrate,
+                    ]);
+                }
                 slots.extend([Slot::Title("settings-group-devices"), Slot::OutputDevice]);
                 let outputs = self.outputs.read(cx);
                 if outputs.failure().is_some() {
@@ -831,6 +842,14 @@ impl SettingsView {
                 t!("settings-normalisation-detail"),
             ),
             Slot::Gapless => (t!("settings-gapless"), t!("settings-gapless-detail")),
+            Slot::StreamFormat => (
+                t!("settings-stream-format"),
+                t!("settings-stream-format-detail"),
+            ),
+            Slot::StreamBitrate => (
+                t!("settings-stream-bitrate"),
+                t!("settings-stream-bitrate-detail"),
+            ),
             Slot::Sleep => (t!("settings-sleep"), t!("settings-sleep-detail")),
             Slot::StayAwake => (t!("settings-stay-awake"), t!("settings-stay-awake-detail")),
             Slot::Widevine => {
@@ -1068,6 +1087,8 @@ impl SettingsView {
             Slot::AdaptiveMenu => self.adaptive_menu_row(cx).element,
             Slot::Normalisation => self.playback_row(cx).element,
             Slot::Gapless => self.gapless_row(cx).element,
+            Slot::StreamFormat => self.stream_format_row(cx).element,
+            Slot::StreamBitrate => self.stream_bitrate_row(cx).element,
             Slot::Sleep => self.sleep_row(cx).element,
             Slot::StayAwake => self.stay_awake_row(cx).element,
             Slot::OutputDevice => self.output_device_row(cx).element,
@@ -2348,6 +2369,88 @@ impl SettingsView {
                         .update(cx, |playback, cx| playback.set_gapless(!on, cx));
                 }))
                 .into_any_element(),
+        )
+    }
+
+    fn stream_format_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let transcode = self.playback.read(cx).transcode();
+
+        let picker = Picker::new(
+            STREAM_FORMATS,
+            &self.popovers,
+            i18n::lookup(codec_key(transcode.codec), None),
+        )
+        .width(Picker::NARROW)
+        .items(
+            std::iter::once(None)
+                .chain(Codec::ALL.map(Some))
+                .map(|codec| {
+                    MenuItem::new(
+                        codec.map_or("original", Codec::id),
+                        i18n::lookup(codec_key(codec), None),
+                    )
+                    .selected(codec == transcode.codec)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.playback.update(cx, |playback, cx| {
+                            playback.set_transcode(Transcode { codec, ..transcode }, cx)
+                        });
+                        cx.notify();
+                    }))
+                }),
+        );
+
+        self.row(
+            t!("settings-stream-format"),
+            t!("settings-stream-format-detail"),
+            muted,
+            small,
+            picker.into_any_element(),
+        )
+    }
+
+    fn stream_bitrate_row(&self, cx: &mut Context<Self>) -> Setting {
+        let theme = *cx.theme();
+        let muted = theme.muted_foreground;
+        let small = theme.text(Text::Small);
+        let transcode = self.playback.read(cx).transcode();
+
+        let picker = Picker::new(
+            STREAM_BITRATES,
+            &self.popovers,
+            bitrate_label(transcode.bitrate),
+        )
+        .width(Picker::NARROW)
+        .items(
+            std::iter::once(None)
+                .chain(Transcode::BITRATES.map(Some))
+                .map(|bitrate| {
+                    let id = bitrate.map_or_else(|| "unlimited".into(), |kbps| kbps.to_string());
+                    MenuItem::new(SharedString::from(id), bitrate_label(bitrate))
+                        .selected(bitrate == transcode.bitrate)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.playback.update(cx, |playback, cx| {
+                                playback.set_transcode(
+                                    Transcode {
+                                        bitrate,
+                                        ..transcode
+                                    },
+                                    cx,
+                                )
+                            });
+                            cx.notify();
+                        }))
+                }),
+        );
+
+        self.row(
+            t!("settings-stream-bitrate"),
+            t!("settings-stream-bitrate-detail"),
+            muted,
+            small,
+            picker.into_any_element(),
         )
     }
 
@@ -5126,6 +5229,23 @@ fn sleep_label(sleep: Option<Sleep>) -> SharedString {
         Some(Sleep::EndOfTrack) => t!("settings-sleep-end-of-track"),
         Some(Sleep::After(after)) => t!("settings-sleep-minutes", count = after.as_secs() / 60),
         None => t!("settings-sleep-off"),
+    }
+}
+
+/// The Fluent key naming a stream format, where `None` keeps the format the server sends.
+fn codec_key(codec: Option<Codec>) -> &'static str {
+    match codec {
+        None => "settings-stream-format-original",
+        Some(Codec::Mp3) => "settings-stream-format-mp3",
+        Some(Codec::Opus) => "settings-stream-format-opus",
+        Some(Codec::Aac) => "settings-stream-format-aac",
+    }
+}
+
+fn bitrate_label(bitrate: Option<u32>) -> SharedString {
+    match bitrate {
+        Some(kbps) => t!("settings-stream-bitrate-value", kbps = i64::from(kbps)),
+        None => t!("settings-stream-bitrate-unlimited"),
     }
 }
 

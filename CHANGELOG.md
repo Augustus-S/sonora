@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- With a Subsonic or Navidrome server, you can pick the format and the highest bitrate tracks
+  stream at in Settings → Playback → Streaming. MP3, Opus or AAC at 128 kbps uses far less
+  data than lossless files on a metered connection.
 - You can rank your lyrics providers in Settings, by dragging them or with the arrows. When two
   of them have equally good lyrics for a song, Sonora shows the one you ranked higher.
 - You can undo clearing the queue or removing songs from it. Press Undo on the toast that

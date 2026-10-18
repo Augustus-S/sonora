@@ -344,6 +344,46 @@ pub struct PlaybackConfig {
     pub position_interval: Duration,
     pub gain: f32,
     pub equalizer: Equalizer,
+    pub transcode: Transcode,
+}
+
+/// What a server that converts audio on request is asked to send. Only Subsonic honours it, and
+/// the default leaves both choices to the server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Transcode {
+    pub codec: Option<Codec>,
+    /// The highest bitrate to send, in kilobits per second.
+    pub bitrate: Option<u32>,
+}
+
+impl Transcode {
+    /// The bitrates offered as a ceiling, highest first.
+    pub const BITRATES: [u32; 7] = [320, 256, 192, 160, 128, 96, 64];
+}
+
+/// A lossy format a streaming server can convert a track into before sending it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Codec {
+    Mp3,
+    Opus,
+    Aac,
+}
+
+impl Codec {
+    pub const ALL: [Self; 3] = [Self::Mp3, Self::Opus, Self::Aac];
+
+    /// The name Subsonic servers know the format by, which is also how settings store it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::Opus => "opus",
+            Self::Aac => "aac",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|codec| codec.id() == id)
+    }
 }
 
 /// What an engine reports back. `Playing` and `Seeked` mean audio from `at` is reaching the
@@ -503,16 +543,20 @@ pub struct Capabilities {
     /// The provider keeps sidebar pins of its own, listed by `pin_targets` and changed
     /// through `set_pinned`. Off, a pin lives in Sonora's settings alone.
     pub pins: bool,
+    /// The server converts tracks on request, as [`Transcode`] asks.
+    pub transcode: bool,
 }
 
 impl Capabilities {
     /// What a full streaming service offers. Pins of the provider's own are not among them,
-    /// since only Spotify and Apple Music keep any.
+    /// since only Spotify and Apple Music keep any. Converting on request is not either, since
+    /// only Subsonic does it.
     pub const ALL: Self = Self {
         follow_artists: true,
         radio: true,
         playcounts: true,
         pins: false,
+        transcode: false,
     };
 
     /// Nothing beyond listing and playing.
@@ -521,6 +565,7 @@ impl Capabilities {
         radio: false,
         playcounts: false,
         pins: false,
+        transcode: false,
     };
 }
 
