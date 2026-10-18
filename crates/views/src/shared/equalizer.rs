@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
 use gpui::{App, Entity, SharedString};
 use i18n::t;
 use music::equalizer::Preset;
-use state::{AppSettings, Equalizer};
+use state::{AppSettings, Equalizer, Sound};
 use ui::{ActiveTheme as _, MenuItem, Picker, Popovers};
 
 /// How tall the sound menu grows before it scrolls, in cover sizes.
@@ -44,38 +46,64 @@ pub(crate) fn sound_picker(
         let index = scratch.unwrap_or_default();
         MenuItem::new("equalizer-sound-custom", t!("settings-equalizer-custom"))
             .selected(on_scratch)
-            .on_click(move |_, _, cx| play_profile(&equalizer, index, cx))
-    });
-    let presets = Preset::ALL.map(|preset| {
-        let equalizer = equalizer.clone();
-        MenuItem::new(preset.id(), i18n::lookup(preset_key(preset), None))
-            .selected(on_scratch && shaped == Some(Some(preset)))
             .on_click(move |_, _, cx| {
-                equalizer.update(cx, |equalizer, cx| equalizer.play_preset(preset, cx));
+                equalizer.update(cx, |equalizer, cx| equalizer.play_profile(index, cx));
             })
     });
+    let equalizer = equalizer.clone();
+    let sounds = sound_items(
+        settings,
+        |sound| match sound {
+            Sound::Preset(preset) => on_scratch && shaped == Some(Some(*preset)),
+            Sound::Profile(name) => !on_scratch && settings.equalizer_profile_name() == name,
+        },
+        move |sound, cx| {
+            equalizer.update(cx, |equalizer, cx| equalizer.play_sound(sound, cx));
+        },
+    );
+
+    Picker::new(key, popovers, current)
+        .scroll_after(height)
+        .items(custom_item)
+        .items(sounds)
+}
+
+/// A menu item for each built-in preset, then one for each named profile after a divider. The
+/// unnamed profile is left out. `selected` marks an item and `pick` runs when one is clicked.
+pub(crate) fn sound_items(
+    settings: &AppSettings,
+    selected: impl Fn(&Sound) -> bool,
+    pick: impl Fn(&Sound, &mut App) + 'static,
+) -> Vec<MenuItem> {
+    let pick = Rc::new(pick);
+    let item = |id: gpui::ElementId, sound: Sound| {
+        let pick = pick.clone();
+        MenuItem::new(id, sound_label(&sound))
+            .selected(selected(&sound))
+            .on_click(move |_, _, cx| pick(&sound, cx))
+    };
+    let presets = Preset::ALL.map(|preset| item(preset.id().into(), Sound::Preset(preset)));
     let named: Vec<_> = settings
         .equalizer_profiles()
         .enumerate()
         .filter(|(_, name)| !name.is_empty())
         .map(|(index, name)| {
-            let equalizer = equalizer.clone();
-            MenuItem::new(
-                ("equalizer-profile", index),
-                SharedString::from(name.to_owned()),
+            item(
+                ("equalizer-profile", index).into(),
+                Sound::Profile(name.to_owned()),
             )
-            .selected(index == playing)
-            .on_click(move |_, _, cx| play_profile(&equalizer, index, cx))
         })
         .collect();
     let divider = (!named.is_empty()).then(|| MenuItem::separator("equalizer-sound-profiles"));
+    presets.into_iter().chain(divider).chain(named).collect()
+}
 
-    Picker::new(key, popovers, current)
-        .scroll_after(height)
-        .items(custom_item)
-        .items(presets)
-        .items(divider)
-        .items(named)
+/// What a sound is called: a preset's name in the interface's language, or a profile's own.
+pub(crate) fn sound_label(sound: &Sound) -> SharedString {
+    match sound {
+        Sound::Preset(preset) => i18n::lookup(preset_key(*preset), None),
+        Sound::Profile(name) => SharedString::from(name.clone()),
+    }
 }
 
 /// The Fluent key naming a built-in preset.
@@ -96,7 +124,3 @@ pub(crate) fn preset_key(preset: Preset) -> &'static str {
     }
 }
 
-/// Plays stored profile `index` and turns the equalizer on.
-fn play_profile(equalizer: &Entity<Equalizer>, index: usize, cx: &mut App) {
-    equalizer.update(cx, |equalizer, cx| equalizer.play_profile(index, cx));
-}
