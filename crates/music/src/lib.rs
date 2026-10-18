@@ -56,7 +56,7 @@ pub use models::{
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use output::{Server as SoundServer, missing_bridge};
-pub use route::{Normalisation, Route, TrackSignal};
+pub use route::{Normalisation, TrackSignal};
 pub use spectrum::{Analyzer, Level, Spectrum, Watch};
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";
@@ -534,6 +534,12 @@ pub enum PlaybackEvent {
     Refused,
     Gated,
     OutputChanged,
+    /// What the engine knows about the sound of track `id`, sent as it starts decoding it. A
+    /// track queued behind the current one reports before it is heard.
+    Signal {
+        id: String,
+        track: TrackSignal,
+    },
 }
 
 impl PlaybackEvent {
@@ -549,6 +555,7 @@ impl PlaybackEvent {
             | Self::Ended { id, .. }
             | Self::Unavailable { id, .. }
             | Self::Throttled { id } => id.as_deref(),
+            Self::Signal { id, .. } => Some(id),
             _ => None,
         }
     }
@@ -576,11 +583,6 @@ pub trait Player: Send + Sync {
     fn set_gain(&self, gain: f32);
 
     fn spectrum(&self) -> Option<Spectrum> {
-        None
-    }
-
-    /// What the engine knows about the sound it plays, for the signal path.
-    fn route(&self) -> Option<Route> {
         None
     }
 }

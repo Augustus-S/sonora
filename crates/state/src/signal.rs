@@ -227,7 +227,7 @@ impl Signal {
         let playback = self.playback.read(cx);
         let outputs = self.outputs.read(cx);
         let eq = self.equalizer.read(cx);
-        let path = playback.route().map(|(route, id)| {
+        let path = playback.track_signal().map(|track| {
             let stream = outputs.current().cloned();
             let equalizer = eq.enabled().then(|| Equalizing {
                 preamp_db: eq.preamp_db(),
@@ -236,7 +236,7 @@ impl Signal {
                     .is_some_and(|stream| eq.curve().passes_through(stream.rate)),
             });
             SignalPath {
-                track: route.track(&id),
+                track: track.cloned(),
                 equalizer,
                 level: playback.volume(),
                 volume: playback.volume_gain(),

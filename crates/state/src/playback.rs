@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::{
     Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
-    PlaybackFactory, Player, Quality, Route, Spectrum, Track, Transcode,
+    PlaybackFactory, Player, Quality, Spectrum, Track, TrackSignal, Transcode,
 };
 use ui::{Pin, PinKind};
 
@@ -139,6 +139,9 @@ const STATION_DRY_LIMIT: u8 = 3;
 
 /// How many unreadable files a toast names before it cuts the list short.
 const LISTED_FILES: usize = 5;
+/// How many tracks' signal reports are kept: the one playing, the one queued behind it, and
+/// room for a skip that has not been heard yet.
+const SIGNALS: usize = 4;
 
 /// A track the engine was asked to fetch ahead, and whether it was also lined up to follow the
 /// current one gaplessly.
@@ -404,6 +407,9 @@ pub struct Playback {
     equalizer: music::Equalizer,
     /// Shared with every engine like the equalizer's reader, and read only while watched.
     meter: Meter,
+    /// What the engines reported about the sound of the last few tracks they opened, newest
+    /// last, for the signal path.
+    signals: VecDeque<(String, TrackSignal)>,
     repeat: Repeat,
     radio: bool,
     /// The track the current similar-tracks suggestions were drawn from.
@@ -533,6 +539,7 @@ impl Playback {
             quality,
             equalizer,
             meter,
+            signals: VecDeque::new(),
             repeat,
             radio,
             seeded: None,
@@ -599,11 +606,29 @@ impl Playback {
         Some(spectrum)
     }
 
-    /// What the playing engine knows about the sound it plays, and the id of the track it
-    /// plays, for the signal path.
-    pub fn route(&self) -> Option<(Route, String)> {
-        let id = self.track.as_ref()?.id.clone()?;
-        Some((self.engine_for(&id)?.route()?, id))
+    /// For the signal path, `None` while no engine is up for the track loaded now. Otherwise
+    /// what its engine reported about the track's sound, `None` inside until it opened it.
+    pub fn track_signal(&self) -> Option<Option<&TrackSignal>> {
+        let id = self.track.as_ref()?.id.as_deref()?;
+        self.engine_for(id)?;
+        Some(
+            self.signals
+                .iter()
+                .rev()
+                .find(|(known, _)| known == id)
+                .map(|(_, track)| track),
+        )
+    }
+
+    /// Keeps what an engine reported about the sound of track `id`, in place of any older
+    /// report for it.
+    fn learn_signal(&mut self, id: String, track: TrackSignal, cx: &mut Context<Self>) {
+        self.signals.retain(|(known, _)| *known != id);
+        if self.signals.len() == SIGNALS {
+            self.signals.pop_front();
+        }
+        self.signals.push_back((id, track));
+        cx.notify();
     }
 
     /// Pauses the engine the new track does not belong to, so the two never sound at once.
@@ -2366,6 +2391,11 @@ impl Playback {
             self.restart_output(local, cx);
             return;
         }
+        // kept for whichever track it names, since a queued track reports before it plays
+        if let BackendEvent::Signal { id, track } = event {
+            self.learn_signal(id, track, cx);
+            return;
+        }
         if local != self.local_active() {
             return;
         }
@@ -2393,8 +2423,8 @@ impl Playback {
             }
         }
         match event {
-            // rebuilt before the filters above
-            BackendEvent::OutputChanged => {}
+            // rebuilt or kept before the filters above
+            BackendEvent::OutputChanged | BackendEvent::Signal { .. } => {}
             BackendEvent::Unavailable { .. }
             | BackendEvent::Throttled { .. }
             | BackendEvent::Refused
@@ -2565,6 +2595,7 @@ impl Playback {
     fn teardown(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.engine = None;
+        self.signals.retain(|(id, _)| music::is_local_id(id));
 
         if !self.local_active() {
             self.load = None;

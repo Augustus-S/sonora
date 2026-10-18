@@ -8,10 +8,10 @@ use librespot_playback::config::{Bitrate, PlayerConfig};
 use librespot_playback::mixer::NoOpVolume;
 use librespot_playback::player::{Player, PlayerEvent};
 use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
-use crate::route::{self, Normalisation, Route, TrackSignal};
+use crate::route::{self, Normalisation, TrackSignal};
 use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
@@ -51,6 +51,8 @@ pub struct Events {
     output: UnboundedReceiver<()>,
     cue: Cue,
     written: UnboundedReceiver<()>,
+    /// The `Signal` events `Engine::learn` sends as it loads a track.
+    signals: UnboundedReceiver<PlaybackEvent>,
     /// The `Playing` or `Seeked` waiting for the sink; a newer one replaces an older one.
     held: Option<PlaybackEvent>,
     /// Position reports seen while the cue refuses writes. A seek or load that took keeps the
@@ -103,6 +105,7 @@ impl PlaybackEvents for Events {
                     changed?;
                     return Some(PlaybackEvent::OutputChanged);
                 }
+                Some(event) = self.signals.recv() => return Some(event),
             }
         }
     }
@@ -131,7 +134,8 @@ pub struct Engine {
     volume: Volume,
     cue: Cue,
     spectrum: Spectrum,
-    route: Route,
+    /// Where `learn` reports each track's sound, read by `Events`.
+    signals: UnboundedSender<PlaybackEvent>,
     gapless: bool,
     normalisation: bool,
 }
@@ -141,7 +145,7 @@ impl Engine {
         let volume = Volume::new(config.gain);
         let (cue, written) = Cue::new();
         let spectrum = Spectrum::new();
-        let route = Route::default();
+        let (signals, signal_rx) = unbounded_channel();
 
         let player_config = PlayerConfig {
             bitrate: bitrate(config.quality),
@@ -168,6 +172,7 @@ impl Engine {
             output: output_rx,
             cue: cue.clone(),
             written,
+            signals: signal_rx,
             held: None,
             stale: 0,
         };
@@ -176,7 +181,7 @@ impl Engine {
             volume,
             cue,
             spectrum,
-            route,
+            signals,
             gapless: config.gapless,
             normalisation: config.normalisation,
         };
@@ -229,7 +234,7 @@ impl Engine {
         self.spectrum.clone()
     }
 
-    /// Notes what every Spotify track is: Ogg Vorbis, decoded by librespot to 44.1 kHz stereo
+    /// Reports what every Spotify track is: Ogg Vorbis, decoded by librespot to 44.1 kHz stereo
     /// and normalised there.
     fn learn(&self, track_id: &str) {
         let encoding = route::Encoding {
@@ -237,18 +242,17 @@ impl Engine {
             bits: None,
             kbps: None,
         };
-        self.route.learn(
-            track_id,
-            TrackSignal {
-                encoding: Some(encoding),
-                rate: SAMPLE_RATE,
-                channels: NUM_CHANNELS.into(),
-                normalisation: match self.normalisation {
-                    true => Normalisation::Limited,
-                    false => Normalisation::Off,
-                },
+        let track = TrackSignal {
+            encoding: Some(encoding),
+            rate: SAMPLE_RATE,
+            channels: NUM_CHANNELS.into(),
+            normalisation: match self.normalisation {
+                true => Normalisation::Limited,
+                false => Normalisation::Off,
             },
-        );
+        };
+        let id = track_id.to_owned();
+        self.signals.send(PlaybackEvent::Signal { id, track }).ok();
     }
 }
 
@@ -283,10 +287,6 @@ impl MusicPlayer for Engine {
 
     fn spectrum(&self) -> Option<Spectrum> {
         Some(self.spectrum())
-    }
-
-    fn route(&self) -> Option<Route> {
-        Some(self.route.clone())
     }
 }
 
