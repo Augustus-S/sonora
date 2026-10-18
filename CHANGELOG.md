@@ -54,6 +54,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - When Apple Music tracks keep failing because the Widevine module Sonora found in your browser
   is out of date, Sonora says so and offers a button to the settings where you can download
   Google's copy.
+- Covers in album grids, song lists and the queue start loading half a screen before they scroll
+  into view, and a pulsing placeholder shows right away while one is still on its way.
 
 ### Fixed
 

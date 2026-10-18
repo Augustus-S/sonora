@@ -281,7 +281,7 @@ impl MenuSearch {
         }
         match restore {
             Some(focus) => window.focus(&focus, cx),
-            None => window.blur(),
+            None => window.blur(cx),
         }
     }
 
