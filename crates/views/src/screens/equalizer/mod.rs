@@ -8,14 +8,13 @@ use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
 use music::output::OutputId;
 use state::{AppSettings, Equalizer, Outputs, Signal, SignalPath, Sonora, equalizer_profile_label};
 use ui::{
-    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, MenuItem, Modal, Picker,
-    Popovers, Room, Scrollbar, Scroller, Submit, TabBar, Text, heading,
+    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
+    Picker, Popovers, Room, Scrollbar, Scroller, Submit, TabBar, Text, heading,
 };
 
 use crate::chrome::Chrome;
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::sound_picker;
-use crate::shared::section::Section;
 
 use graph::{EqualizerGraph, Selected};
 use meter::OutputMeter;
@@ -68,7 +67,6 @@ pub(crate) struct EqualizerView {
     /// What the screen last drew from the equalizer, the output and the signal path, so a notify
     /// from them that changed none of it draws nothing.
     drawn: Option<Drawn>,
-    cards: Cards,
     /// The spectrum's, the output meter's and the signal path's reads, held while the screen is
     /// the one shown and dropped with it.
     watch: Option<Task<()>>,
@@ -90,16 +88,6 @@ struct Drawn {
     output: Option<OutputId>,
     port: Option<String>,
     path: Option<SignalPath>,
-}
-
-/// The cards advanced mode adds below the graph, each a section of its own so the spectrum
-/// redrawing the graph leaves them as they were painted.
-struct Cards {
-    preamp: Entity<Section>,
-    filters: Entity<Section>,
-    devices: Entity<Section>,
-    transfer: Entity<Section>,
-    path: Entity<Section>,
 }
 
 impl EqualizerView {
@@ -148,26 +136,6 @@ impl EqualizerView {
             .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
-        let screen = cx.entity();
-        let cards = Cards {
-            preamp: cx.new(|cx| Section::new(&screen, |this, _, cx| this.preamp_card(cx), cx)),
-            filters: cx.new(|cx| {
-                Section::new(
-                    &screen,
-                    |this, window, cx| this.filters(Chrome::room(window, cx).fits(Room::Wide), cx),
-                    cx,
-                )
-            }),
-            devices: cx.new(|cx| {
-                Section::new(
-                    &screen,
-                    |this, _, cx| this.outputs(cx).unwrap_or_else(|| Empty.into_any_element()),
-                    cx,
-                )
-            }),
-            transfer: cx.new(|cx| Section::new(&screen, |this, _, cx| this.transfer(cx), cx)),
-            path: cx.new(|cx| Section::new(&screen, |this, _, cx| this.signal_path(cx), cx)),
-        };
 
         let mut view = Self {
             equalizer,
@@ -186,7 +154,6 @@ impl EqualizerView {
             graph,
             meter,
             drawn: None,
-            cards,
             watch: None,
             path: false,
             file: None,
@@ -592,6 +559,7 @@ impl Render for EqualizerView {
         let sound = self.sound(room, advanced, cx);
         let routed = self.outputs.read(cx).binding_key().is_some();
 
+        let view = cx.entity();
         let page = Scroller::new("equalizer-page", &self.scrollbar)
             .p(inset)
             .child(
@@ -616,14 +584,26 @@ impl Render for EqualizerView {
                                 .flex()
                                 .flex_col()
                                 .gap_6()
-                                .child(Section::place(&self.cards.preamp, cx))
-                                .child(Section::place(&self.cards.filters, cx)),
+                                .child(card(&view, "equalizer-preamp", |this, _, cx| {
+                                    this.preamp_card(cx)
+                                }))
+                                .child(card(&view, "equalizer-filters", |this, window, cx| {
+                                    this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
+                                })),
                         )
                         .when(routed, |this| {
-                            this.child(Section::place(&self.cards.devices, cx))
+                            this.child(card(&view, "equalizer-devices", |this, _, cx| {
+                                this.outputs(cx).unwrap_or_else(|| Empty.into_any_element())
+                            }))
                         })
-                        .child(Section::place(&self.cards.transfer, cx))
-                        .child(Section::place(&self.cards.path, cx))
+                        .child(card(&view, "equalizer-transfer", |this, _, cx| {
+                            this.transfer(cx)
+                        }))
+                        .child(card(
+                            &view,
+                            "equalizer-path",
+                            |this, _, cx| this.signal_path(cx),
+                        ))
                     }),
             );
 
@@ -687,4 +667,18 @@ fn entry(title: SharedString, detail: SharedString, action: impl IntoElement, cx
                 ),
         )
         .child(div().flex_none().child(action))
+}
+
+/// An advanced card that is built and laid out only while it is on screen, so scrolling the
+/// long page costs what shows rather than every card on it.
+fn card(
+    view: &Entity<EqualizerView>,
+    id: &'static str,
+    build: impl FnOnce(&mut EqualizerView, &mut Window, &mut Context<EqualizerView>) -> AnyElement
+    + 'static,
+) -> Lazy {
+    let view = view.clone();
+    Lazy::new(id, move |window, cx| {
+        view.update(cx, |this, cx| build(this, window, cx))
+    })
 }

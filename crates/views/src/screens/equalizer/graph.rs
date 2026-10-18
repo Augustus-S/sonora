@@ -18,7 +18,7 @@ use super::rows::{NEW_FILTER, figure};
 const GRAPH_FREQUENCIES: (f64, f64) = (20., 20_000.);
 /// How many points the response is sampled at across the band, each enabled filter's centre
 /// coming on top, so a narrow notch reaches the floor.
-const POINTS: usize = 2048;
+const POINTS: usize = 384;
 /// The rate the response is drawn at while no stream is open.
 const IDLE_RATE: u32 = 48_000;
 /// How much one wheel step over a node narrows or widens it, as a power of two.

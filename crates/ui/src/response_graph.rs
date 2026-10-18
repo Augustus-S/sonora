@@ -490,6 +490,10 @@ impl RenderOnce for ResponseGraph {
                         plot_bounds
                     },
                     move |_, bounds, window, cx| {
+                        // a graph scrolled out of view costs nothing to skip and a lot to tessellate
+                        if !window.content_mask().bounds.intersects(&bounds) {
+                            return;
+                        }
                         paint_plot(bounds, &painted, &response, &spectrum, &theme, window, cx);
                     },
                 )
