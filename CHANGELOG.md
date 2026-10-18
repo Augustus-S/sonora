@@ -44,6 +44,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   playlists, mixes and search in up to 24-bit FLAC, whatever your plan includes.
 - Navidrome and other Subsonic servers are a lyrics provider, so the lyrics a server holds, such
   as ones embedded in the files, show for its tracks.
+- On Linux, Direct to hardware in the output picker plays straight to a sound card, past PipeWire
+  or PulseAudio, for bit-perfect output.
 
 ### Changed
 
@@ -61,6 +63,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Google's copy.
 - Covers in album grids, song lists and the queue start loading half a screen before they scroll
   into view, and a pulsing placeholder shows right away while one is still on its way.
+- On Linux, the output picker lists your system's real outputs by the names your desktop gives
+  them, and the one you choose is where Sonora plays. An output you picked before goes back to
+  System default.
+- With PipeWire, Sonora plays at the sample rate PipeWire runs your device at.
 
 ### Fixed
 
