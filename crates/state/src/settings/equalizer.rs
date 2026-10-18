@@ -77,7 +77,8 @@ pub(super) struct StoredFilter {
 impl Values {
     /// Settles the equalizer values for use: one profile when the file had none, built from the
     /// band gains an older Sonora saved when it had those, the outputs an older Sonora bound to
-    /// profiles made into rules, one rule per device, and the chosen profile in range.
+    /// profiles made into rules, every rule under its output's current key, one rule per device,
+    /// and the chosen profile in range.
     pub(super) fn settle_equalizer(&mut self) {
         if self.equalizer_profiles.is_empty() {
             let gains: Vec<f64> = self
@@ -90,6 +91,7 @@ impl Values {
         }
         self.equalizer_bands = Vec::new();
         self.migrate_bindings();
+        self.upgrade_rule_keys();
         self.settle_rules();
         self.equalizer_profile = self
             .equalizer_profile
@@ -132,6 +134,25 @@ impl Values {
                 migrated.len()
             );
             self.equalizer_rules.extend(migrated);
+        }
+    }
+
+    /// Moves rules an older Sonora keyed by a sound server's bare sink name to the key the sink
+    /// goes by now, so they keep matching it.
+    fn upgrade_rule_keys(&mut self) {
+        let mut upgraded = 0;
+        for rule in &mut self.equalizer_rules {
+            if let RuleDevice::Output(output) = &mut rule.device
+                && let Some(id) = music::output::upgrade_output_key(&output.id)
+            {
+                output.id = id;
+                upgraded += 1;
+            }
+        }
+        if upgraded > 0 {
+            log::info!(
+                "settings: moved {upgraded} equalizer device rules to their output's current key; the old keys are dropped the next time settings are saved"
+            );
         }
     }
 

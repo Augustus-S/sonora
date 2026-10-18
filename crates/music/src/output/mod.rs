@@ -868,6 +868,25 @@ pub fn output_key(device: &str, port: Option<&Port>) -> String {
     }
 }
 
+/// The key an output saved by an older Sonora goes by now, or `None` when `key` is current.
+/// Device rules once keyed a sound server's sink by its bare name, which cpal now puts behind its
+/// `pulseaudio` host.
+#[cfg(target_os = "linux")]
+pub fn upgrade_output_key(key: &str) -> Option<String> {
+    let device = key.split_once('#').map_or(key, |(device, _)| device);
+    if device.parse::<cpal::DeviceId>().is_ok() {
+        return None;
+    }
+    Some(format!("{}:{key}", cpal::HostId::PulseAudio))
+}
+
+/// The key an output saved by an older Sonora goes by now. Every key is current here, since only
+/// Linux ever keyed a sound server's sink.
+#[cfg(not(target_os = "linux"))]
+pub fn upgrade_output_key(_key: &str) -> Option<String> {
+    None
+}
+
 /// What the sound server says of the sink behind the device `id`, or `None` for any other device.
 /// It asks the server, so call it off the UI thread.
 #[cfg(target_os = "linux")]
