@@ -2,7 +2,8 @@ use gpui::prelude::*;
 use gpui::{
     App, Bounds, Div, DragMoveEvent, ElementId, Empty, Hsla, MouseButton, MouseDownEvent,
     MouseUpEvent, PathBuilder, Pixels, Point, Render, ScrollDelta, ShapedLine, SharedString,
-    Stateful, StyleRefinement, TextRun, Window, canvas, div, point, px, size,
+    Stateful, StyleRefinement, TextRun, Window, canvas, div, linear_color_stop, linear_gradient,
+    point, px, size,
 };
 use i18n::t;
 use std::{cell::Cell, ops::RangeInclusive, rc::Rc};
@@ -11,6 +12,16 @@ use crate::{ActiveTheme as _, Text, Theme};
 
 const HAIRLINE: Pixels = px(1.);
 const CURVE_STROKE: Pixels = px(2.);
+/// The width of a node's ring and of the level bar across a node whose gain is fixed.
+const RING: Pixels = px(2.);
+/// How far a selected or hovered node's halo reaches, as a multiple of the node's radius.
+const HALO: f32 = 1.8;
+/// How big a node at rest is drawn, as a share of its radius, which a selected or hovered one
+/// grows to in full.
+const NODE_REST: f32 = 0.75;
+/// How opaque the area under the response is at its furthest reach, and while bypassed.
+const AREA_FILL: f32 = 0.3;
+const BYPASSED_FILL: f32 = 0.1;
 /// The dash and gap of the reference line, so it reads apart from the grid.
 const DASH: [Pixels; 2] = [px(4.), px(3.)];
 /// How many lines one wheel notch scrolls, so a notch is one width step on every platform.
@@ -167,6 +178,13 @@ impl ResponseGraphState {
             grabbed: Rc::default(),
             hovered: Rc::default(),
         }
+    }
+
+    /// Whether a node is held, from its press until the button is released anywhere. A caller
+    /// that fits its axes to the data keeps them still while this holds, so a drag never shifts
+    /// the scale under the pointer.
+    pub fn dragging(&self) -> bool {
+        self.grabbed.get().is_some()
     }
 }
 
@@ -348,8 +366,9 @@ impl Plot {
         }
     }
 
-    /// Retains the grab constraint and consumes it on release, including outside the plot. Nothing
-    /// is emitted until the pointer leaves the dead zone along an axis.
+    /// Retains the grab constraint and consumes it on release, including outside the plot, when it
+    /// also redraws so axes held for the drag can refit. Nothing is emitted until the pointer
+    /// leaves the dead zone along an axis.
     fn moved(&self, position: Point<Pixels>, finished: bool, window: &mut Window, cx: &mut App) {
         let Some(mut grab) = self.state.grabbed.get() else {
             return;
@@ -361,6 +380,9 @@ impl Plot {
             true => None,
             false => Some(grab),
         });
+        if finished {
+            window.refresh();
+        }
         if grab.along == (false, false) || !self.nodes.iter().any(|node| node.id == grab.id) {
             return;
         }
@@ -430,7 +452,6 @@ impl RenderOnce for ResponseGraph {
             .h(theme.metrics.cover * 2.)
             .overflow_hidden()
             .rounded(theme.radius)
-            .bg(theme.background)
             .text_size(theme.text(Text::Tiny))
             .child(
                 canvas(
@@ -474,15 +495,17 @@ impl RenderOnce for ResponseGraph {
                         cx.stop_propagation();
                     }
                 })
-                .on_mouse_move(move |event, _, _| {
+                .on_mouse_move(move |event, window, _| {
                     let hit = hovering.hit(event.position).map(|node| node.id);
-                    hovering.state.hovered.set(hit);
+                    if hovering.state.hovered.replace(hit) != hit {
+                        window.refresh();
+                    }
                 })
                 .on_hover({
                     let state = state.clone();
-                    move |hovered, _, _| {
-                        if !hovered {
-                            state.hovered.set(None);
+                    move |hovered, window, _| {
+                        if !hovered && state.hovered.replace(None).is_some() {
+                            window.refresh();
                         }
                     }
                 })
@@ -514,8 +537,8 @@ fn finite_clamp(value: f32, range: [f32; 2]) -> f32 {
     }
 }
 
-/// Paints the spectrum, the grid and its labels, the reference level, the response and the
-/// nodes, in that order, inside the plot's `bounds`.
+/// Paints the spectrum, the grid and its labels, the area under the response, the reference
+/// level, the response and the nodes, in that order, inside the plot's `bounds`.
 fn paint_plot(
     bounds: Bounds<Pixels>,
     plot: &Plot,
@@ -533,6 +556,97 @@ fn paint_plot(
     if let Some(spectrum) = spectrum {
         paint_spectrum(bounds, axes, spectrum, theme, window, cx);
     }
+    paint_grid(bounds, axes, theme, window, cx);
+    let curve: Vec<_> = response
+        .iter()
+        .filter(|value| value.frequency_hz.is_finite() && value.gain_db.is_finite())
+        .map(|value| axes.project(*value, bounds))
+        .collect();
+    let (accent, fill, stroke, level, label) = match plot.bypassed {
+        true => (
+            theme.muted_foreground,
+            BYPASSED_FILL,
+            theme.muted_foreground.opacity(0.7),
+            theme.muted_foreground.opacity(0.5),
+            theme.muted_foreground,
+        ),
+        false => (
+            theme.primary,
+            AREA_FILL,
+            theme.primary,
+            theme.foreground.opacity(0.55),
+            theme.popover_foreground,
+        ),
+    };
+    paint_area(&curve, axes.y(0., bounds), accent, fill, window);
+    let reference = plot
+        .reference
+        .as_ref()
+        .map(|(gain_db, label)| (axes.y(*gain_db, bounds), label));
+    if let Some((y, _)) = reference {
+        let mut path = PathBuilder::stroke(HAIRLINE).dash_array(&DASH);
+        path.add_polygon(&[point(bounds.left(), y), point(bounds.right(), y)], false);
+        if let Ok(path) = path.build() {
+            window.paint_path(path, level);
+        }
+    }
+    line(&curve, CURVE_STROKE, stroke, window);
+    // The level's name goes over the curve on a plate, so a curve through it leaves it legible.
+    if let Some((y, name)) = reference {
+        text(
+            name.clone(),
+            point(bounds.left() + pad, y - theme.text(Text::Tiny) - pad),
+            0.,
+            label,
+            Some((theme.popover, theme.border)),
+            window,
+            cx,
+        );
+    }
+    let lit = plot
+        .state
+        .grabbed
+        .get()
+        .map(|grab| grab.id)
+        .or(plot.state.hovered.get());
+    for node in plot
+        .nodes
+        .iter()
+        .filter(|node| !node.selected)
+        .chain(plot.nodes.iter().filter(|node| node.selected))
+    {
+        paint_node(
+            node,
+            axes.project(node.position, bounds),
+            plot.radius,
+            lit == Some(node.id),
+            theme,
+            window,
+        );
+    }
+    if let Some(node) = plot.nodes.iter().find(|node| node.selected) {
+        readout(
+            node,
+            axes.project(node.position, bounds),
+            bounds,
+            plot.radius,
+            theme,
+            window,
+            cx,
+        );
+    }
+}
+
+/// Labels the frequencies along the bottom and the gains down the left, each with a faint line
+/// across the plot, and draws the 0 dB line a little stronger than the rest.
+fn paint_grid(
+    bounds: Bounds<Pixels>,
+    axes: ResponseAxes,
+    theme: &Theme,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let pad = theme.metrics.pad;
     let mut last_label = bounds.left() - pad * 10.;
     for hz in FREQUENCIES
         .into_iter()
@@ -546,7 +660,7 @@ fn paint_plot(
         line(
             &[point(x, bounds.top()), point(x, bounds.bottom())],
             HAIRLINE,
-            theme.border.opacity(0.6),
+            theme.border.opacity(0.35),
             window,
         );
         let label = match hz >= 1000. {
@@ -563,21 +677,14 @@ fn paint_plot(
             cx,
         );
     }
-    let span = axes.gain[1] - axes.gain[0];
-    let target = span / 6.;
-    let decade = 10f32.powf(target.log10().floor());
-    let step = [1., 2., 3., 6., 10.]
-        .into_iter()
-        .find(|n| n * decade >= target)
-        .unwrap_or(10.)
-        * decade;
+    let step = gain_step(axes.gain[1] - axes.gain[0]);
     let start = (axes.gain[0] / step).ceil() as i32;
     let end = (axes.gain[1] / step).floor() as i32;
     for tick in start..=end {
         let db = tick as f32 * step;
         let y = axes.y(db, bounds);
         let color = match tick == 0 {
-            true => theme.muted_foreground.opacity(0.6),
+            true => theme.muted_foreground.opacity(0.4),
             false => theme.border.opacity(0.6),
         };
         line(
@@ -596,104 +703,123 @@ fn paint_plot(
             cx,
         );
     }
-    let project = |values: &[ResponsePoint]| {
-        values
-            .iter()
-            .filter(|value| value.frequency_hz.is_finite() && value.gain_db.is_finite())
-            .map(|value| axes.project(*value, bounds))
-            .collect::<Vec<_>>()
+}
+
+/// The distance between gain labels for an axis `span` decibels tall: 1, 2, 3, 6 or 12 times a
+/// power of ten, the first to leave no more than about six gaps. A decibel axis then reads in
+/// steps of 6, the ones an ear and an engineer count in.
+fn gain_step(span: f32) -> f32 {
+    let target = span / 6.;
+    let decade = 10f32.powf(target.log10().floor());
+    [1., 2., 3., 6., 12.]
+        .into_iter()
+        .find(|n| n * decade >= target)
+        .unwrap_or(12.)
+        * decade
+}
+
+/// Fills between the zero line at `zero` and the response `curve`, the boosts and the cuts as
+/// two shapes that each fade from `fill` at the curve's furthest reach to clear at the line.
+fn paint_area(curve: &[Point<Pixels>], zero: Pixels, color: Hsla, fill: f32, window: &mut Window) {
+    let (Some(first), Some(last)) = (curve.first(), curve.last()) else {
+        return;
     };
-    let (curve, level) = match plot.bypassed {
-        true => (theme.muted_foreground, theme.muted_foreground),
-        false => (theme.primary, theme.foreground),
-    };
-    let reference = plot
-        .reference
-        .as_ref()
-        .map(|(gain_db, label)| (axes.y(*gain_db, bounds), label));
-    if let Some((y, _)) = reference {
-        let mut path = PathBuilder::stroke(HAIRLINE).dash_array(&DASH);
-        path.add_polygon(&[point(bounds.left(), y), point(bounds.right(), y)], false);
-        if let Ok(path) = path.build() {
-            window.paint_path(path, level.opacity(0.7));
-        }
-    }
-    line(&project(response), CURVE_STROKE, curve, window);
-    // The level's name goes over the curve on a plate, so a curve through it leaves it legible.
-    if let Some((y, label)) = reference {
-        text(
-            label.clone(),
-            point(bounds.left() + pad, y - theme.text(Text::Tiny) - pad),
-            0.,
-            level,
-            Some(theme.background.opacity(0.85)),
-            window,
-            cx,
-        );
-    }
-    for node in plot
-        .nodes
-        .iter()
-        .filter(|node| !node.selected)
-        .chain(plot.nodes.iter().filter(|node| node.selected))
-    {
-        let centre = axes.project(node.position, bounds);
-        let radius = plot.radius;
-        if node.selected {
-            window.paint_quad(gpui::quad(
-                Bounds::new(
-                    centre - point(radius * 1.6, radius * 1.6),
-                    size(radius * 3.2, radius * 3.2),
-                ),
-                radius * 1.6,
-                theme.primary.opacity(0.18),
-                HAIRLINE,
-                theme.primary,
-                gpui::BorderStyle::Solid,
-            ));
-        }
-        let (fill, outline) = match node.enabled {
-            true => (theme.primary, theme.primary_foreground),
-            false => (theme.muted, theme.muted_foreground),
+    for boost in [true, false] {
+        let side = |y: Pixels| match boost {
+            true => y.min(zero),
+            false => y.max(zero),
         };
-        window.paint_quad(gpui::quad(
-            Bounds::new(
-                centre - point(radius, radius),
-                size(radius * 2., radius * 2.),
-            ),
-            radius,
-            fill,
-            HAIRLINE,
-            outline,
-            gpui::BorderStyle::Solid,
-        ));
-        if !node.gain_adjustable {
-            line(
-                &[
-                    point(centre.x - radius / 2., centre.y),
-                    point(centre.x + radius / 2., centre.y),
-                ],
-                HAIRLINE,
-                outline,
-                window,
+        if curve.iter().all(|sample| side(sample.y) == zero) {
+            continue;
+        }
+        let mut area = PathBuilder::fill();
+        area.move_to(point(first.x, zero));
+        for sample in curve {
+            area.line_to(point(sample.x, side(sample.y)));
+        }
+        area.line_to(point(last.x, zero));
+        area.close();
+        let angle = match boost {
+            true => 180.,
+            false => 0.,
+        };
+        if let Ok(path) = area.build() {
+            window.paint_path(
+                path,
+                linear_gradient(
+                    angle,
+                    linear_color_stop(color.opacity(fill), 0.),
+                    linear_color_stop(color.opacity(0.), 1.),
+                ),
             );
         }
     }
-    if let Some(node) = plot.nodes.iter().find(|node| node.selected) {
-        readout(
-            node,
-            axes.project(node.position, bounds),
-            bounds,
-            plot.radius,
-            theme,
+}
+
+/// Paints one node as a ring around a clear centre, or filled when it is selected, with a soft
+/// halo when it is selected or `lit` under the pointer. A node whose gain is fixed carries a
+/// level bar across it.
+fn paint_node(
+    node: &ResponseNode,
+    centre: Point<Pixels>,
+    radius: Pixels,
+    lit: bool,
+    theme: &Theme,
+    window: &mut Window,
+) {
+    let accent = match node.enabled {
+        true => theme.primary,
+        false => theme.muted_foreground,
+    };
+    let active = node.selected || lit;
+    if active {
+        let halo = radius * HALO;
+        let glow = match node.selected {
+            true => 0.22,
+            false => 0.14,
+        };
+        window.paint_quad(
+            gpui::fill(
+                Bounds::new(centre - point(halo, halo), size(halo * 2., halo * 2.)),
+                accent.opacity(glow),
+            )
+            .corner_radii(halo),
+        );
+    }
+    let radius = match active {
+        true => radius,
+        false => radius * NODE_REST,
+    };
+    let (fill, ring) = match node.selected {
+        true => (accent, theme.background),
+        false => (theme.background, accent),
+    };
+    window.paint_quad(gpui::quad(
+        Bounds::new(
+            centre - point(radius, radius),
+            size(radius * 2., radius * 2.),
+        ),
+        radius,
+        fill,
+        RING,
+        ring,
+        gpui::BorderStyle::Solid,
+    ));
+    if !node.gain_adjustable {
+        line(
+            &[
+                point(centre.x - radius / 2., centre.y),
+                point(centre.x + radius / 2., centre.y),
+            ],
+            RING,
+            ring,
             window,
-            cx,
         );
     }
 }
 
 /// Fills the spectrum from the bottom of the plot up to its levels, and labels its scale along
-/// the right edge.
+/// the right edge, all dim so it stays behind the response.
 fn paint_spectrum(
     bounds: Bounds<Pixels>,
     axes: ResponseAxes,
@@ -721,12 +847,19 @@ fn paint_spectrum(
         area.line_to(point(last.x, bounds.bottom()));
         area.close();
         if let Ok(path) = area.build() {
-            window.paint_path(path, theme.muted_foreground.opacity(0.1));
+            window.paint_path(
+                path,
+                linear_gradient(
+                    180.,
+                    linear_color_stop(theme.muted_foreground.opacity(0.12), 0.),
+                    linear_color_stop(theme.muted_foreground.opacity(0.03), 1.),
+                ),
+            );
         }
         line(
             &points,
             HAIRLINE,
-            theme.muted_foreground.opacity(0.3),
+            theme.muted_foreground.opacity(0.2),
             window,
         );
     }
@@ -752,7 +885,7 @@ fn paint_spectrum(
 }
 
 /// The selected node's frequency and gain in a popover-coloured tag above it, or below it when
-/// the plot has no room above.
+/// the plot has no room above, led by a dot in the node's colour.
 fn readout(
     node: &ResponseNode,
     centre: Point<Pixels>,
@@ -787,8 +920,12 @@ fn readout(
     let size_text = theme.text(Text::Tiny);
     let shaped = shape(label, theme.popover_foreground, window, cx);
     let pad = theme.metrics.pad;
-    let tag = size(shaped.width + pad * 2., size_text + pad);
-    let gap = radius * 1.6 + pad / 2.;
+    let dot = size_text / 2.;
+    let tag = size(
+        pad + dot + pad * 0.75 + shaped.width + pad,
+        size_text + pad * 1.25,
+    );
+    let gap = radius * HALO + pad / 2.;
     let above = centre.y - gap - tag.height;
     let top = match above >= bounds.top() {
         true => above,
@@ -806,8 +943,25 @@ fn readout(
         theme.border,
         gpui::BorderStyle::Solid,
     ));
+    let accent = match node.enabled {
+        true => theme.primary,
+        false => theme.muted_foreground,
+    };
+    window.paint_quad(
+        gpui::fill(
+            Bounds::new(
+                point(left + pad, top + (tag.size.height - dot) / 2.),
+                size(dot, dot),
+            ),
+            accent,
+        )
+        .corner_radii(dot / 2.),
+    );
     let _ = shaped.paint(
-        point(left + pad, top + pad / 2.),
+        point(
+            left + pad + dot + pad * 0.75,
+            top + (tag.size.height - size_text) / 2.,
+        ),
         size_text,
         gpui::TextAlign::Left,
         None,
@@ -829,29 +983,35 @@ fn line(points: &[Point<Pixels>], width: Pixels, color: Hsla, window: &mut Windo
 }
 
 /// Paints `label` in the tiny text size with its top at `position.y`, and `anchor` of its width
-/// left of `position.x`: 0 starts it there, 0.5 centres it and 1 ends it there. A `plate` colour
-/// fills a rounded box behind it first.
+/// left of `position.x`: 0 starts it there, 0.5 centres it and 1 ends it there. A `plate` fill
+/// and border colour put a rounded tag behind it first.
 fn text(
     label: SharedString,
     position: Point<Pixels>,
     anchor: f32,
     color: Hsla,
-    plate: Option<Hsla>,
+    plate: Option<(Hsla, Hsla)>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let theme = *cx.theme();
     let line = shape(label, color, window, cx);
     let origin = point(position.x - line.width() * anchor, position.y);
-    if let Some(plate) = plate {
+    if let Some((fill, border)) = plate {
         let pad = theme.metrics.pad / 2.;
         let size_text = theme.text(Text::Tiny);
         let plate_bounds = Bounds::new(
-            origin - point(pad, pad / 2.),
-            size(line.width() + pad * 2., size_text + pad),
+            origin - point(pad * 1.5, pad / 2.),
+            size(line.width() + pad * 3., size_text + pad),
         );
-        window
-            .paint_quad(gpui::fill(plate_bounds, plate).corner_radii(theme.radius.min(size_text)));
+        window.paint_quad(gpui::quad(
+            plate_bounds,
+            theme.radius.min(size_text),
+            fill,
+            HAIRLINE,
+            border,
+            gpui::BorderStyle::Solid,
+        ));
     }
     let _ = line.paint(
         origin,

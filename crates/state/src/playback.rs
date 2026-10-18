@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
-use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, apo};
+use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, Preset, apo};
 use music::{
     Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
     PlaybackFactory, Player, Quality, Route, Spectrum, Track, Transcode,
@@ -2394,6 +2394,23 @@ impl Playback {
         self.follow_equalizer(cx);
     }
 
+    /// Plays `preset` in the profile with no name, switching to it first when another plays, and
+    /// turns the equalizer on. A named profile is never overwritten.
+    pub fn play_equalizer_preset(&mut self, preset: Preset, cx: &mut Context<Self>) {
+        let curve = preset.curve();
+        let settings = self.settings.read(cx);
+        if settings.equalizer_scratch() != Some(settings.equalizer_profile()) {
+            self.store_glided(cx);
+            self.settings.update(cx, |settings, cx| {
+                settings.select_equalizer_scratch(&curve, cx)
+            });
+            self.follow_equalizer(cx);
+        }
+        self.set_equalizer_curve(curve, cx);
+        if !self.equalizer() {
+            self.set_equalizer(true, cx);
+        }
+    }
     /// Adds a profile named after `name` holding `curve` and plays it. `AppSettings` makes the
     /// name unique.
     pub fn add_equalizer_profile(&mut self, name: &str, curve: Curve, cx: &mut Context<Self>) {

@@ -1072,6 +1072,13 @@ impl AppSettings {
             .map_or_else(|| Preset::Flat.curve(), Profile::curve)
     }
 
+    /// The curve profile `index` holds, with any filter out of range dropped.
+    pub fn equalizer_profile_curve(&self, index: usize) -> Option<Curve> {
+        self.values
+            .equalizer_profiles
+            .get(index)
+            .map(Profile::curve)
+    }
     pub fn sleep_timer(&self) -> bool {
         self.values.sleep_timer
     }
@@ -1561,6 +1568,27 @@ impl AppSettings {
         }
     }
 
+    /// Where the profile with no name sits, the one presets load into, if there is one.
+    pub fn equalizer_scratch(&self) -> Option<usize> {
+        self.values
+            .equalizer_profiles
+            .iter()
+            .position(|profile| profile.name.is_empty())
+    }
+
+    /// Makes the profile with no name the one that plays, adding it holding `curve` when there
+    /// is none, so a preset never lands on a profile someone named.
+    pub fn select_equalizer_scratch(&mut self, curve: &Curve, cx: &mut Context<Self>) {
+        match self.equalizer_scratch() {
+            Some(index) => self.values.equalizer_profile = index,
+            None => {
+                let values = &mut self.values;
+                values.equalizer_profile = values.equalizer_profiles.len();
+                values.equalizer_profiles.push(Profile::of(curve));
+            }
+        }
+        self.schedule_save(cx);
+    }
     /// Adds a profile after the others and makes it the one that plays. Its name is `name`
     /// trimmed, or the Default label when that is empty, numbered when another profile shows
     /// it already.

@@ -4,10 +4,10 @@ use i18n::t;
 use music::equalizer::MAX_FILTERS;
 use music::equalizer::apo::{self, Reason, Refused, Skipped};
 use state::{Outcome, Toast, Toasts, equalizer_profile_label};
-use ui::{ActiveTheme as _, Button, Text, faint};
+use ui::{Button, InfoCard};
 
-use super::EqualizerView;
 use super::rows::invalid_text;
+use super::{EqualizerView, blurb};
 
 /// How many skipped lines an import toast spells out.
 const REASONS: usize = 3;
@@ -153,25 +153,18 @@ impl EqualizerView {
         }));
     }
 
+    /// The import and export card: Equalizer APO text read in from a file or the clipboard on
+    /// the left, and the playing profile written out on the right.
     pub(super) fn transfer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = *cx.theme();
         let button =
             |id: &'static str, label: SharedString| Button::new(id).small().outline().label(label);
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(faint(cx).child(t!("equalizer-transfer")))
-            .child(
-                div()
-                    .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(t!("equalizer-transfer-detail")),
-            )
+        InfoCard::new(t!("equalizer-transfer"))
+            .child(blurb(t!("equalizer-transfer-detail"), None, cx))
             .child(
                 div()
                     .flex()
                     .flex_wrap()
+                    .items_center()
                     .gap_2()
                     .child(
                         button("equalizer-import-file", t!("equalizer-import-file"))
@@ -182,12 +175,19 @@ impl EqualizerView {
                             .on_click(cx.listener(|this, _, _, cx| this.paste(cx))),
                     )
                     .child(
-                        button("equalizer-copy", t!("equalizer-copy"))
-                            .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
-                    )
-                    .child(
-                        button("equalizer-export-file", t!("equalizer-export-file"))
-                            .on_click(cx.listener(|this, _, _, cx| this.export_file(cx))),
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .ml_auto()
+                            .child(
+                                button("equalizer-copy", t!("equalizer-copy"))
+                                    .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
+                            )
+                            .child(
+                                button("equalizer-export-file", t!("equalizer-export-file"))
+                                    .on_click(cx.listener(|this, _, _, cx| this.export_file(cx))),
+                            ),
                     ),
             )
             .into_any_element()

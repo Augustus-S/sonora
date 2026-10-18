@@ -9,7 +9,7 @@ use crate::chrome::OutputPicker;
 use crate::shared::confirm::{Confirm, Kind};
 use crate::shared::device_code::device_code;
 use crate::shared::effects;
-use crate::shared::equalizer::{preset_key, profile_picker};
+use crate::shared::equalizer::sound_picker;
 use crate::shared::local;
 use crate::shared::popups::{AccountPicker, CookiePrompt, SearchPopup, matches_query};
 use crate::shared::text;
@@ -22,7 +22,6 @@ use gpui::{
 use gpui::{ScrollHandle, prelude::*, svg};
 use i18n::{Language, t};
 use music::drm::Origin;
-use music::equalizer::Preset;
 use music::scrobble::{Link, Secret};
 use music::{
     AccountChoice, Codec, Encoding, Offer, Quality, SignIn, SignInPrompt, Transcode, WritingSystem,
@@ -91,7 +90,6 @@ const STREAM_QUALITIES: &str = "stream-qualities";
 const STREAM_FORMATS: &str = "stream-formats";
 const STREAM_BITRATES: &str = "stream-bitrates";
 const EQUALIZER_PRESETS: &str = "equalizer-presets";
-const EQUALIZER_PROFILES: &str = "equalizer-profiles";
 const SLEEP_MAX_MINUTES: u64 = 120;
 const SLEEP_MAGNETS: [u64; 4] = [15, 30, 45, 60];
 const SLEEP_MAGNET_WEIGHT: usize = 4;
@@ -198,8 +196,6 @@ enum Slot {
     Buffer,
     Equalizer,
     EqualizerPreset,
-    EqualizerProfile,
-    EqualizerScreen,
     LyricsProviders,
     LyricsPriority,
     Karaoke,
@@ -689,11 +685,7 @@ impl SettingsView {
                 slots.extend([Slot::Title("settings-group-equalizer"), Slot::Equalizer]);
                 if self.playback.read(cx).equalizer() {
                     slots.push(Slot::EqualizerPreset);
-                    if self.settings.read(cx).equalizer_profiles().count() >= 2 {
-                        slots.push(Slot::EqualizerProfile);
-                    }
                 }
-                slots.push(Slot::EqualizerScreen);
                 slots.extend([Slot::Title("settings-group-lyrics"), Slot::LyricsProviders]);
                 if self
                     .settings
@@ -882,14 +874,6 @@ impl SettingsView {
             Slot::EqualizerPreset => (
                 t!("settings-equalizer-preset"),
                 t!("settings-equalizer-preset-detail"),
-            ),
-            Slot::EqualizerProfile => (
-                t!("settings-equalizer-profile"),
-                t!("settings-equalizer-profile-detail"),
-            ),
-            Slot::EqualizerScreen => (
-                t!("settings-equalizer-editor"),
-                t!("settings-equalizer-editor-detail"),
             ),
             Slot::LyricsProviders => (
                 t!("settings-lyrics-providers"),
@@ -1108,8 +1092,6 @@ impl SettingsView {
             Slot::Widevine => self.widevine_row(cx).element,
             Slot::Equalizer => self.equalizer_row(cx).element,
             Slot::EqualizerPreset => self.equalizer_preset_row(cx).element,
-            Slot::EqualizerProfile => self.equalizer_profile_row(cx).element,
-            Slot::EqualizerScreen => self.equalizer_screen_row(cx).element,
             Slot::LyricsProviders => self.lyrics_providers_row(cx).element,
             Slot::LyricsPriority => self.lyrics_priority_row(cx).element,
             Slot::Karaoke => self.karaoke_lyrics_row(cx).element,
@@ -2684,6 +2666,7 @@ impl SettingsView {
         )
     }
 
+    /// The equalizer switch, with a button beside it that opens the equalizer screen.
     fn equalizer_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -2695,51 +2678,32 @@ impl SettingsView {
             t!("settings-equalizer-detail"),
             muted,
             small,
-            Switch::new("equalizer", on)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.playback
-                        .update(cx, |playback, cx| playback.set_equalizer(!on, cx));
-                }))
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Button::new("open-equalizer")
+                        .label(t!("settings-equalizer-editor"))
+                        .small()
+                        .outline()
+                        .on_click(|_, _, cx| navigate(Destination::Equalizer, cx)),
+                )
+                .child(
+                    Switch::new("equalizer", on).on_click(cx.listener(move |this, _, _, cx| {
+                        this.playback
+                            .update(cx, |playback, cx| playback.set_equalizer(!on, cx));
+                    })),
+                )
                 .into_any_element(),
         )
     }
 
-    /// The built-in presets, showing the one the playing curve matches or Custom when it matches
-    /// none. Picking one replaces the playing profile's curve with it.
+    /// The sound that plays, picked from the built-in presets, Custom and the named profiles.
     fn equalizer_preset_row(&self, cx: &mut Context<Self>) -> Setting {
         let theme = *cx.theme();
-        let chosen = Preset::matching(self.playback.read(cx).equalizer_curve());
-        let label = match chosen {
-            Some(preset) => i18n::lookup(preset_key(preset), None),
-            None => t!("settings-equalizer-custom"),
-        };
-
-        let picker = Picker::new(EQUALIZER_PRESETS, &self.popovers, label)
-            .width(Picker::REGULAR)
-            .items(Preset::ALL.map(|preset| {
-                MenuItem::new(preset.id(), i18n::lookup(preset_key(preset), None))
-                    .selected(chosen == Some(preset))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.playback.update(cx, |playback, cx| {
-                            playback.set_equalizer_curve(preset.curve(), cx)
-                        });
-                    }))
-            }));
-
-        self.row(
-            t!("settings-equalizer-preset"),
-            t!("settings-equalizer-preset-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
-            picker.into_any_element(),
-        )
-    }
-
-    /// The profile that plays, chosen from the ones the equalizer screen keeps.
-    fn equalizer_profile_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let picker = profile_picker(
-            EQUALIZER_PROFILES,
+        let picker = sound_picker(
+            EQUALIZER_PRESETS,
             &self.popovers,
             &self.playback,
             &self.settings,
@@ -2748,28 +2712,11 @@ impl SettingsView {
         .width(Picker::REGULAR);
 
         self.row(
-            t!("settings-equalizer-profile"),
-            t!("settings-equalizer-profile-detail"),
+            t!("settings-equalizer-preset"),
+            t!("settings-equalizer-preset-detail"),
             theme.muted_foreground,
             theme.text(Text::Small),
             picker.into_any_element(),
-        )
-    }
-
-    fn equalizer_screen_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-
-        self.row(
-            t!("settings-equalizer-editor"),
-            t!("settings-equalizer-editor-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
-            Button::new("open-equalizer")
-                .label(t!("settings-equalizer-open"))
-                .small()
-                .outline()
-                .on_click(|_, _, cx| navigate(Destination::Equalizer, cx))
-                .into_any_element(),
         )
     }
 

@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable as _, MouseDownEvent, SharedString, Window, div,
+    AnyElement, App, Context, Div, Entity, Focusable as _, MouseDownEvent, Pixels, SharedString,
+    Window, div,
 };
 use i18n::t;
 use music::equalizer::{
@@ -8,9 +9,12 @@ use music::equalizer::{
     PREAMP_RANGE, Preamp, Q_RANGE, Width, apo,
 };
 use state::{Outcome, Toast, Toasts};
-use ui::{ActiveTheme as _, Button, Input, MenuItem, Picker, Switch, Text, faint, vacant};
+use ui::{
+    ActiveTheme as _, Button, InfoCard, Input, MenuItem, Picker, Separator, Switch, Text, faint,
+    vacant,
+};
 
-use super::{EqualizerView, FIELD};
+use super::{EqualizerView, FIELD, blurb};
 
 /// One kind picker per filter row, since a popover is known by a static name.
 const KINDS: [&str; MAX_FILTERS] = [
@@ -35,8 +39,11 @@ const KINDS: [&str; MAX_FILTERS] = [
     "equalizer-kind-18",
     "equalizer-kind-19",
 ];
-/// How wide the kind picker's column is, in cover sizes, so the fields line up in every row.
-const KIND: f32 = 0.75;
+/// How wide each column of the filter table is, in cover sizes, so the fields and their
+/// headers line up in every row: the switch, the kind picker, and a number with its unit.
+const TOGGLE: f32 = 0.35;
+const KIND: f32 = 0.85;
+const NUMBER: f32 = 0.85;
 /// The new filter Add puts in: flat, so adding one changes nothing until it is shaped.
 pub(super) const NEW_FILTER: (Kind, f64, f64, f64) = (Kind::Peak, 1_000., 0., 1.);
 
@@ -221,6 +228,7 @@ impl EqualizerView {
         let id = self.graph.id(index);
         let selected = id.is_some() && id == self.graph.selected();
         let theme = *cx.theme();
+        let cover = theme.metrics.cover;
         let row = &self.rows[index];
         let enabled = Switch::new(("equalizer-filter-on", index), filter.enabled()).on_click(
             cx.listener(move |this, _, _, cx| {
@@ -229,6 +237,8 @@ impl EqualizerView {
         );
         let kind = Picker::new(KINDS[index], &self.popovers, kind_name(filter.kind()))
             .width(Picker::NARROW)
+            .w_full()
+            .left()
             .items(Kind::ALL.map(|kind| {
                 MenuItem::new(kind.id(), kind_name(kind))
                     .selected(kind == filter.kind())
@@ -239,7 +249,6 @@ impl EqualizerView {
         let gain = match filter.kind().has_gain() {
             true => self.number(&row.gain, t!("equalizer-decibels"), cx),
             false => div()
-                .w(theme.metrics.cover * FIELD)
                 .text_color(theme.muted_foreground)
                 .child(t!("equalizer-no-gain"))
                 .into_any_element(),
@@ -259,15 +268,19 @@ impl EqualizerView {
             .flex_wrap()
             .items_center()
             .gap_3()
-            .child(self.number(&row.frequency, t!("equalizer-hertz"), cx))
-            .child(gain)
-            .child(self.number(&row.width, width_unit, cx));
+            .child(cell(cover * NUMBER).child(self.number(
+                &row.frequency,
+                t!("equalizer-hertz"),
+                cx,
+            )))
+            .child(cell(cover * NUMBER).child(gain))
+            .child(cell(cover * NUMBER).child(self.number(&row.width, width_unit, cx)));
         let controls = div()
             .flex()
             .items_center()
             .gap_3()
-            .child(enabled)
-            .child(div().w(theme.metrics.cover * KIND).child(kind));
+            .child(cell(cover * TOGGLE).child(enabled))
+            .child(cell(cover * KIND).child(kind));
 
         match wide {
             true => div()
@@ -300,7 +313,42 @@ impl EqualizerView {
         .into_any_element()
     }
 
+    /// The names over the filter table's columns, drawn only where a row fits on one line.
+    fn columns(&self, cx: &App) -> AnyElement {
+        let cover = cx.theme().metrics.cover;
+        faint(cx)
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_2()
+            .child(cell(cover * TOGGLE).child(t!("equalizer-enabled")))
+            .child(cell(cover * KIND).child(t!("equalizer-filter-type")))
+            .child(cell(cover * NUMBER).child(t!("equalizer-filter-frequency")))
+            .child(cell(cover * NUMBER).child(t!("equalizer-filter-gain")))
+            .child(cell(cover * NUMBER).child(t!("equalizer-filter-width")))
+            .into_any_element()
+    }
+
+    /// The button that appends a flat filter, which does nothing once the curve is full.
+    fn add_button(&self, id: &'static str, full: bool, cx: &mut Context<Self>) -> Button {
+        Button::new(id)
+            .small()
+            .outline()
+            .icon("icons/plus.svg")
+            .label(t!("equalizer-add-filter"))
+            .disabled(full)
+            .on_click(cx.listener(|this, _, _, cx| {
+                let (kind, frequency, gain, q) = NEW_FILTER;
+                let filter = Filter::new(kind, frequency, gain, Width::Q(q), true)
+                    .expect("the new filter is in range");
+                this.add_filter(filter, cx)
+            }))
+    }
+
+    /// The filters' card: a table of the filters with the add action above it, or an empty
+    /// state that offers the first filter while there are none.
     pub(super) fn filters(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
         let filters = self.playback.read(cx).equalizer_curve().filters().to_vec();
         let full = filters.len() >= MAX_FILTERS;
         let empty = filters.is_empty();
@@ -309,33 +357,37 @@ impl EqualizerView {
             .enumerate()
             .map(|(index, filter)| self.filter_row(index, filter, wide, cx))
             .collect();
+        let add = (!empty).then(|| {
+            self.add_button("equalizer-add", full, cx)
+                .into_any_element()
+        });
+        let description = t!("equalizer-filters-detail", max = MAX_FILTERS);
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(faint(cx).child(t!("equalizer-filters")))
-            .children(rows)
-            .when(empty, |this| {
-                this.child(vacant(t!("equalizer-no-filters"), cx))
-            })
-            .child(
-                div().flex().pt_2().child(
-                    Button::new("equalizer-add")
-                        .small()
-                        .outline()
-                        .icon("icons/plus.svg")
-                        .label(t!("equalizer-add-filter"))
-                        .disabled(full)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let (kind, frequency, gain, q) = NEW_FILTER;
-                            let filter = Filter::new(kind, frequency, gain, Width::Q(q), true)
-                                .expect("the new filter is in range");
-                            this.add_filter(filter, cx)
-                        })),
-                ),
-            )
-            .into_any_element()
+        let card = InfoCard::new(t!("equalizer-filters")).child(blurb(description, add, cx));
+        match empty {
+            true => card.child(
+                vacant(t!("equalizer-no-filters"), cx)
+                    .flex_col()
+                    .gap_3()
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_dashed()
+                    .border_color(theme.border)
+                    .child(self.add_button("equalizer-add-first", full, cx)),
+            ),
+            false => card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(wide, |this| {
+                        this.child(self.columns(cx))
+                            .child(Separator::horizontal().my_1())
+                    })
+                    .children(rows),
+            ),
+        }
+        .into_any_element()
     }
 }
 
@@ -439,4 +491,9 @@ fn kind_name(kind: Kind) -> SharedString {
         Kind::AllPass => "equalizer-kind-all-pass",
     };
     i18n::lookup(key, None)
+}
+
+/// A fixed-width column of the filter table.
+fn cell(width: Pixels) -> Div {
+    div().flex_none().w(width)
 }

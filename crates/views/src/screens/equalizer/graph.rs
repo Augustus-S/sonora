@@ -30,6 +30,12 @@ const SPECTRUM_SCALE: (f32, f32) = (-90., 0.);
 /// How tall the graph is in cover sizes, with the room of a wide window, and with less.
 const GRAPH_TALL: f32 = 2.8;
 const GRAPH_SHORT: f32 = 2.;
+/// The gain axis's half spans in decibels, narrowest first. The axis shows the narrowest one the
+/// curve, the nodes and the preamp fit in, so a gentle preset fills the plot.
+const GAIN_SPANS: [f32; 3] = [12., 18., 24.];
+/// How far past a span the curve may reach and still be shown in it, so a filter at exactly the
+/// span does not tip the axis over on the rounding of its response.
+const SPAN_SLACK: f32 = 0.05;
 
 /// What the graph keeps between renders: an id per filter of the playing curve, the selected
 /// filter, and the response as last sampled. Filters that came from anywhere but this screen
@@ -45,6 +51,9 @@ pub(super) struct Graph {
     /// The filters this screen put in place last, until the playing curve shows them.
     own: Option<Vec<Filter>>,
     plotted: Option<Plotted>,
+    /// The half span of the gain axis last shown. It holds still while a node is held, so the
+    /// scale never shifts under a drag.
+    span: f32,
 }
 
 /// The response the graph draws, and what it was sampled for.
@@ -53,6 +62,9 @@ struct Plotted {
     rate: u32,
     response: Response,
     points: Vec<ResponsePoint>,
+    /// How far from 0 dB the curve reaches, leaving out the dips of filters with no gain, which
+    /// fall without limit towards a notch's centre or past a pass filter's corner.
+    reach: f32,
 }
 
 impl Graph {
@@ -65,6 +77,7 @@ impl Graph {
             filters: Vec::new(),
             own: None,
             plotted: None,
+            span: GAIN_SPANS[0],
         }
     }
 
@@ -163,11 +176,13 @@ impl Graph {
         if stale {
             let response = curve.response(rate);
             let points = sample(curve, &response, rate);
+            let reach = reach(curve, rate, &points);
             self.plotted = Some(Plotted {
                 curve: curve.clone(),
                 rate,
                 response,
                 points,
+                reach,
             });
         }
         self.plotted.as_ref().expect("sampled above")
@@ -224,8 +239,18 @@ impl EqualizerView {
             })
             .collect();
         let points = plotted.points.clone();
+        let reach = nodes
+            .iter()
+            .filter(|node| node.gain_adjustable)
+            .map(|node| node.position.gain_db.abs())
+            .fold(plotted.reach.max(preamp.abs() as f32), f32::max);
+        let span = match self.graph.state.dragging() {
+            true => self.graph.span,
+            false => fitted_span(reach),
+        };
+        self.graph.span = span;
         let (low, high) = GRAPH_FREQUENCIES;
-        let axes = ResponseAxes::new(low as f32..=high as f32, gain_floor()..=-gain_floor())
+        let axes = ResponseAxes::new(low as f32..=high as f32, -span..=span)
             .expect("the graph's axes are valid");
         let height = match room.fits(Room::Wide) {
             true => GRAPH_TALL,
@@ -265,9 +290,11 @@ impl EqualizerView {
     }
 
     /// Carries out what was done on the graph. A drag or a wheel step glides the filter it
-    /// moves; adding and removing cross-fade like the list's own buttons.
+    /// moves, and adding and removing cross-fade like the list's own buttons. A dragged or added
+    /// gain stays within the axis shown, a shelf's whole step included.
     fn graph_edit(&mut self, edit: &GraphEdit, cx: &mut Context<Self>) {
         let curve = self.playback.read(cx).equalizer_curve().clone();
+        let span = self.graph.span;
         let glided = match *edit {
             GraphEdit::Select(id) => {
                 if self.graph.select(id) {
@@ -285,7 +312,7 @@ impl EqualizerView {
                 let lift = lift(filter.kind());
                 let moved = position.gain_db != plotted_db(filter.gain() * lift);
                 let gain = match filter.kind().has_gain() && moved {
-                    true => placed_gain(position.gain_db / lift as f32),
+                    true => placed_gain(position.gain_db / lift as f32, span),
                     false => filter.gain(),
                 };
                 Filter::new(
@@ -319,7 +346,7 @@ impl EqualizerView {
             GraphEdit::Add(position) => {
                 let (kind, _, _, q) = NEW_FILTER;
                 let frequency = placed_frequency(position.frequency_hz);
-                let gain = placed_gain(position.gain_db);
+                let gain = placed_gain(position.gain_db, span);
                 if let Ok(filter) = Filter::new(kind, frequency, gain, Width::Q(q), true) {
                     self.add_filter(filter, cx);
                 }
@@ -371,13 +398,48 @@ fn placed_frequency(frequency_hz: f32) -> f64 {
     ((frequency * scale).round() / scale).clamp(*FREQUENCY_RANGE.start(), *FREQUENCY_RANGE.end())
 }
 
-/// A dragged gain to a tenth of a decibel, in range.
-fn placed_gain(gain_db: f32) -> f64 {
-    ((f64::from(gain_db) * 10.).round() / 10.).clamp(*GAIN_RANGE.start(), *GAIN_RANGE.end())
+/// How far from 0 dB the response sampled at `points` reaches. That is its highest boost, or the
+/// deepest cut of its peaks and shelves alone, read from the same curve without the gainless
+/// filters.
+fn reach(curve: &Curve, rate: u32, points: &[ResponsePoint]) -> f32 {
+    let filters = curve
+        .filters()
+        .iter()
+        .filter(|filter| filter.kind().has_gain())
+        .copied()
+        .collect();
+    let gains = Curve::new(curve.preamp(), filters)
+        .ok()
+        .map(|curve| curve.response(rate));
+    points
+        .iter()
+        .map(|point| {
+            let cut = gains
+                .as_ref()
+                .map_or(0., |gains| gains.db(f64::from(point.frequency_hz)).abs());
+            point.gain_db.max(cut as f32)
+        })
+        .fold(0., f32::max)
 }
 
-/// The bottom of the graph's gain axis, which is also as low as the drawn curve goes, so a
-/// notch's centre at minus infinity draws at the floor.
+/// The narrowest of `GAIN_SPANS` that `reach` fits in, or the widest when none does.
+fn fitted_span(reach: f32) -> f32 {
+    GAIN_SPANS
+        .into_iter()
+        .find(|span| reach <= span + SPAN_SLACK)
+        .unwrap_or(GAIN_SPANS[GAIN_SPANS.len() - 1])
+}
+
+/// A dragged gain to a tenth of a decibel, within `span` either side of 0 dB and in range.
+fn placed_gain(gain_db: f32, span: f32) -> f64 {
+    let span = f64::from(span);
+    ((f64::from(gain_db) * 10.).round() / 10.)
+        .clamp(-span, span)
+        .clamp(*GAIN_RANGE.start(), *GAIN_RANGE.end())
+}
+
+/// As low as a curve or a node is handed to the graph, so a notch's centre at minus infinity
+/// stays finite and draws at the floor of whichever axis is shown.
 fn gain_floor() -> f32 {
     *GAIN_RANGE.start() as f32
 }

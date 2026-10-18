@@ -2,21 +2,20 @@ use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, div};
 use i18n::t;
 use state::{BoundOutput, equalizer_profile_label};
-use ui::{ActiveTheme as _, MenuItem, Picker, Text};
+use ui::{InfoCard, MenuItem, Picker, Separator};
 
-use super::EqualizerView;
+use super::{EqualizerView, blurb, entry};
 
 const THIS_OUTPUT: &str = "equalizer-output-this-picker";
 const OTHER_OUTPUTS: &str = "equalizer-output-others-picker";
 
 impl EqualizerView {
-    /// The output played on now, the profile bound to it, and the profile every output with
-    /// none of its own plays. Left out while nothing says which output plays.
+    /// The devices' card: the profile bound to the output played on now, and the profile every
+    /// output with none of its own plays. Left out while nothing says which output plays.
     pub(super) fn outputs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let outputs = self.outputs.read(cx);
         let output = outputs.output()?;
         let port = outputs.sink().and_then(|sink| sink.port.clone());
-        let theme = *cx.theme();
         let settings = self.settings.read(cx);
         let names: Vec<SharedString> = settings
             .equalizer_profiles()
@@ -65,42 +64,28 @@ impl EqualizerView {
             },
             cx,
         ));
-        let labelled = |label: SharedString, picker: Picker| {
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(label)
-                .child(picker)
-        };
 
         Some(
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_x_4()
-                .gap_y_2()
+            InfoCard::new(t!("equalizer-devices"))
+                .child(blurb(t!("equalizer-devices-detail"), None, cx))
                 .child(
                     div()
                         .flex()
-                        .items_center()
-                        .gap_2()
-                        .min_w_0()
-                        .child(div().flex_none().child(t!("equalizer-output")))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme.muted_foreground)
-                                .child(output_name(&output.name, port.as_deref())),
-                        ),
+                        .flex_col()
+                        .child(entry(
+                            t!("equalizer-output-this"),
+                            output_name(&output.name, port.as_deref()),
+                            this,
+                            cx,
+                        ))
+                        .child(Separator::horizontal())
+                        .child(entry(
+                            t!("equalizer-output-others"),
+                            t!("equalizer-output-others-detail"),
+                            other,
+                            cx,
+                        )),
                 )
-                .child(div().flex_1())
-                .child(labelled(t!("equalizer-output-this"), this))
-                .child(labelled(t!("equalizer-output-others"), other))
                 .into_any_element(),
         )
     }

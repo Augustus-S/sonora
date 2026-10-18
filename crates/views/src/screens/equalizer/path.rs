@@ -7,27 +7,36 @@ use music::route::{Codec, Encoding};
 use state::{Change, SignalPath};
 use ui::{ActiveTheme as _, Button, Fact, InfoCard, Text};
 
-use super::EqualizerView;
 use super::outputs::output_name;
 use super::rows::figure;
+use super::{EqualizerView, blurb};
 
 /// What joins the parts of one value, as the cards and the aside do.
 const BULLET: &str = " · ";
 
 impl EqualizerView {
-    /// The button that opens and closes the signal path.
-    pub(super) fn path_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The signal path's card, with the button that opens and closes it. The stages are read
+    /// and shown only while it is open.
+    pub(super) fn signal_path(&self, cx: &mut Context<Self>) -> AnyElement {
         let open = self.path.is_some();
-        Button::new("equalizer-signal-path")
+        let toggle = Button::new("equalizer-signal-path")
             .small()
             .outline()
             .selected(open)
-            .label(t!("equalizer-signal-path"))
+            .label(match open {
+                true => t!("equalizer-signal-path-hide"),
+                false => t!("equalizer-signal-path-show"),
+            })
             .trailing(match open {
                 true => "icons/chevron-up.svg",
                 false => "icons/chevron-down.svg",
             })
             .on_click(cx.listener(|this, _, _, cx| this.toggle_path(cx)))
+            .into_any_element();
+
+        InfoCard::new(t!("equalizer-signal-path"))
+            .child(blurb(t!("equalizer-signal-path-detail"), Some(toggle), cx))
+            .children(self.path_stages(cx))
             .into_any_element()
     }
 
@@ -41,20 +50,17 @@ impl EqualizerView {
     }
 
     /// What happens to the sound from the track to the device, stage by stage, and whether
-    /// what leaves Sonora is the decoded track bit for bit.
-    pub(super) fn signal_path(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// what leaves Sonora is the decoded track bit for bit. Nothing while the path is closed.
+    fn path_stages(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.path.as_ref()?;
         let theme = *cx.theme();
-        let card = InfoCard::new(t!("equalizer-signal-path"));
         let Some(path) = self.signal.read(cx).path().cloned() else {
             return Some(
-                card.child(
-                    div()
-                        .text_size(theme.text(Text::Small))
-                        .text_color(theme.muted_foreground)
-                        .child(t!("signal-path-waiting")),
-                )
-                .into_any_element(),
+                div()
+                    .text_size(theme.text(Text::Small))
+                    .text_color(theme.muted_foreground)
+                    .child(t!("signal-path-waiting"))
+                    .into_any_element(),
             );
         };
         let source = path.track.as_ref().map_or_else(
@@ -118,25 +124,29 @@ impl EqualizerView {
             server,
         ];
         Some(
-            card.child(
-                div().flex().flex_col().gap_1().children(
-                    rows.into_iter()
-                        .flatten()
-                        .enumerate()
-                        .map(|(index, (label, value))| {
-                            Fact::new(label, value).striped(index % 2 == 0)
-                        }),
-                ),
-            )
-            .child(verdict(&path, cx))
-            .children(path.server_rate().map(|rate| {
-                div()
-                    .px(theme.metrics.pad)
-                    .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(t!("signal-path-server-converts", khz = khz(rate)))
-            }))
-            .into_any_element(),
+            div()
+                .flex()
+                .flex_col()
+                .gap_4()
+                .child(
+                    div().flex().flex_col().gap_1().children(
+                        rows.into_iter()
+                            .flatten()
+                            .enumerate()
+                            .map(|(index, (label, value))| {
+                                Fact::new(label, value).striped(index % 2 == 0)
+                            }),
+                    ),
+                )
+                .child(verdict(&path, cx))
+                .children(path.server_rate().map(|rate| {
+                    div()
+                        .px(theme.metrics.pad)
+                        .text_size(theme.text(Text::Small))
+                        .text_color(theme.muted_foreground)
+                        .child(t!("signal-path-server-converts", khz = khz(rate)))
+                }))
+                .into_any_element(),
         )
     }
 }

@@ -1,19 +1,19 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, Focusable as _, Render, ScrollHandle, Task, Window,
-    div, svg,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, FontWeight, Render,
+    ScrollHandle, SharedString, Task, Window, div, svg,
 };
 use i18n::t;
-use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
+use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
 use state::{AppSettings, Outputs, Playback, Signal, Sonora, equalizer_profile_label};
 use ui::{
-    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, Input, MenuItem, Modal, Picker, Popovers,
-    Room, Scrollbar, Scroller, Submit, Switch, Text, heading,
+    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, MenuItem, Modal, Picker,
+    Popovers, Room, Scrollbar, Scroller, Submit, TabBar, Text, heading,
 };
 
 use crate::chrome::Chrome;
 use crate::shared::confirm::{self, Confirm};
-use crate::shared::equalizer::{preset_key, profile_picker};
+use crate::shared::equalizer::sound_picker;
 
 use graph::Graph;
 use rows::{Row, figure};
@@ -24,8 +24,7 @@ mod path;
 mod rows;
 mod transfer;
 
-const PROFILES: &str = "equalizer-profiles";
-const PRESETS: &str = "equalizer-presets";
+const SOUND: &str = "equalizer-sound";
 const PREAMP: &str = "equalizer-preamp";
 /// Below this an overload rounds to no tenth of a decibel at all.
 const SLIGHT_OVERLOAD: f64 = 0.05;
@@ -33,10 +32,19 @@ const SLIGHT_OVERLOAD: f64 = 0.05;
 const FIELD: f32 = 0.6;
 /// How wide the rename dialog is, in cover sizes.
 const DIALOG: f32 = 2.8;
+/// How wide the sound picker and its menu are in a wide room, in cover sizes. A narrower room
+/// lets the picker fill its row instead.
+const SOUND_WIDTH: f32 = 2.2;
+/// How narrow a card's description gets before the action beside it wraps underneath, in
+/// cover sizes.
+const BLURB: f32 = 1.6;
+/// How strongly the overload notice's border and fill take the danger color.
+const OVERLOAD_EDGE: f32 = 0.4;
+const OVERLOAD_FILL: f32 = 0.08;
 
-/// The equalizer's own screen. Simple mode shows the response graph, the presets and undo, and
-/// advanced mode adds profiles, the signal path, the preamp and filter fields, and Equalizer APO
-/// text in and out.
+/// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
+/// and advanced mode adds a card each for the preamp, the filters, the per-output profiles,
+/// Equalizer APO text in and out, and the signal path.
 pub(crate) struct EqualizerView {
     playback: Entity<Playback>,
     settings: Entity<AppSettings>,
@@ -246,59 +254,52 @@ impl EqualizerView {
         );
     }
 
+    /// The page title and what the screen is for, with the Simple and Advanced switch on the
+    /// right. The choice is remembered across launches.
     fn header(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let on = self.playback.read(cx).equalizer();
+        let mode = |id: &'static str, label: SharedString, choice: bool| {
+            Button::new(id)
+                .small()
+                .ghost()
+                .label(label)
+                .selected(advanced == choice)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.update(cx, |settings, cx| {
+                        settings.set_equalizer_advanced(choice, cx)
+                    })
+                }))
+        };
+        let modes = [
+            mode("equalizer-simple", t!("equalizer-simple"), false),
+            mode("equalizer-advanced", t!("equalizer-advanced"), true),
+        ];
+
         div()
             .flex()
             .flex_wrap()
             .items_center()
+            .justify_between()
             .gap_4()
-            .child(heading(t!("settings-equalizer"), cx))
-            .child(div().flex_1())
-            .children(self.overload(cx))
-            .when(advanced, |this| this.child(self.path_button(cx)))
-            .child(self.advanced_button(advanced, cx))
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(t!("equalizer-enabled"))
-                    .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.playback
-                                .update(cx, |playback, cx| playback.set_equalizer(!on, cx));
-                        },
-                    ))),
+                    .flex_col()
+                    .gap_1()
+                    .min_w_0()
+                    .child(heading(t!("settings-equalizer"), cx))
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .child(t!("equalizer-subtitle")),
+                    ),
             )
+            .child(TabBar::new("equalizer-mode").flex_none().items(modes))
             .into_any_element()
     }
 
-    /// The button that switches between the simple screen and the advanced one, remembered
-    /// across launches.
-    fn advanced_button(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
-        Button::new("equalizer-advanced")
-            .small()
-            .outline()
-            .selected(advanced)
-            .label(t!("equalizer-advanced"))
-            .trailing(match advanced {
-                true => "icons/chevron-up.svg",
-                false => "icons/chevron-down.svg",
-            })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.settings.update(cx, |settings, cx| {
-                    settings.set_equalizer_advanced(!advanced, cx)
-                })
-            }))
-            .into_any_element()
-    }
-
-    /// How far the output went over full scale lately, and the fix, while it overloads. The fix
-    /// is left out when the preamp is as low as it goes.
+    /// A slim notice of how far the output went over full scale lately, and the fix, while it
+    /// overloads. The fix is left out when the preamp is as low as it goes.
     fn overload(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let playback = self.playback.read(cx);
         let over = playback.overload()?;
@@ -308,10 +309,17 @@ impl EqualizerView {
         Some(
             div()
                 .flex()
+                .flex_wrap()
                 .items_center()
-                .gap_2()
+                .gap_x_3()
+                .gap_y_2()
+                .px(theme.metrics.pad * 1.5)
+                .py(theme.metrics.pad)
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.danger.opacity(OVERLOAD_EDGE))
+                .bg(theme.danger.opacity(OVERLOAD_FILL))
                 .text_size(size)
-                .text_color(theme.danger)
                 .child(
                     svg()
                         .path(icons::path("icons/triangle-alert.svg"))
@@ -319,10 +327,17 @@ impl EqualizerView {
                         .flex_none()
                         .text_color(theme.danger),
                 )
-                .child(match over < SLIGHT_OVERLOAD {
-                    true => t!("equalizer-overload-slight"),
-                    false => t!("equalizer-overload", db = figure(over, 1)),
-                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.danger)
+                        .child(match over < SLIGHT_OVERLOAD {
+                            true => t!("equalizer-overload-slight"),
+                            false => t!("equalizer-overload", db = figure(over, 1)),
+                        }),
+                )
                 .when(fixable, |this| {
                     this.child(
                         Button::new("equalizer-lower-preamp")
@@ -339,50 +354,55 @@ impl EqualizerView {
         )
     }
 
-    /// The profile that plays with the others to choose from, the presets to load into it, and
-    /// undo and redo. Advanced mode adds what can be done to the profile, and simple mode leaves
-    /// out the profile picker while there is only one profile.
-    fn profiles(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// The main card: the one picker for every preset and profile with undo and redo beside it,
+    /// then the response graph. Advanced mode adds what can be done to the playing profile.
+    fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
+        let graph = self.graph(room, cx);
+        let theme = *cx.theme();
+        let wide = room.fits(Room::Wide);
+        let on = self.playback.read(cx).equalizer();
         let only = self.settings.read(cx).equalizer_profiles().count() < 2;
         let (undo, redo) = self.playback.read(cx).equalizer_history();
-        let preset = Preset::matching(self.playback.read(cx).equalizer_curve());
+        let width = theme.metrics.cover * SOUND_WIDTH;
 
-        let profiles = (advanced || !only).then(|| {
-            profile_picker(PROFILES, &self.popovers, &self.playback, &self.settings, cx)
-                .width(Picker::WIDE)
-        });
-        let label = match (advanced, preset) {
-            (true, _) => t!("equalizer-load-preset"),
-            (false, Some(preset)) => i18n::lookup(preset_key(preset), None),
-            (false, None) => t!("settings-equalizer-custom"),
-        };
-        let presets = Picker::new(PRESETS, &self.popovers, label)
-            .width(Picker::NARROW)
-            .items(Preset::ALL.map(|chosen| {
-                MenuItem::new(chosen.id(), i18n::lookup(preset_key(chosen), None))
-                    .selected(preset == Some(chosen))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.playback.update(cx, |playback, cx| {
-                            playback.set_equalizer_curve(chosen.curve(), cx)
-                        })
-                    }))
-            }));
-        let (leading, trailing) = match advanced {
-            true => (None, Some(presets)),
-            false => (Some(presets), None),
-        };
+        let picker = sound_picker(SOUND, &self.popovers, &self.playback, &self.settings, cx)
+            .large()
+            .left()
+            .width(width)
+            .map(|picker| match wide {
+                true => picker.w(width),
+                false => picker.flex_1().min_w_0(),
+            });
         let action = |id: &'static str, icon: &'static str, tooltip: &'static str| {
-            Button::new(id).small().ghost().icon(icon).tooltip(tooltip)
+            Button::new(id).ghost().icon(icon).tooltip(tooltip)
         };
-
-        div()
+        let history = div()
             .flex()
-            .flex_wrap()
             .items_center()
-            .gap_2()
-            .children(profiles)
-            .when(advanced, |this| {
-                this.child(
+            .gap_1()
+            .child(
+                action("equalizer-undo", "icons/undo-2.svg", "equalizer-undo")
+                    .disabled(!undo)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.playback
+                            .update(cx, |playback, cx| playback.undo_equalizer(cx))
+                    })),
+            )
+            .child(
+                action("equalizer-redo", "icons/redo-2.svg", "equalizer-redo")
+                    .disabled(!redo)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.playback
+                            .update(cx, |playback, cx| playback.redo_equalizer(cx))
+                    })),
+            );
+        let manage = advanced.then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .ml_auto()
+                .child(
                     action(
                         "equalizer-new",
                         "icons/plus.svg",
@@ -407,31 +427,35 @@ impl EqualizerView {
                         .disabled(only)
                         .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
                 )
-            })
-            .children(leading)
+        });
+
+        InfoCard::new(t!("equalizer-sound"))
+            .child(blurb(
+                match on {
+                    true => t!("equalizer-sound-detail"),
+                    false => t!("equalizer-sound-off"),
+                },
+                None,
+                cx,
+            ))
             .child(
-                action("equalizer-undo", "icons/undo-2.svg", "equalizer-undo")
-                    .disabled(!undo)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.playback
-                            .update(cx, |playback, cx| playback.undo_equalizer(cx))
-                    })),
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x_2()
+                    .gap_y_3()
+                    .child(picker)
+                    .child(history)
+                    .children(manage),
             )
-            .child(
-                action("equalizer-redo", "icons/redo-2.svg", "equalizer-redo")
-                    .disabled(!redo)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.playback
-                            .update(cx, |playback, cx| playback.redo_equalizer(cx))
-                    })),
-            )
-            .when_some(trailing, |this, presets| {
-                this.child(div().flex_1()).child(presets)
-            })
+            .child(graph)
             .into_any_element()
     }
 
-    fn preamp_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The preamp's card: whether it follows the filters on its own or holds a level, and that
+    /// level.
+    fn preamp_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let curve = self.playback.read(cx).equalizer_curve();
         let auto = curve.preamp() == Preamp::Auto;
@@ -464,19 +488,16 @@ impl EqualizerView {
                 .into_any_element(),
             false => self.number(&self.preamp, t!("equalizer-decibels"), cx),
         };
-
-        div()
+        let controls = div()
             .flex()
-            .flex_wrap()
             .items_center()
             .gap_3()
-            .child(
-                div()
-                    .min_w(theme.metrics.cover * FIELD)
-                    .child(t!("equalizer-preamp")),
-            )
             .child(mode)
             .child(value)
+            .into_any_element();
+
+        InfoCard::new(t!("equalizer-preamp"))
+            .child(blurb(t!("equalizer-preamp-detail"), Some(controls), cx))
             .into_any_element()
     }
 
@@ -522,11 +543,11 @@ impl EqualizerView {
 
 impl Render for EqualizerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = *cx.theme();
-        let inset = theme.metrics.inset;
+        let inset = cx.theme().metrics.inset;
         let room = Chrome::room(window, cx);
         let wide = room.fits(Room::Wide);
         let advanced = self.settings.read(cx).equalizer_advanced();
+        let sound = self.sound(room, advanced, cx);
 
         let page = Scroller::new("equalizer-page", &self.scrollbar)
             .p(inset)
@@ -535,30 +556,36 @@ impl Render for EqualizerView {
                     .flex()
                     .flex_col()
                     .gap_6()
-                    .child(self.header(advanced, cx))
-                    .child(self.graph(room, cx))
-                    .when(advanced, |this| this.children(self.signal_path(cx)))
-                    .child(self.profiles(advanced, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .child(self.header(advanced, cx))
+                            .children(self.overload(cx)),
+                    )
+                    .child(sound)
                     .when(advanced, |this| {
-                        this.children(self.outputs(cx))
-                            .child(
-                                div()
-                                    .key_context(FORM_CONTEXT)
-                                    .on_action(cx.listener(|this, _: &Submit, window, cx| {
-                                        cx.stop_propagation();
-                                        this.submit(window, cx);
-                                    }))
-                                    .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
-                                        cx.stop_propagation();
-                                        this.revert(window, cx);
-                                    }))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_6()
-                                    .child(self.preamp_row(cx))
-                                    .child(self.filters(wide, cx)),
-                            )
-                            .child(self.transfer(cx))
+                        this.child(
+                            div()
+                                .key_context(FORM_CONTEXT)
+                                .on_action(cx.listener(|this, _: &Submit, window, cx| {
+                                    cx.stop_propagation();
+                                    this.submit(window, cx);
+                                }))
+                                .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                                    cx.stop_propagation();
+                                    this.revert(window, cx);
+                                }))
+                                .flex()
+                                .flex_col()
+                                .gap_6()
+                                .child(self.preamp_card(cx))
+                                .child(self.filters(wide, cx)),
+                        )
+                        .children(self.outputs(cx))
+                        .child(self.transfer(cx))
+                        .child(self.signal_path(cx))
                     }),
             );
 
@@ -567,4 +594,59 @@ impl Render for EqualizerView {
             .child(page)
             .children(self.rename_dialog(cx))
     }
+}
+
+/// The muted line that says what a card is for, with the card's action on its right. The
+/// action wraps under the line when the room is too narrow for both.
+fn blurb(description: SharedString, action: Option<AnyElement>, cx: &App) -> Div {
+    let theme = cx.theme();
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x_4()
+        .gap_y_3()
+        .child(
+            div()
+                .flex_1()
+                .min_w(theme.metrics.cover * BLURB)
+                .text_size(theme.text(Text::Small))
+                .text_color(theme.muted_foreground)
+                .child(description),
+        )
+        .when_some(action, |this, action| {
+            this.child(div().flex_none().child(action))
+        })
+}
+
+/// One setting inside a card, laid out as on the settings page: a title over a muted detail on
+/// the left and its control on the right.
+fn entry(title: SharedString, detail: SharedString, action: impl IntoElement, cx: &App) -> Div {
+    let theme = cx.theme();
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap_x_4()
+        .gap_y_2()
+        .py_3()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w(theme.metrics.cover * BLURB)
+                .gap_1()
+                .child(title)
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(theme.text(Text::Small))
+                        .text_color(theme.muted_foreground)
+                        .child(detail),
+                ),
+        )
+        .child(div().flex_none().child(action))
 }
