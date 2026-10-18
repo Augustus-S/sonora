@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::{
-    Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
+    Analyzer, Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
     PlaybackFactory, Player, Quality, Spectrum, Track, TrackSignal, Transcode,
 };
 use ui::{Pin, PinKind};
@@ -407,6 +407,9 @@ pub struct Playback {
     equalizer: music::Equalizer,
     /// Shared with every engine like the equalizer's reader, and read only while watched.
     meter: Meter,
+    /// Shared with every engine like the meter, so the equalizer screen can hear the music ahead
+    /// of the equalizer.
+    analyzer: Analyzer,
     /// What the engines reported about the sound of the last few tracks they opened, newest
     /// last, for the signal path.
     signals: VecDeque<(String, TrackSignal)>,
@@ -539,6 +542,7 @@ impl Playback {
             quality,
             equalizer,
             meter,
+            analyzer: Analyzer::default(),
             signals: VecDeque::new(),
             repeat,
             radio,
@@ -596,6 +600,11 @@ impl Playback {
     fn active_engine(&self) -> Option<&dyn Player> {
         let id = self.track.as_ref()?.id.as_deref()?;
         self.engine_for(id)
+    }
+
+    /// The spectrum of the music on its way into the equalizer, on every output.
+    pub fn analyzer(&self) -> &Analyzer {
+        &self.analyzer
     }
 
     /// The playing engine's spectrum, set to hear the track before or after the volume as the
@@ -2330,6 +2339,7 @@ impl Playback {
             quality: self.quality,
             equalizer: self.equalizer.clone(),
             meter: self.meter.clone(),
+            analyzer: self.analyzer.clone(),
         };
         let (engine, events) = playback.start(config);
 
@@ -2355,6 +2365,7 @@ impl Playback {
             quality: self.quality,
             equalizer: self.equalizer.clone(),
             meter: self.meter.clone(),
+            analyzer: self.analyzer.clone(),
         };
         let (engine, events) = playback.start(config);
 

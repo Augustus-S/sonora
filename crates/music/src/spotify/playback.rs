@@ -163,6 +163,7 @@ impl Engine {
             equalizer: config.equalizer.clone(),
             spectrum: spectrum.clone(),
             meter: config.meter.clone(),
+            analyzer: config.analyzer.clone(),
         };
         let (output_tx, output_rx) = unbounded_channel();
         let player = Player::new(player_config, session, Box::new(NoOpVolume), move || {

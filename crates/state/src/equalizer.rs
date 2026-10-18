@@ -210,11 +210,6 @@ impl Equalizer {
         self.writer.preamp_db()
     }
 
-    /// The spectrum of the music on its way into the equalizer, on every output.
-    pub fn heard(&self) -> music::Analyzer {
-        self.writer.heard().clone()
-    }
-
     /// How many decibels over full scale the clip warning says the output went, to a tenth,
     /// while something watches. It changes at most about once a second, and the equalizer
     /// notifies only when it does.

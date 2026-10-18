@@ -113,7 +113,7 @@ struct Band {
 }
 
 impl Analyzer {
-    /// A probe for one equalizer stage's input, heard from the next watch on.
+    /// A probe for one chain's input ahead of its equalizer, heard from the next watch on.
     pub(crate) fn probe(&self) -> Probe {
         let (feed, listener) = feed::channel(RING);
         let mut lanes = self.lanes();
@@ -179,6 +179,14 @@ impl Watch {
                 })
                 .collect()
         })
+    }
+}
+
+impl std::fmt::Debug for Analyzer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Analyzer")
+            .field("watchers", &self.0.watchers.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
     }
 }
 

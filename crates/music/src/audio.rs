@@ -7,7 +7,7 @@ use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 
 use crate::equalizer::{Engine, Equalizer};
-use crate::spectrum::{Probe, Spectrum, Tap};
+use crate::spectrum::{Analyzer, Probe, Spectrum, Tap};
 
 pub const RAMP: Duration = Duration::from_millis(25);
 /// The loudest sample an integer device takes: the largest `f32` below one, since one itself
@@ -128,10 +128,13 @@ impl Frames {
     }
 }
 
-/// What sits between the queue and the device: the equalizer, then the volume ramp, with the
-/// spectrum tap listening at the end. Every engine builds one and hands it to the output.
+/// What sits between the queue and the device: the analyzer listening ahead of the equalizer,
+/// then the equalizer and the volume ramp, with the spectrum tap and the meter listening at the
+/// end. Every engine builds one and hands it to the output.
 pub struct Chain {
     pub volume: Volume,
+    /// Hears the music ahead of the equalizer for the equalizer screen, shared like `meter`.
+    pub analyzer: Analyzer,
     pub equalizer: Equalizer,
     pub spectrum: Spectrum,
     pub meter: Meter,
@@ -177,7 +180,7 @@ impl<I: Source> Chained<I> {
         Self {
             input,
             frames: Frames::new(format),
-            probe: chain.equalizer.heard().probe(),
+            probe: chain.analyzer.probe(),
             equalizer: Engine::new(chain.equalizer.clone()),
             volume: chain.volume.clone(),
             tap: chain.spectrum.attach(),

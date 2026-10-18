@@ -362,6 +362,9 @@ pub struct PlaybackConfig {
     pub quality: Quality,
     /// Shared like `equalizer`: every output the engine opens reports its loudest sample here.
     pub meter: Meter,
+    /// Shared like `equalizer`: every output the engine opens lets it hear the music ahead of the
+    /// equalizer while it is watched.
+    pub analyzer: Analyzer,
 }
 
 /// How good a stream to ask a streaming service for. Each provider lists the levels it serves in

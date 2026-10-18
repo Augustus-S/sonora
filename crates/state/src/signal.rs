@@ -191,7 +191,7 @@ impl Signal {
     /// path for as long as the returned task is held. The spectrum and the meter start afresh,
     /// and everything stops with the task.
     pub fn watch(&mut self, cx: &mut Context<Self>) -> Task<()> {
-        let watch = Arc::new(self.equalizer.read(cx).heard().watch());
+        let watch = Arc::new(self.playback.read(cx).analyzer().watch());
         let held = Arc::new(());
         self.watched = Arc::downgrade(&held);
         self.levels = None;

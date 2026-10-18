@@ -524,7 +524,7 @@ mod tests {
     use super::*;
     use crate::audio::{Meter, Volume};
     use crate::equalizer::{Curve, EqualizerWriter};
-    use crate::spectrum::Spectrum;
+    use crate::spectrum::{Analyzer, Spectrum};
 
     /// A stereo track comes out the same whichever way the mono one before it stopped: on its
     /// own, or cut short by a skip with more of its packets still queued. A sample counted into
@@ -579,6 +579,7 @@ mod tests {
             equalizer: writer.reader(),
             spectrum: Spectrum::new(),
             meter: Meter::default(),
+            analyzer: Analyzer::default(),
         };
         (player, chain.apply(queue, format.clone(), false), format)
     }
