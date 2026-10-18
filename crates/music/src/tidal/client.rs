@@ -135,7 +135,8 @@ enum Scope {
     Session,
 }
 
-/// Tidal refusing a playlist write because the `ETag` it carried is no longer the playlist's.
+/// A playlist write that found Tidal behind the playlist, either refused for an `ETag` that is
+/// no longer the playlist's or unable to read the playlist back yet. The write is run again.
 #[derive(Debug)]
 struct Stale;
 
@@ -150,7 +151,7 @@ pub struct Playback {
 
 impl std::fmt::Display for Stale {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the playlist changed since its etag was read")
+        write!(f, "tidal has not caught up with the playlist")
     }
 }
 
@@ -421,7 +422,10 @@ impl TidalClient {
         Ok(())
     }
 
-    /// A playlist's current `ETag`, which every write to it has to carry.
+    /// A playlist's current `ETag`, which every write to it has to carry. Only a write reads
+    /// it. Right after a playlist is created Tidal can answer its read with a `404` for a
+    /// moment, so a failed read is reported as [`Stale`] for the write to be run again, and only
+    /// a refused sign-in is reported as it is.
     async fn etag(&self, playlist_id: &str) -> Result<String> {
         let response = self
             .call(
@@ -431,7 +435,11 @@ impl TidalClient {
                 Payload::Empty,
                 None,
             )
-            .await?;
+            .await
+            .map_err(|error| match signed_out(&error) {
+                true => error,
+                false => error.context(Stale),
+            })?;
         response
             .headers()
             .get(reqwest::header::ETAG)
@@ -441,10 +449,11 @@ impl TidalClient {
     }
 
     /// Runs one write to a playlist, again after a growing wait while it finds the playlist
-    /// stale. That happens when the playlist changed in between, on another device say, and
-    /// when a write follows the last within moments: for a little while after a change,
-    /// Tidal's reads all answer from before it. Each run reads the playlist afresh, and is told
-    /// whether it is the last, since a write may treat what it still finds then as settled.
+    /// [`Stale`]. That happens when the playlist changed in between, on another device say, when
+    /// it was created moments ago, and when a write follows the last within moments, since for a
+    /// little while after a change Tidal's reads all answer from before it. Each run reads the
+    /// playlist afresh, and is told whether it is the last, since a write may treat what it
+    /// still finds then as settled.
     async fn edit_playlist<F, Fut>(&self, write: F) -> Result<()>
     where
         F: Fn(bool) -> Fut,
@@ -454,8 +463,7 @@ impl TidalClient {
         loop {
             match write(attempt == EDIT_ATTEMPTS).await {
                 Err(error)
-                    if attempt < EDIT_ATTEMPTS
-                        && error.chain().any(|cause| cause.is::<Stale>()) =>
+                    if attempt < EDIT_ATTEMPTS && error.downcast_ref::<Stale>().is_some() =>
                 {
                     log::debug!(
                         "tidal: the playlist looked stale to a write, asking again: {error:#}"
@@ -1458,6 +1466,11 @@ fn path_of(url: &str) -> &str {
         .or_else(|| url.strip_prefix(V2))
         .unwrap_or(url);
     path.split('?').next().unwrap_or(path)
+}
+
+/// Whether a call failed because Tidal refused the sign-in, which no retry of a write mends.
+fn signed_out(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<SignInFailure>())
 }
 
 /// Where an artist's releases are listed.
