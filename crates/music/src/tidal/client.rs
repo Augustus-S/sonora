@@ -21,10 +21,10 @@ use crate::tidal::auth::{self, Credentials, Lane};
 use crate::tidal::manifest::Manifest;
 use crate::tidal::{lock, wire};
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Genre, GenreDetail,
-    GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Page, Pages, Playlist, PlaylistDetail,
-    Quality, SUGGESTIONS, SavedArtist, SignInFailure, SignInProblem, Track, UserProfile,
-    distinct_covers, escape,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistCatalogue, ArtistProfile, Encoding, Genre,
+    GenreDetail, GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Offer, Page, Pages,
+    Playlist, PlaylistDetail, Quality, SUGGESTIONS, SavedArtist, SignInFailure, SignInProblem,
+    Track, UserProfile, distinct_covers, escape,
 };
 
 const V1: &str = "https://api.tidal.com/v1";
@@ -41,7 +41,29 @@ const CLIENT_VERSION: &str = "2025.7.16";
 /// The levels Tidal serves Sonora, best first. Hi-res comes as DASH segments of FLAC, lossless
 /// as one FLAC file and high as AAC at 320 kbps. Low is left out because it is HE-AAC, whose
 /// SBR half the decoder cannot play, so it would sound duller than its bitrate.
-pub(crate) const QUALITIES: &[Quality] = &[Quality::HiRes, Quality::Lossless, Quality::High];
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::HiRes,
+        encoding: Encoding::Flac {
+            depth: 24,
+            rate: 192_000,
+        },
+        up_to: true,
+    },
+    Offer {
+        quality: Quality::Lossless,
+        encoding: Encoding::Flac {
+            depth: 16,
+            rate: 44_100,
+        },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Aac { kbps: 320 },
+        up_to: false,
+    },
+];
 /// What a track is asked for again at when the stream it was given is one Sonora cannot play,
 /// such as a protected or spatial one. CD quality comes as one plain FLAC file.
 const FALLBACK_QUALITY: &str = "LOSSLESS";

@@ -17,9 +17,9 @@ use tokio::time::Instant;
 use crate::deezer::{decrypt, wire};
 use crate::engine::Loudness;
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, ArtistRef, HomeFeed, MediaKind,
-    MusicApi, Playlist, PlaylistDetail, Quality, SUGGESTIONS, SavedArtist, Track, UserProfile,
-    distinct_covers, escape,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, ArtistRef, Encoding, HomeFeed,
+    MediaKind, MusicApi, Offer, Playlist, PlaylistDetail, Quality, SUGGESTIONS, SavedArtist, Track,
+    UserProfile, distinct_covers, escape,
 };
 
 const GATEWAY: &str = "https://www.deezer.com/ajax/gw-light.php";
@@ -30,7 +30,26 @@ const MEDIA: &str = "https://media.deezer.com/v1/get_url";
 const FORMATS: [&str; 3] = ["FLAC", "MP3_320", "MP3_128"];
 
 /// The levels Deezer serves, best first, one for each of `FORMATS`.
-pub(crate) const QUALITIES: &[Quality] = &[Quality::Lossless, Quality::High, Quality::Normal];
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::Lossless,
+        encoding: Encoding::Flac {
+            depth: 16,
+            rate: 44_100,
+        },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Mp3 { kbps: 320 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Normal,
+        encoding: Encoding::Mp3 { kbps: 128 },
+        up_to: false,
+    },
+];
 
 /// The one format user-uploaded files are served as.
 const UPLOAD_FORMAT: &str = "MP3_MISC";

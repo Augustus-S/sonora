@@ -14,12 +14,29 @@ use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
 use crate::{
-    PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player as MusicPlayer, Quality,
+    Encoding, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
+    Player as MusicPlayer, Quality,
 };
 
 const TRACK_PREFIX: &str = "spotify:track:";
 /// The levels Spotify serves, best first: Ogg Vorbis at 320, 160 and 96 kbps.
-pub(crate) const QUALITIES: &[Quality] = &[Quality::High, Quality::Normal, Quality::Low];
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Vorbis { kbps: 320 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Normal,
+        encoding: Encoding::Vorbis { kbps: 160 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Low,
+        encoding: Encoding::Vorbis { kbps: 96 },
+        up_to: false,
+    },
+];
 /// Position reports that can still come from before a seek or load: one already in the channel
 /// and one for a packet decoded before the player read the command.
 const STALE_POSITIONS: u8 = 2;

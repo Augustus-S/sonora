@@ -399,15 +399,44 @@ impl Quality {
         Self::ALL.into_iter().find(|quality| quality.id() == id)
     }
 
-    /// The level out of `offered` that stands in for this one: the best at or below it, or the
-    /// lowest offered when every one is above it. It is this level itself when `offered` is
+    /// The level out of `offers` that stands in for this one: the best at or below it, or the
+    /// lowest offered when every one is above it. It is this level itself when `offers` is
     /// empty.
-    pub fn within(self, offered: &[Self]) -> Self {
-        let below = offered.iter().copied().filter(|level| *level <= self).max();
-        below
-            .or_else(|| offered.iter().copied().min())
-            .unwrap_or(self)
+    pub fn within(self, offers: &[Offer]) -> Self {
+        let levels = || offers.iter().map(|offer| offer.quality);
+        let below = levels().filter(|level| *level <= self).max();
+        below.or_else(|| levels().min()).unwrap_or(self)
     }
+}
+
+/// One level a service serves and what it streams at that level, so the listener can choose by
+/// what they will hear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Offer {
+    pub quality: Quality,
+    pub encoding: Encoding,
+    /// The figures are the most a track comes at. Many come lower, such as an album that was
+    /// never mastered in hi-res, or a plan that does not reach that far.
+    pub up_to: bool,
+}
+
+/// What a stream is encoded as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding {
+    /// FLAC at this bit depth and sample rate in hertz.
+    Flac {
+        depth: u8,
+        rate: u32,
+    },
+    Aac {
+        kbps: u32,
+    },
+    Vorbis {
+        kbps: u32,
+    },
+    Mp3 {
+        kbps: u32,
+    },
 }
 
 /// What a server that converts audio on request is asked to send. Only Subsonic honours it, and
@@ -610,7 +639,7 @@ pub struct Capabilities {
     pub transcode: bool,
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.
-    pub qualities: &'static [Quality],
+    pub qualities: &'static [Offer],
 }
 
 impl Capabilities {

@@ -19,7 +19,7 @@ use crate::engine::{self, Fetch, Loudness};
 use crate::stream::{PREROLL, Plain, Reader, Source, Stream};
 use crate::trim::{self, Trim};
 use crate::youtube::segments::Segments;
-use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
+use crate::{Encoding, Offer, PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
 
 /// How long the stream metadata, and then the preroll, may each take before the attempt is
 /// given up. The stream host has no timeout of its own, so a connection it dropped halfway
@@ -32,7 +32,18 @@ const REFERENCE_LUFS: f32 = -14.0;
 /// The levels YouTube Music serves Sonora, best first. High is the best AAC stream there is, 256
 /// kbps for a Premium account and 128 kbps otherwise, and normal is the 128 kbps one. The 48 kbps
 /// stream is left out because it is HE-AAC, whose SBR half the decoder cannot play.
-pub(crate) const QUALITIES: &[Quality] = &[Quality::High, Quality::Normal];
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Aac { kbps: 256 },
+        up_to: true,
+    },
+    Offer {
+        quality: Quality::Normal,
+        encoding: Encoding::Aac { kbps: 128 },
+        up_to: false,
+    },
+];
 
 /// A track arriving, with what the stream host said about its length and loudness and what its
 /// header says about where the music is.
