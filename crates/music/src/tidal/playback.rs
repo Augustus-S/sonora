@@ -30,8 +30,12 @@ const PART_ATTEMPTS: u32 = 3;
 /// what a wrong answer can cost.
 const SEGMENT_CEILING: usize = 64 * 1024 * 1024;
 
+/// The most one Tidal track may spool. 24-bit FLAC at 192 kHz runs to about 40 MB a minute, so
+/// this holds an hour and a half of it. On a 32-bit target it is as much as a size can count.
+const SPOOL_CEILING: u64 = 4 * 1024 * 1024 * 1024;
+
 /// A decoder over a Tidal track, with what comes before the asked-for position trimmed off.
-type Opened = Trimmed<rodio::Decoder<Reader>>;
+type Opened = Trimmed<rodio::Decoder<Reader<Long>>>;
 
 /// Where the segments of a segmented track start, in the music and in the stream.
 struct Timeline {
@@ -67,10 +71,13 @@ struct Parts {
     timeline: Weak<Mutex<Timeline>>,
 }
 
+/// The body of a Tidal track, taken as it comes but allowed to run as long as hi-res does.
+struct Long;
+
 /// A track arriving, and how long and how loud Tidal says it is.
 #[derive(Clone)]
 pub struct Loaded {
-    stream: Stream,
+    stream: Stream<Long>,
     /// Where a segmented track's segments start. `None` for a track that is one file.
     timeline: Option<Arc<Mutex<Timeline>>>,
     duration: Option<Duration>,
@@ -159,6 +166,12 @@ impl stream::Source for Parts {
     }
 }
 
+impl stream::Body for Long {
+    fn ceiling(&self) -> usize {
+        usize::try_from(SPOOL_CEILING).unwrap_or(usize::MAX)
+    }
+}
+
 impl Factory {
     pub fn new(client: TidalClient) -> Self {
         Self { client }
@@ -204,7 +217,7 @@ impl Fetch for Tidal {
                     .await
                     .and_then(reqwest::Response::error_for_status)
                     .context("cannot stream the tidal track")?;
-                (Stream::new(response, stream::Plain), None)
+                (Stream::new(response, Long), None)
             }
             Manifest::Segments {
                 init,
@@ -225,7 +238,7 @@ impl Fetch for Tidal {
                     sent: 0,
                     timeline: Arc::downgrade(&timeline),
                 };
-                (Stream::pulling(parts, None, stream::Plain), Some(timeline))
+                (Stream::pulling(parts, None, Long), Some(timeline))
             }
         };
         Ok(Loaded {
