@@ -70,7 +70,7 @@ pub(super) fn direct_devices() -> Vec<DeviceOption> {
 /// The ALSA device saved as `pcm`, found on `host` when ALSA is the host. While a sound server
 /// plays, only a sound card's own device is looked for, on ALSA's host beside it.
 pub(super) fn device(host: &cpal::Host, pcm: &str) -> Option<cpal::Device> {
-    let id = cpal::DeviceId::new(cpal::HostId::Alsa, &numbered(pcm));
+    let id = cpal::DeviceId::new(cpal::HostId::Alsa, numbered(pcm));
     if is_alsa(host) {
         return host.device_by_id(&id);
     }
