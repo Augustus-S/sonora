@@ -115,18 +115,16 @@ impl Render for OutputPicker {
             },
         };
 
-        // the device is only named when the system's default is one of the listed devices, as
-        // it is not on ALSA
-        let follows = match devices.iter().find(|device| device.system) {
-            Some(device) => t!(
-                "settings-output-device-system-current",
-                device = device.name.clone()
-            ),
-            None => t!("settings-output-device-system-follows"),
-        };
+        // the default names the device it plays on, which only a sound server says
+        let current = devices
+            .iter()
+            .find(|device| device.system)
+            .map(|device| device.name.clone());
         let default = MenuItem::new("output-system", t!("settings-output-device-system"))
             .selected(chosen.is_none())
-            .detail(div().text_color(muted).text_size(small).child(follows))
+            .when_some(current, |item, current| {
+                item.detail(div().text_color(muted).text_size(small).child(current))
+            })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.outputs
                     .update(cx, |outputs, cx| outputs.choose(None, cx));
