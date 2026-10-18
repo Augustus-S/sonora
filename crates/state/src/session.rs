@@ -6,8 +6,8 @@ use anyhow::Error;
 use gpui::{Context, Entity, EventEmitter, Task};
 use i18n::t;
 use music::{
-    Capabilities, MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession, Shape,
-    SignIn, SignInFailure, SignInProblem, SignInPrompt, UserProfile,
+    Capabilities, Catalog, MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession,
+    Shape, SignIn, SignInFailure, SignInProblem, SignInPrompt, UserProfile,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -216,11 +216,11 @@ impl Session {
         }
     }
 
-    /// What a shelf's library is made of. The local shelf is always a catalog.
+    /// What a shelf's library is made of. The local shelf is always a fixed catalog.
     pub fn shape_of(&self, shelf: Shelf) -> Shape {
         match shelf {
             Shelf::Streaming => self.shape,
-            Shelf::Local => Shape::Catalog,
+            Shelf::Local => Shape::Catalog(Catalog::Fixed),
         }
     }
 

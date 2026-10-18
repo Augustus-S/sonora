@@ -1803,7 +1803,7 @@ impl Aside {
         let name = match origin.whence {
             Whence::Saved => match Sonora::global(cx).library.read(cx).shape(Shelf::Streaming) {
                 Shape::Saved => t!("library-liked-songs"),
-                Shape::Catalog => t!("nav-songs"),
+                Shape::Catalog(_) => t!("nav-songs"),
             },
             Whence::Local => t!("nav-local"),
             Whence::Radio => t!("queue-from-radio", name = origin.name.as_deref()?),

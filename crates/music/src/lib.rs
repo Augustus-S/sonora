@@ -219,7 +219,7 @@ pub trait MusicApi: Send + Sync {
     async fn add_playlist_to_library(&self, playlist_id: &str) -> Result<()>;
 
     /// Puts a track or an album into the listener's library, or takes it out, on a provider
-    /// whose library is apart from its favorites. Only a `Capabilities::library` provider
+    /// whose library is apart from its favorites. Only a `Catalog::Editable` provider
     /// answers. An artist is never added: a library artist is one whose music is there.
     async fn set_in_library(&self, _kind: MediaKind, _id: &str, _present: bool) -> Result<()> {
         anyhow::bail!("this provider has no library apart from its favorites")
@@ -457,9 +457,32 @@ pub trait PlaybackFactory: Send + Sync {
 pub enum Shape {
     /// The library is what the user starred, read through the `saved_*` methods.
     Saved,
-    /// The library is everything the provider has, read through the `all_*` methods, with the
-    /// `saved_*` set drawn on top as hearts and a filter.
-    Catalog,
+    /// The library is a catalog read through the `all_*` methods, with the `saved_*` set drawn
+    /// on top as hearts and a filter.
+    Catalog(Catalog),
+}
+
+impl Shape {
+    pub fn is_catalog(self) -> bool {
+        matches!(self, Self::Catalog(_))
+    }
+
+    /// Whether the listener can put things into the library and take them out, apart from
+    /// favoriting them.
+    pub fn editable(self) -> bool {
+        self == Self::Catalog(Catalog::Editable)
+    }
+}
+
+/// Whether the listener can change what a catalog holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Catalog {
+    /// Everything the provider has, which changes only with the files behind it, as with local
+    /// files and a self-hosted server.
+    Fixed,
+    /// A set the listener picked out of a bigger catalog, which tracks and albums are put into
+    /// and taken out of through `set_in_library`, as on Apple Music.
+    Editable,
 }
 
 /// What a provider can do beyond listing and playing, so a control it has no answer for is
@@ -477,24 +500,18 @@ pub struct Capabilities {
     pub radio: bool,
     /// Tracks carry a play count worth a column of its own.
     pub playcounts: bool,
-    /// The listener has a library apart from their favorites, which a track or an album can be
-    /// put into and taken out of through `set_in_library`. Off where the library is the
-    /// favorites, as on Spotify, and where it is fixed, as on a self-hosted server.
-    pub library: bool,
     /// The provider keeps sidebar pins of its own, listed by `pin_targets` and changed
     /// through `set_pinned`. Off, a pin lives in Sonora's settings alone.
     pub pins: bool,
 }
 
 impl Capabilities {
-    /// What a full streaming service offers. A library apart from favorites is not among
-    /// them: on most services the two are one thing. We love Apple Music. Pins of the
-    /// provider's own are not either, since only Spotify and Apple Music keep any.
+    /// What a full streaming service offers. Pins of the provider's own are not among them,
+    /// since only Spotify and Apple Music keep any.
     pub const ALL: Self = Self {
         follow_artists: true,
         radio: true,
         playcounts: true,
-        library: false,
         pins: false,
     };
 
@@ -503,7 +520,6 @@ impl Capabilities {
         follow_artists: false,
         radio: false,
         playcounts: false,
-        library: false,
         pins: false,
     };
 }
