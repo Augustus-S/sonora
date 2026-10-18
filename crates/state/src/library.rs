@@ -952,6 +952,8 @@ pub enum LibraryEvent {
         track: String,
     },
     TracksHidden(Vec<String>),
+    /// A playlist a failed change may have altered in part, so a page showing it loads it again.
+    PlaylistChanged(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1784,9 +1786,7 @@ impl Library {
             move |client| async move {
                 let tracks = addition.resolve(&client).await?;
                 let id = client.create_playlist(&name).await?;
-                for track in &tracks {
-                    client.add_track_to_playlist(&id, track).await?;
-                }
+                client.add_tracks_to_playlist(&id, &tracks).await?;
                 let fetched = client.playlist(&id).await.map(|detail| detail.playlist);
                 Ok(fetched.unwrap_or_else(|error| {
                     log::warn!("library: a new playlist is not readable yet: {error:#}");
@@ -1891,9 +1891,9 @@ impl Library {
             move |client| async move {
                 let mut track_ids = addition.resolve(&client).await?;
                 track_ids.retain(|id| !known.contains(id));
-                for track_id in &track_ids {
-                    client.add_track_to_playlist(&playlist_id, track_id).await?;
-                }
+                client
+                    .add_tracks_to_playlist(&playlist_id, &track_ids)
+                    .await?;
                 Ok(track_ids)
             },
             move |this, track_ids, cx| {
@@ -2427,9 +2427,8 @@ impl Library {
         let io = self.io.clone();
         self.playlist_task = Some(cx.spawn(async move |this, cx| {
             let result = join(io.spawn(async move { mutation(client).await })).await;
-            if result.is_ok()
-                && let Some(catalog) = catalog
-            {
+            // A change that failed part way may still have landed in part.
+            if let Some(catalog) = catalog {
                 for id in &invalidated {
                     catalog.invalidate_playlist(id).await;
                 }
@@ -2450,6 +2449,9 @@ impl Library {
                     Err(error) => {
                         log::warn!("library: cannot {action}: {error:#}");
                         Toasts::show(Outcome::Failed, "toast-playlist-failed", cx);
+                        for id in invalidated {
+                            cx.emit(LibraryEvent::PlaylistChanged(id));
+                        }
                     }
                 }
                 cx.notify();

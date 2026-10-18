@@ -109,7 +109,7 @@ impl Detail {
                 this.clear();
                 cx.notify();
             }
-            LibraryEvent::TrackAdded { playlist }
+            LibraryEvent::TrackAdded { playlist } | LibraryEvent::PlaylistChanged(playlist)
                 if this.id.as_deref() == Some(playlist.as_str()) =>
             {
                 this.load(Collection::Playlist, playlist.clone(), cx);
