@@ -260,8 +260,9 @@ const DEFAULT_STARTUP: &str = "home";
 pub const SYSTEM_FONT: &str = "auto";
 /// Every lyrics source Sonora knows by the name its provider reports, in the order a fresh
 /// install prefers them.
-pub const LYRICS_SOURCES: [&str; 8] = [
+pub const LYRICS_SOURCES: [&str; 9] = [
     LOCAL,
+    "Subsonic",
     "Spotify",
     "YouTube Music",
     "Apple Music",
@@ -320,6 +321,9 @@ struct Values {
     /// Set once Local has been added to a list saved before it existed, so a user who turns it
     /// off afterwards is not given it back.
     local_lyrics_offered: bool,
+    /// Set once Subsonic has been added to a list saved before it existed, so a user who turns it
+    /// off afterwards is not given it back.
+    subsonic_lyrics_offered: bool,
     lyrics_providers: Vec<String>,
     /// Every known lyrics source, the preferred one first. Lyrics of the same kind from two
     /// sources go to the one listed higher.
@@ -482,9 +486,10 @@ impl Default for Values {
             subsonic_format: None,
             subsonic_bitrate: None,
             local_lyrics_offered: false,
+            subsonic_lyrics_offered: false,
             lyrics_provider_priority: lyrics_priority(&[]),
             // Kugou and NetEase, the last two, start switched off.
-            lyrics_providers: LYRICS_SOURCES[..6]
+            lyrics_providers: LYRICS_SOURCES[..7]
                 .iter()
                 .map(|name| name.to_string())
                 .collect(),
@@ -728,6 +733,7 @@ impl AppSettings {
             }
         };
         let parsed = bytes.map(|bytes| (serde_json::from_slice::<Values>(json(&bytes)), bytes));
+        let parsed = parsed.map(|(values, bytes)| (values.map(offer_subsonic_lyrics), bytes));
         let (values, writable, disk, broken) = match parsed {
             Some((Ok(values), bytes)) => (values, writable, Some(bytes), None),
             Some((Err(error), _)) => {
@@ -2181,7 +2187,7 @@ impl AppSettings {
             return SettingsReload::Unchanged;
         }
         let values = match serde_json::from_slice::<Values>(json(&bytes)) {
-            Ok(values) => values,
+            Ok(values) => offer_subsonic_lyrics(values),
             Err(error) => {
                 log::warn!("settings: cannot parse {}: {error}", self.path.display());
                 let newly_broken = self.broken != Some(error.line());
@@ -2376,6 +2382,21 @@ fn overrides(current: &[u8], ours: &[u8]) -> bool {
 /// front of it on Windows, which serde_json rejects as an unexpected character.
 fn json(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
+}
+
+/// A saved provider list replaces the default one, so Subsonic reaches an existing user once.
+fn offer_subsonic_lyrics(mut values: Values) -> Values {
+    if !values.subsonic_lyrics_offered {
+        values.subsonic_lyrics_offered = true;
+        if !values
+            .lyrics_providers
+            .iter()
+            .any(|name| name == "Subsonic")
+        {
+            values.lyrics_providers.push("Subsonic".to_owned());
+        }
+    }
+    values
 }
 
 /// Parses one theme file and assigns the identifier derived from its path.
@@ -2688,6 +2709,7 @@ mod tests {
             values.lyrics_provider_priority,
             [
                 LOCAL,
+                "Subsonic",
                 "Spotify",
                 "YouTube Music",
                 "Apple Music",
@@ -2717,7 +2739,7 @@ mod tests {
     fn lyrics_priority_ignores_unknown_and_duplicate_sources_and_appends_missing_ones() {
         let order = lyrics_priority(&["LrcLib".into(), "unknown".into(), "LrcLib".into()]);
         assert_eq!(order[0], "LrcLib");
-        assert_eq!(order.len(), 8);
+        assert_eq!(order.len(), 9);
         assert!(!order.iter().any(|name| name == "unknown"));
         assert_eq!(order.iter().filter(|name| *name == "LrcLib").count(), 1);
     }
@@ -2731,9 +2753,9 @@ mod tests {
             &mut order, &enabled, "NetEase", false
         ));
         assert!(!move_lyrics_provider(&mut order, &enabled, "unknown", true));
-        assert!(move_lyrics_provider(&mut order, &enabled, "Spotify", true));
-        assert_eq!(&order[..2], &["Spotify", LOCAL]);
-        assert!(move_lyrics_provider(&mut order, &enabled, "Spotify", false));
+        assert!(move_lyrics_provider(&mut order, &enabled, "Subsonic", true));
+        assert_eq!(&order[..2], &["Subsonic", LOCAL]);
+        assert!(move_lyrics_provider(&mut order, &enabled, "Subsonic", false));
         assert_eq!(order, lyrics_priority(&[]));
     }
 

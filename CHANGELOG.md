@@ -38,6 +38,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bigger buffer stops crackles on a busy system, and a smaller one makes pause react faster.
 - Tidal as a provider: sign in with a code on link.tidal.com, then play your favorites,
   playlists, mixes and search in up to 24-bit FLAC, whatever your plan includes.
+- Navidrome and other Subsonic servers are a lyrics provider, so the lyrics a server holds, such
+  as ones embedded in the files, show for its tracks.
 
 ### Changed
 
