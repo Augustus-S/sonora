@@ -629,7 +629,6 @@ settings-output-device-detail = Audio device where Sonora plays
 settings-output-device-system = System default
 settings-output-device-missing = Saved device (not connected)
 settings-output-device-direct = Direct to hardware
-settings-output-device-direct-detail = Plays straight to the sound card, past the sound server, for bit-perfect output. It opens only while nothing else plays on the card, and keeps other apps off it
 settings-sample-rate = Sample rate
 settings-sample-rate-detail = What the device runs at. Sonora converts every track to it
 settings-sample-rate-value = { $khz } kHz

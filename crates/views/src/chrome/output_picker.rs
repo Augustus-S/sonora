@@ -12,8 +12,8 @@ use ui::{Menu, MenuItem, Picker, Popovers, Scrollbar, Spinner, SubmenuState, Tex
 const OUTPUT_DEVICES: &str = "output-devices";
 /// How tall the device menu grows before it scrolls.
 const MENU_HEIGHT: Pixels = px(360.);
-/// How wide the device menus are, so a device's detail fits on one line.
-const MENU_WIDTH: Pixels = px(460.);
+/// How wide the device menus are. A longer name is cut short rather than widening the menu.
+const MENU_WIDTH: Pixels = px(320.);
 /// Past this many devices, a card's devices are folded into a submenu, since a card with many
 /// outputs otherwise floods the list.
 const GROUP_AFTER: usize = 10;
@@ -175,14 +175,6 @@ impl Render for OutputPicker {
                         }));
                     let row = MenuItem::new(("output-device-group", place), title)
                         .selected(holds_chosen)
-                        .when(direct, |row| {
-                            row.detail(
-                                div()
-                                    .text_color(muted)
-                                    .text_size(small)
-                                    .child(t!("settings-output-device-direct-detail")),
-                            )
-                        })
                         .submenu(menu, state.state.clone());
                     match direct {
                         true => vec![
