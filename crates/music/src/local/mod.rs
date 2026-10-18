@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use storage::{Cache, Database};
 
 use crate::{
-    Capabilities, InputSource, MusicApi, MusicProvider, PlaybackFactory, PromptSink,
+    Capabilities, Catalog, InputSource, MusicApi, MusicProvider, PlaybackFactory, PromptSink,
     ProviderSession, Shape, SignIn, Track, UserProfile,
 };
 
@@ -59,7 +59,7 @@ impl LocalProvider {
             },
             api,
             playback,
-            shape: Shape::Catalog,
+            shape: Shape::Catalog(Catalog::Fixed),
             authenticated: false,
             // Files on disk: favorites are kept here, but nothing suggests a station and
             // nothing counts a play.
@@ -67,7 +67,6 @@ impl LocalProvider {
                 follow_artists: true,
                 radio: false,
                 playcounts: false,
-                library: false,
                 pins: false,
             },
         })

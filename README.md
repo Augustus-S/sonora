@@ -15,7 +15,7 @@
 </p>
 
 [![Build](https://img.shields.io/github/actions/workflow/status/sonorahq/sonora/release.yml?style=flat-square&label=build)](https://github.com/sonorahq/sonora/actions/workflows/release.yml)
-[![License](https://img.shields.io/github/license/sonorahq/sonora?style=flat-square&label=license)](./COPYING)
+[![License](https://img.shields.io/github/license/sonorahq/sonora?style=flat-square&label=license&cacheSeconds=3600)](./COPYING)
 ![Installs](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fsonora-stats.nolight.dev%2Fcount&query=%24.count&label=Installs&color=blue&style=flat-square)
 \
 [![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/a8N8Tx23rV)
@@ -131,17 +131,21 @@ for you.
 
 ### Nix
 
-The flake packages the latest tagged release binary or builds from source if unavailable for your platform.
-
 ```nix
 inputs.sonora.url = "github:sonorahq/sonora";
 ```
 
 ```text
-inputs.sonora.packages.${system}.default
-inputs.sonora.packages.${system}.sonora (build from source)
-inputs.sonora.packages.${system}.sonora-bin (prebuilt, if available)
+inputs.sonora.packages.${system}.default     (prebuilt where available, else from source)
+inputs.sonora.packages.${system}.sonora      (same as default)
+inputs.sonora.packages.${system}.sonora-bin  (prebuilt, x86_64-linux, aarch64-linux, aarch64-darwin)
+inputs.sonora.packages.${system}.sonora-src  (always built from source)
 ```
+
+The prebuilt package downloads the latest tagged release. `sonora-src` compiles whatever
+revision of the flake you point it at, so pin the input to a tag such as
+`github:sonorahq/sonora/v0.43.0` to build a release. Building from source on macOS needs Xcode
+added to the Nix store, because the shaders compile with Apple's Metal compiler.
 
 You can set configuration options via the included Home Manager module under `programs.sonora`:
 
