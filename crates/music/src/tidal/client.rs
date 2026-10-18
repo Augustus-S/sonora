@@ -427,6 +427,12 @@ impl TidalClient {
     /// moment, so a failed read is reported as [`Stale`] for the write to be run again, and only
     /// a refused sign-in is reported as it is.
     async fn etag(&self, playlist_id: &str) -> Result<String> {
+        Ok(self.etag_and_playlist(playlist_id).await?.0)
+    }
+
+    /// The playlist as [`Self::etag`] reads it, with the playlist object Tidal answered beside
+    /// the `ETag`.
+    async fn etag_and_playlist(&self, playlist_id: &str) -> Result<(String, Value)> {
         let response = self
             .call(
                 Method::GET,
@@ -440,12 +446,17 @@ impl TidalClient {
                 true => error,
                 false => error.context(Stale),
             })?;
-        response
+        let etag = response
             .headers()
             .get(reqwest::header::ETAG)
             .and_then(|etag| etag.to_str().ok())
             .map(str::to_owned)
-            .context("tidal answered the playlist with no etag")
+            .context("tidal answered the playlist with no etag")?;
+        let playlist = response
+            .json()
+            .await
+            .context("cannot read the tidal playlist")?;
+        Ok((etag, playlist))
     }
 
     /// Runs one write to a playlist, again after a growing wait while it finds the playlist
@@ -1083,11 +1094,18 @@ impl MusicApi for TidalClient {
             .context("the created playlist came back with no id")
     }
 
+    /// Sends the playlist's description back beside the new title, since Tidal may clear a
+    /// description an edit leaves out.
     async fn rename_playlist(&self, playlist_id: &str, name: &str) -> Result<()> {
         let path = format!("/playlists/{}", escape::component(playlist_id));
         self.edit_playlist(|_| async {
-            let etag = self.etag(playlist_id).await?;
-            self.send(Method::POST, &path, Some(&[("title", name)]), Some(&etag))
+            let (etag, playlist) = self.etag_and_playlist(playlist_id).await?;
+            let description = playlist
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let form = [("title", name), ("description", description)];
+            self.send(Method::POST, &path, Some(&form), Some(&etag))
                 .await
         })
         .await
