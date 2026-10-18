@@ -11,7 +11,7 @@ use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
-use crate::route::{Codec, Encoding, Normalisation, Route, TrackSignal};
+use crate::route::{self, Normalisation, Route, TrackSignal};
 use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
@@ -232,8 +232,8 @@ impl Engine {
     /// Notes what every Spotify track is: Ogg Vorbis, decoded by librespot to 44.1 kHz stereo
     /// and normalised there.
     fn learn(&self, track_id: &str) {
-        let encoding = Encoding {
-            codec: Codec::Vorbis,
+        let encoding = route::Encoding {
+            codec: route::Codec::Vorbis,
             bits: None,
             kbps: None,
         };

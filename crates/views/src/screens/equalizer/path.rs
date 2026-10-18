@@ -1,8 +1,9 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, div, svg};
 use i18n::t;
+use music::Normalisation;
 use music::output::{DeviceInfo, Format, Sample};
-use music::{Codec, Encoding, Normalisation};
+use music::route::{Codec, Encoding};
 use state::{Change, SignalPath};
 use ui::{ActiveTheme as _, Button, Fact, InfoCard, Text};
 

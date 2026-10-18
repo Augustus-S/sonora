@@ -22,7 +22,7 @@ pub mod netease;
 pub mod output;
 pub mod potoken;
 pub mod progress;
-mod route;
+pub mod route;
 pub mod scrobble;
 mod sink;
 mod spectrum;
@@ -56,7 +56,7 @@ pub use models::{
     UserDetail, UserProfile, Voice, WritingSystem,
 };
 pub use output::{Server as SoundServer, missing_bridge};
-pub use route::{Codec, Encoding, Normalisation, Route, TrackSignal};
+pub use route::{Normalisation, Route, TrackSignal};
 pub use spectrum::{Analyzer, Level, Spectrum, Watch};
 
 pub const LOCAL_TRACK_PREFIX: &str = "local:";

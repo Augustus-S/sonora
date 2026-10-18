@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{App, Context, Entity, FocusHandle, Global, Render, SharedString, Window, div};
 use i18n::t;
-use music::{Album, SavedArtist, Shape, Track};
+use music::{Album, SavedArtist, Track};
 use state::{Detail, History, Io, Outcome, Shelf, Sonora, Toasts, equalizer_profile_label};
 use ui::{Button, Dismiss, FORM_CONTEXT, Modal, Submit};
 
