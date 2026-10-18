@@ -331,13 +331,17 @@ impl Equalizer {
         self.follow_settings(cx);
     }
 
-    /// Saves the playing curve as a new profile named after `name` and plays it. `AppSettings`
-    /// makes the name unique.
+    /// Saves the playing curve as a new profile named after `name` and plays it. When the curve
+    /// was in the profile with no name, that profile goes back to flat. `AppSettings` makes the
+    /// name unique.
     pub fn save_as(&mut self, name: &str, cx: &mut Context<Self>) {
         self.store_glided(cx);
         let curve = self.writer.curve().clone();
         self.settings.update(cx, |settings, cx| {
-            settings.add_equalizer_profile(name, &curve, cx)
+            if settings.equalizer_scratch() == Some(settings.equalizer_profile()) {
+                settings.set_equalizer_curve(&Preset::Flat.curve(), cx);
+            }
+            settings.add_equalizer_profile(name, &curve, cx);
         });
         self.follow_settings(cx);
     }
