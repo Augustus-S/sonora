@@ -223,7 +223,7 @@ impl EqualizerView {
                     }))
             }));
         let gain = match filter.kind().has_gain() {
-            true => measured(row.gain.clone(), t!("equalizer-decibels"), cx),
+            true => number(row.gain.clone(), t!("equalizer-decibels"), wide, cx),
             false => div()
                 .text_color(theme.muted_foreground)
                 .child(t!("equalizer-no-gain"))
@@ -242,40 +242,45 @@ impl EqualizerView {
                 this.graph
                     .update(cx, |graph, cx| graph.remove_filter(index, cx))
             }));
-        let values = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_3()
-            .child(cell(cover * NUMBER).child(measured(
-                row.frequency.clone(),
-                t!("equalizer-hertz"),
-                cx,
-            )))
-            .child(cell(cover * NUMBER).child(gain))
-            .child(cell(cover * NUMBER).child(measured(row.width.clone(), width_unit, cx)));
-        let controls = div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(cell(cover * TOGGLE).child(enabled))
-            .child(cell(cover * KIND).child(kind));
+        let frequency = number(row.frequency.clone(), t!("equalizer-hertz"), wide, cx);
+        let width = number(row.width.clone(), width_unit, wide, cx);
 
         match wide {
             true => div()
                 .flex()
                 .items_center()
                 .gap_3()
-                .child(controls)
-                .child(values)
+                .child(cell(cover * TOGGLE).child(enabled))
+                .child(cell(cover * KIND).child(kind))
+                .child(cell(cover * NUMBER).child(frequency))
+                .child(cell(cover * NUMBER).child(gain))
+                .child(cell(cover * NUMBER).child(width))
                 .child(div().flex_1())
                 .child(remove),
+            // Two lines of one width: the switch, the kind and the remove button over the three
+            // values, which share what the window leaves them.
             false => div()
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(controls.child(div().flex_1()).child(remove))
-                .child(values),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().flex_none().child(enabled))
+                        .child(div().flex_1().min_w_0().child(kind))
+                        .child(remove),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(div().flex_1().min_w_0().child(frequency))
+                        .child(div().flex_1().min_w_0().child(gain))
+                        .child(div().flex_1().min_w_0().child(width)),
+                ),
         }
         .py_1()
         .px_2()
@@ -350,7 +355,10 @@ impl EqualizerView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .map(|list| match wide {
+                        true => list.gap_1(),
+                        false => list.gap_4(),
+                    })
                     .mx_neg_2()
                     .when(wide, |this| this.child(self.columns(cx)))
                     .children(rows),
@@ -483,6 +491,28 @@ pub(super) fn measured(value: impl IntoElement, unit: SharedString, cx: &App) ->
                 .child(unit),
         )
         .into_any_element()
+}
+
+/// A number field with `unit` after it: field-wide where the table lines its columns up, and
+/// filling what it is given where a narrow window stacks a filter's values on a line of their own.
+fn number(value: impl IntoElement, unit: SharedString, wide: bool, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    match wide {
+        true => measured(value, unit, cx),
+        false => div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(div().flex_1().min_w_0().child(value))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(theme.text(Text::Small))
+                    .text_color(theme.muted_foreground)
+                    .child(unit),
+            )
+            .into_any_element(),
+    }
 }
 
 /// A fixed-width column of the filter table.
