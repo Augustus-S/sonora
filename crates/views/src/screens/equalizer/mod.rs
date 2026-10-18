@@ -6,7 +6,7 @@ use gpui::{
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
 use music::output::OutputId;
-use state::{AppSettings, Equalizer, Outputs, Signal, SignalPath, Sonora, equalizer_profile_label};
+use state::{AppSettings, Equalizer, Outputs, Signal, Sonora, equalizer_profile_label};
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
     Picker, Popovers, Room, Scrollbar, Scroller, Submit, Switch, TabBar, Text, heading,
@@ -23,7 +23,6 @@ use rows::{Row, figure};
 mod graph;
 mod meter;
 mod outputs;
-mod path;
 mod rows;
 mod transfer;
 
@@ -41,8 +40,8 @@ const SOUND_WIDTH: f32 = 2.2;
 const BLURB: f32 = 1.6;
 
 /// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
-/// and advanced mode adds a card each for the preamp, the filters, the per-output profiles,
-/// Equalizer APO text in and out, and the signal path.
+/// and advanced mode adds a card each for the preamp, the filters, the per-output profiles
+/// and Equalizer APO text in and out.
 pub(crate) struct EqualizerView {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -64,19 +63,17 @@ pub(crate) struct EqualizerView {
     graph: Entity<EqualizerGraph>,
     /// The level meter and clip warning under the graph, which redraw on their own.
     meter: Entity<OutputMeter>,
-    /// What the screen last drew from the equalizer, the output and the signal path, so a notify
+    /// What the screen last drew from the equalizer and the output, so a notify
     /// from them that changed none of it draws nothing.
     drawn: Option<Drawn>,
     /// The spectrum's, the output meter's and the signal path's reads, held while the screen is
     /// the one shown and dropped with it.
     watch: Option<Task<()>>,
-    /// Whether the signal path is open, which only advanced mode allows.
-    path: bool,
     /// The file being read in or written out.
     file: Option<Task<()>>,
 }
 
-/// What the screen shows from the equalizer, the output and the signal path. Position ticks and
+/// What the screen shows from the equalizer and the output. Position ticks and
 /// meter reads that leave all of it as it was do not redraw the screen, and the level meter and
 /// clip warning redraw on their own.
 #[derive(PartialEq)]
@@ -87,7 +84,6 @@ struct Drawn {
     preamp: f64,
     output: Option<OutputId>,
     port: Option<String>,
-    path: Option<SignalPath>,
 }
 
 impl EqualizerView {
@@ -118,19 +114,7 @@ impl EqualizerView {
             this.redraw(cx);
         })
         .detach();
-        cx.observe(&settings, |this, settings, cx| {
-            if !settings.read(cx).equalizer_advanced() {
-                this.path = false;
-            }
-            cx.notify();
-        })
-        .detach();
-        cx.observe(&signal, |this, _, cx| {
-            if this.path {
-                this.redraw(cx);
-            }
-        })
-        .detach();
+        cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
         cx.subscribe(&graph, |_, _, _: &Selected, cx| cx.notify())
             .detach();
@@ -155,7 +139,6 @@ impl EqualizerView {
             meter,
             drawn: None,
             watch: None,
-            path: false,
             file: None,
         };
         let fields: Vec<_> = view
@@ -171,7 +154,7 @@ impl EqualizerView {
         view
     }
 
-    /// What the screen shows from the equalizer, the output and the open signal path right now.
+    /// What the screen shows from the equalizer and the output right now.
     fn drawing(&self, cx: &App) -> Drawn {
         let equalizer = self.equalizer.read(cx);
         let outputs = self.outputs.read(cx);
@@ -182,15 +165,11 @@ impl EqualizerView {
             preamp: equalizer.preamp_db(),
             output: outputs.binding_key(),
             port: outputs.sink().and_then(|sink| sink.port.clone()),
-            path: self
-                .path
-                .then(|| self.signal.read(cx).path().cloned())
-                .flatten(),
         }
     }
 
-    /// Redraws the screen when anything it shows from the equalizer, the output or the signal
-    /// path changed since it last drew.
+    /// Redraws the screen when anything it shows from the equalizer or the output changed since
+    /// it last drew.
     fn redraw(&mut self, cx: &mut Context<Self>) {
         let drawn = self.drawing(cx);
         if self.drawn.as_ref() != Some(&drawn) {
@@ -204,9 +183,6 @@ impl EqualizerView {
     pub(crate) fn set_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         if visible != self.watch.is_some() {
             self.watch = visible.then(|| self.signal.update(cx, |signal, cx| signal.watch(cx)));
-        }
-        if !visible {
-            self.path = false;
         }
     }
 
@@ -581,13 +557,10 @@ impl Render for EqualizerView {
                                 this.outputs(cx).unwrap_or_else(|| Empty.into_any_element())
                             }))
                         })
-                        .child(card(&view, "equalizer-transfer", |this, _, cx| {
-                            this.transfer(cx)
-                        }))
                         .child(card(
                             &view,
-                            "equalizer-path",
-                            |this, _, cx| this.signal_path(cx),
+                            "equalizer-transfer",
+                            |this, _, cx| this.transfer(cx),
                         ))
                     }),
             );
