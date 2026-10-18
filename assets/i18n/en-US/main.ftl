@@ -970,6 +970,7 @@ toast-settings-broken = Fix line { $name } of settings.json to save changes
 toast-tray-unavailable = There is no system tray to put the icon in
 toast-undo = Undo
 toast-link-copied = Link copied
+toast-code-copied = Code copied
 menu-copy-link-none = This has no link to share
 menu-copy-link-local = Local artists and playlists have no link
 toast-settings-save-failed = Settings could not be saved

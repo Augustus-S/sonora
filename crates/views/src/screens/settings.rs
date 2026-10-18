@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::chrome::OutputPicker;
 use crate::shared::confirm::{Confirm, Kind};
+use crate::shared::device_code::device_code;
 use crate::shared::effects;
 use crate::shared::local;
 use crate::shared::popups::{AccountPicker, CookiePrompt, SearchPopup, matches_query};
@@ -4266,6 +4267,22 @@ impl SettingsView {
             .update(cx, |session, cx| session.submit_input(text, cx));
     }
 
+    /// The code a device sign-in is waiting on. Closing the dialog cancels the sign-in.
+    fn code_prompt(&self, code: String, url: String, cx: &mut Context<Self>) -> impl IntoElement {
+        Modal::new("settings-code-prompt", t!("login-device-code", url = &url))
+            .w(px(420.))
+            .close_button()
+            .detail(t!("login-authorizing"))
+            .child(device_code(code, cx))
+            .action(
+                Button::new("settings-cancel-code")
+                    .ghost()
+                    .label(t!("common-cancel"))
+                    .on_click(cx.listener(|this, _, _, cx| this.abandon(cx))),
+            )
+            .on_dismiss(cx.listener(|this, _, _, cx| this.abandon(cx)))
+    }
+
     fn secret_prompt(
         &self,
         slug: &'static str,
@@ -4864,6 +4881,12 @@ impl Render for SettingsView {
             }
             _ => None,
         };
+        let code = match self.session.read(cx).state() {
+            SessionState::Authorizing(Some(SignInPrompt::Code { code, url })) => {
+                Some((code.clone(), url.clone()))
+            }
+            _ => None,
+        };
         if self.sign_in_running && !self.session.read(cx).is_pending() {
             self.sign_in_running = false;
             self.sign_in_for = None;
@@ -4877,7 +4900,10 @@ impl Render for SettingsView {
 
         // only one of these is ever up: a prompt the sign-in raised hides the choice behind
         // it, and the choice holds the veil until that prompt arrives
-        let taken = accounts.is_some() || manual_secret.is_some() || self.credentials_for.is_some();
+        let taken = accounts.is_some()
+            || code.is_some()
+            || manual_secret.is_some()
+            || self.credentials_for.is_some();
         let sign_in_for = self.sign_in_for.filter(|_| !taken);
 
         // a dialog takes the key focus, since escape only reaches the page from inside it
@@ -4952,6 +4978,9 @@ impl Render for SettingsView {
             )
             .when_some(accounts, |this, accounts| {
                 this.child(self.account_modal(accounts, cx).into_any_element())
+            })
+            .when_some(code, |this, (code, url)| {
+                this.child(self.code_prompt(code, url, cx).into_any_element())
             })
             .when_some(manual_secret, |this, (slug, provider)| {
                 this.child(self.secret_prompt(slug, provider, cx).into_any_element())
