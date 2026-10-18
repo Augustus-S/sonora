@@ -66,7 +66,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - On Linux, the output picker lists your system's real outputs by the names your desktop gives
   them, and the one you choose is where Sonora plays. An output you picked before goes back to
   System default.
-- With PipeWire, Sonora plays at the sample rate PipeWire runs your device at.
 
 ### Fixed
 
