@@ -463,16 +463,15 @@ impl TidalClient {
     /// [`Stale`]. That happens when the playlist changed in between, on another device say, when
     /// it was created moments ago, and when a write follows the last within moments, since for a
     /// little while after a change Tidal's reads all answer from before it. Each run reads the
-    /// playlist afresh, and is told whether it is the last, since a write may treat what it
-    /// still finds then as settled.
+    /// playlist afresh. The last run's failure is the edit's, stale or not.
     async fn edit_playlist<F, Fut>(&self, write: F) -> Result<()>
     where
-        F: Fn(bool) -> Fut,
+        F: Fn() -> Fut,
         Fut: Future<Output = Result<()>>,
     {
         let mut attempt = 1;
         loop {
-            match write(attempt == EDIT_ATTEMPTS).await {
+            match write().await {
                 Err(error)
                     if attempt < EDIT_ATTEMPTS && error.downcast_ref::<Stale>().is_some() =>
                 {
@@ -488,13 +487,14 @@ impl TidalClient {
     }
 
     /// Takes every copy of a track out of a playlist, naming each by the id of its row rather
-    /// than its position. Positions are unsafe here: Tidal applies a change a moment after
-    /// answering for it, so a position read just after an edit can name whatever track has
-    /// moved into it, where a row id only ever names its own row.
+    /// than its position. Positions are unsafe here, because Tidal applies a change a moment
+    /// after answering for it and a position read just after an edit can name whatever track
+    /// has moved into it. A row id only ever names its own row.
     ///
-    /// Tidal's reads lag a moment behind a change too, so a track the listing does not show
-    /// yet is taken for a stale listing until `last`, when it is taken as already gone.
-    async fn remove_copies(&self, playlist_id: &str, track_id: &str, last: bool) -> Result<()> {
+    /// Tidal's reads lag a moment behind a change too, so a track the listing does not show is
+    /// taken for a stale listing. When the edit gives up on it, that is an error rather than a
+    /// removal, since the playlist may hold the track all the same.
+    async fn remove_copies(&self, playlist_id: &str, track_id: &str) -> Result<()> {
         let path = format!("/playlists/{}/items", escape::component(playlist_id));
         let rows = self
             .all(&path, &[], PAGE, |page| {
@@ -508,10 +508,7 @@ impl TidalClient {
             .await
             .context("cannot read the playlist")?;
         if rows.is_empty() {
-            return match last {
-                true => Ok(()),
-                false => Err(Stale).context("the track is not in the playlist listing yet"),
-            };
+            return Err(Stale).context("the track is not in the playlist listing");
         }
         let data: Vec<Value> = rows
             .iter()
@@ -1098,7 +1095,7 @@ impl MusicApi for TidalClient {
     /// description an edit leaves out.
     async fn rename_playlist(&self, playlist_id: &str, name: &str) -> Result<()> {
         let path = format!("/playlists/{}", escape::component(playlist_id));
-        self.edit_playlist(|_| async {
+        self.edit_playlist(|| async {
             let (etag, playlist) = self.etag_and_playlist(playlist_id).await?;
             let description = playlist
                 .get("description")
@@ -1114,7 +1111,7 @@ impl MusicApi for TidalClient {
 
     async fn delete_playlist(&self, playlist_id: &str) -> Result<()> {
         let path = format!("/playlists/{}", escape::component(playlist_id));
-        self.edit_playlist(|_| async {
+        self.edit_playlist(|| async {
             let etag = self.etag(playlist_id).await?;
             self.send(Method::DELETE, &path, None, Some(&etag)).await
         })
@@ -1163,7 +1160,7 @@ impl MusicApi for TidalClient {
             ("onDupes", "ADD"),
             ("onArtifactNotFound", "SKIP"),
         ];
-        self.edit_playlist(|_| async {
+        self.edit_playlist(|| async {
             let etag = self.etag(playlist_id).await?;
             self.send(Method::POST, &path, Some(&form), Some(&etag))
                 .await
@@ -1173,7 +1170,7 @@ impl MusicApi for TidalClient {
     }
 
     async fn remove_track_from_playlist(&self, playlist_id: &str, track_id: &str) -> Result<()> {
-        self.edit_playlist(|last| self.remove_copies(playlist_id, track_id, last))
+        self.edit_playlist(|| self.remove_copies(playlist_id, track_id))
             .await
             .context("cannot remove the track from the playlist")
     }
