@@ -142,6 +142,8 @@ impl ResponseAxes {
 #[derive(Clone, Copy, Debug)]
 pub enum GraphEdit {
     Select(u64),
+    /// A press on the graph that missed every node and added none, which clears the selection.
+    Deselect,
     /// A drag. An axis the pointer has not left the dead zone along keeps the node's position
     /// exactly as the caller gave it, so a node beyond the axes is not pulled to their edge.
     Move {
@@ -213,7 +215,8 @@ impl Render for GraphDrag {
 }
 
 /// A response plot with caller-sampled curves and caller-owned nodes. Samples must be in
-/// ascending frequency order. Right-click removes a node; double-click empty plot space adds one.
+/// ascending frequency order. Right-click removes a node and double-click on empty plot space
+/// adds one, unless reshaping is off.
 #[derive(IntoElement)]
 pub struct ResponseGraph {
     base: Stateful<Div>,
@@ -224,6 +227,7 @@ pub struct ResponseGraph {
     nodes: Vec<ResponseNode>,
     reference: Option<(f32, SharedString)>,
     bypassed: bool,
+    reshape: bool,
     on_edit: Option<Edit>,
 }
 
@@ -246,6 +250,7 @@ impl ResponseGraph {
             nodes: Vec::new(),
             reference: None,
             bypassed: false,
+            reshape: true,
             on_edit: None,
         }
     }
@@ -290,6 +295,13 @@ impl ResponseGraph {
         self
     }
 
+    /// Whether double-click adds a node, right-click removes one and the wheel widens one. Off,
+    /// nodes can only be selected and dragged and the wheel scrolls what holds the graph.
+    pub fn reshape(mut self, reshape: bool) -> Self {
+        self.reshape = reshape;
+        self
+    }
+
     /// Reports all edit intents, including a final move on release outside the plot.
     pub fn on_edit(
         mut self,
@@ -314,6 +326,7 @@ struct Plot {
     nodes: Vec<ResponseNode>,
     reference: Option<(f32, SharedString)>,
     bypassed: bool,
+    reshape: bool,
     radius: Pixels,
     on_edit: Option<Edit>,
 }
@@ -341,7 +354,9 @@ impl Plot {
             .map(|(node, _)| node)
     }
 
-    /// Captures the offset before selection can rerender the caller's node data.
+    /// Selects the node under the pointer, capturing the offset before selection can rerender
+    /// the caller's node data. A double click on empty plot adds a node while reshaping is on,
+    /// and any other press off a node deselects.
     fn press(&self, event: &MouseDownEvent, window: &mut Window, cx: &mut App) {
         self.state.grabbed.set(None);
         if let Some(node) = self.hit(event.position) {
@@ -356,13 +371,18 @@ impl Plot {
             }));
             self.emit(GraphEdit::Select(node.id), window, cx);
             cx.stop_propagation();
-        } else if event.click_count == 2 && self.state.bounds.get().contains(&event.position) {
+        } else if self.reshape
+            && event.click_count == 2
+            && self.state.bounds.get().contains(&event.position)
+        {
             self.emit(
                 GraphEdit::Add(self.axes.unproject(event.position, self.state.bounds.get())),
                 window,
                 cx,
             );
             cx.stop_propagation();
+        } else {
+            self.emit(GraphEdit::Deselect, window, cx);
         }
     }
 
@@ -421,6 +441,7 @@ impl RenderOnce for ResponseGraph {
             nodes,
             reference,
             bypassed,
+            reshape,
             on_edit,
         } = self;
         let theme = *cx.theme();
@@ -432,6 +453,7 @@ impl RenderOnce for ResponseGraph {
             nodes,
             reference,
             bypassed,
+            reshape,
             radius: theme.metrics.pad,
             on_edit,
         });
@@ -488,12 +510,14 @@ impl RenderOnce for ResponseGraph {
                 })
                 .on_mouse_up(MouseButton::Left, release.clone())
                 .on_mouse_up_out(MouseButton::Left, release)
-                .on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                    if let Some(node) = removed.hit(event.position) {
-                        removed.state.grabbed.set(None);
-                        removed.emit(GraphEdit::Remove(node.id), window, cx);
-                        cx.stop_propagation();
-                    }
+                .when(reshape, |this| {
+                    this.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                        if let Some(node) = removed.hit(event.position) {
+                            removed.state.grabbed.set(None);
+                            removed.emit(GraphEdit::Remove(node.id), window, cx);
+                            cx.stop_propagation();
+                        }
+                    })
                 })
                 .on_mouse_move(move |event, window, _| {
                     let hit = hovering.hit(event.position).map(|node| node.id);
@@ -509,19 +533,21 @@ impl RenderOnce for ResponseGraph {
                         }
                     }
                 })
-                .on_scroll_wheel(move |event, window, cx| {
-                    let hovered = scrolled.state.hovered.get();
-                    if let Some(node) = scrolled
-                        .hit(event.position)
-                        .filter(|node| hovered == Some(node.id))
-                    {
-                        let steps = match event.delta {
-                            ScrollDelta::Lines(delta) => delta.y / LINES_PER_NOTCH,
-                            ScrollDelta::Pixels(delta) => delta.y / theme.metrics.control,
-                        };
-                        scrolled.emit(GraphEdit::Width { id: node.id, steps }, window, cx);
-                        cx.stop_propagation();
-                    }
+                .when(reshape, |this| {
+                    this.on_scroll_wheel(move |event, window, cx| {
+                        let hovered = scrolled.state.hovered.get();
+                        if let Some(node) = scrolled
+                            .hit(event.position)
+                            .filter(|node| hovered == Some(node.id))
+                        {
+                            let steps = match event.delta {
+                                ScrollDelta::Lines(delta) => delta.y / LINES_PER_NOTCH,
+                                ScrollDelta::Pixels(delta) => delta.y / theme.metrics.control,
+                            };
+                            scrolled.emit(GraphEdit::Width { id: node.id, steps }, window, cx);
+                            cx.stop_propagation();
+                        }
+                    })
                 })
             });
         graph.style().refine(&overrides);

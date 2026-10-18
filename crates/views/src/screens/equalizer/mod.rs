@@ -1,11 +1,14 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, FontWeight, Render,
-    ScrollHandle, SharedString, Task, Window, div, svg,
+    AnyElement, App, Context, Div, Empty, Entity, FocusHandle, Focusable as _, FontWeight, Render,
+    ScrollHandle, SharedString, StyleRefinement, Task, Window, div, svg,
 };
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
-use state::{AppSettings, Outputs, Playback, Signal, Sonora, equalizer_profile_label};
+use state::{
+    AppSettings, BoundOutput, Outputs, Playback, Signal, SignalPath, Sonora,
+    equalizer_profile_label,
+};
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, MenuItem, Modal, Picker,
     Popovers, Room, Scrollbar, Scroller, Submit, TabBar, Text, heading,
@@ -14,8 +17,9 @@ use ui::{
 use crate::chrome::Chrome;
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::sound_picker;
+use crate::shared::section::Section;
 
-use graph::Graph;
+use graph::{EqualizerGraph, Selected};
 use rows::{Row, figure};
 
 mod graph;
@@ -63,7 +67,11 @@ pub(crate) struct EqualizerView {
     restore: Option<FocusHandle>,
     /// The curve the fields were last filled from, so they are only rewritten when it changes.
     shown: Option<Curve>,
-    graph: Graph,
+    graph: Entity<EqualizerGraph>,
+    /// What the screen last drew from playback, the output and the signal path, so a notify
+    /// from them that changed none of it draws nothing.
+    drawn: Option<Drawn>,
+    cards: Cards,
     /// The output meter's reads and the spectrum's, held while the screen is the one shown and
     /// dropped with it.
     metering: Option<[Task<()>; 2]>,
@@ -71,6 +79,32 @@ pub(crate) struct EqualizerView {
     path: Option<Task<()>>,
     /// The file being read in or written out.
     file: Option<Task<()>>,
+}
+
+/// What the screen shows from playback, the output and the signal path. Position ticks and
+/// meter reads that leave all of it as it was do not redraw the screen.
+#[derive(PartialEq)]
+struct Drawn {
+    curve: Curve,
+    on: bool,
+    history: (bool, bool),
+    preamp: f64,
+    /// Whether the overload is too slight to round to a tenth, and its tenths as shown.
+    overload: Option<(bool, String)>,
+    fixable: bool,
+    output: Option<BoundOutput>,
+    port: Option<String>,
+    path: Option<SignalPath>,
+}
+
+/// The cards advanced mode adds below the graph, each a section of its own so the spectrum
+/// redrawing the graph leaves them as they were painted.
+struct Cards {
+    preamp: Entity<Section>,
+    filters: Entity<Section>,
+    devices: Entity<Section>,
+    transfer: Entity<Section>,
+    path: Entity<Section>,
 }
 
 impl EqualizerView {
@@ -85,10 +119,19 @@ impl EqualizerView {
         let id = cx.entity_id();
         let preamp = cx.new(|cx| Input::new("", cx).compact());
         let rows = (0..MAX_FILTERS).map(|_| Row::new(cx)).collect();
+        let graph = cx.new(|cx| {
+            EqualizerGraph::new(
+                playback.clone(),
+                settings.clone(),
+                outputs.clone(),
+                signal.clone(),
+                cx,
+            )
+        });
 
         cx.observe(&playback, |this, _, cx| {
             this.show_curve(cx);
-            cx.notify();
+            this.redraw(cx);
         })
         .detach();
         cx.observe(&settings, |this, settings, cx| {
@@ -98,10 +141,37 @@ impl EqualizerView {
             cx.notify();
         })
         .detach();
-        cx.observe(&signal, |_, _, cx| cx.notify()).detach();
-        cx.observe(&outputs, |_, _, cx| cx.notify()).detach();
+        cx.observe(&signal, |this, _, cx| {
+            if this.path.is_some() {
+                this.redraw(cx);
+            }
+        })
+        .detach();
+        cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
+        cx.subscribe(&graph, |_, _, _: &Selected, cx| cx.notify())
+            .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
+        let screen = cx.entity();
+        let cards = Cards {
+            preamp: cx.new(|cx| Section::new(&screen, |this, _, cx| this.preamp_card(cx), cx)),
+            filters: cx.new(|cx| {
+                Section::new(
+                    &screen,
+                    |this, window, cx| this.filters(Chrome::room(window, cx).fits(Room::Wide), cx),
+                    cx,
+                )
+            }),
+            devices: cx.new(|cx| {
+                Section::new(
+                    &screen,
+                    |this, _, cx| this.outputs(cx).unwrap_or_else(|| Empty.into_any_element()),
+                    cx,
+                )
+            }),
+            transfer: cx.new(|cx| Section::new(&screen, |this, _, cx| this.transfer(cx), cx)),
+            path: cx.new(|cx| Section::new(&screen, |this, _, cx| this.signal_path(cx), cx)),
+        };
 
         let mut view = Self {
             playback,
@@ -117,7 +187,9 @@ impl EqualizerView {
             focus: cx.focus_handle(),
             restore: None,
             shown: None,
-            graph: Graph::new(),
+            graph,
+            drawn: None,
+            cards,
             metering: None,
             path: None,
             file: None,
@@ -131,7 +203,40 @@ impl EqualizerView {
                 .detach();
         }
         view.show_curve(cx);
+        view.drawn = Some(view.drawing(cx));
         view
+    }
+
+    /// What the screen shows from playback, the output and the open signal path right now.
+    fn drawing(&self, cx: &App) -> Drawn {
+        let playback = self.playback.read(cx);
+        let outputs = self.outputs.read(cx);
+        Drawn {
+            curve: playback.equalizer_curve().clone(),
+            on: playback.equalizer(),
+            history: playback.equalizer_history(),
+            preamp: playback.equalizer_preamp_db(),
+            overload: playback
+                .overload()
+                .map(|over| (over < SLIGHT_OVERLOAD, figure(over, 1))),
+            fixable: playback.equalizer() && playback.lowered_preamp().is_some(),
+            output: outputs.output(),
+            port: outputs.sink().and_then(|sink| sink.port.clone()),
+            path: self
+                .path
+                .as_ref()
+                .and_then(|_| self.signal.read(cx).path().cloned()),
+        }
+    }
+
+    /// Redraws the screen when anything it shows from playback, the output or the signal path
+    /// changed since it last drew.
+    fn redraw(&mut self, cx: &mut Context<Self>) {
+        let drawn = self.drawing(cx);
+        if self.drawn.as_ref() != Some(&drawn) {
+            self.drawn = Some(drawn);
+            cx.notify();
+        }
     }
 
     /// Reads the output meter, the playing rate and the spectrum while the screen is the one
@@ -153,9 +258,7 @@ impl EqualizerView {
 
     /// Plays `curve`, an edit made on this screen.
     fn apply(&mut self, curve: Curve, cx: &mut Context<Self>) {
-        self.graph.edited(&curve);
-        self.playback
-            .update(cx, |playback, cx| playback.set_equalizer_curve(curve, cx));
+        self.graph.update(cx, |graph, cx| graph.apply(curve, cx));
     }
 
     fn set_preamp(&mut self, auto: bool, cx: &mut Context<Self>) {
@@ -357,7 +460,11 @@ impl EqualizerView {
     /// The main card: the one picker for every preset and profile with undo and redo beside it,
     /// then the response graph. Advanced mode adds what can be done to the playing profile.
     fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
-        let graph = self.graph(room, cx);
+        let graph = self.graph.clone().cached(
+            StyleRefinement::default()
+                .w_full()
+                .h(graph::height(room, cx)),
+        );
         let theme = *cx.theme();
         let wide = room.fits(Room::Wide);
         let on = self.playback.read(cx).equalizer();
@@ -545,9 +652,9 @@ impl Render for EqualizerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let inset = cx.theme().metrics.inset;
         let room = Chrome::room(window, cx);
-        let wide = room.fits(Room::Wide);
         let advanced = self.settings.read(cx).equalizer_advanced();
         let sound = self.sound(room, advanced, cx);
+        let routed = self.outputs.read(cx).output().is_some();
 
         let page = Scroller::new("equalizer-page", &self.scrollbar)
             .p(inset)
@@ -580,12 +687,14 @@ impl Render for EqualizerView {
                                 .flex()
                                 .flex_col()
                                 .gap_6()
-                                .child(self.preamp_card(cx))
-                                .child(self.filters(wide, cx)),
+                                .child(Section::place(&self.cards.preamp, cx))
+                                .child(Section::place(&self.cards.filters, cx)),
                         )
-                        .children(self.outputs(cx))
-                        .child(self.transfer(cx))
-                        .child(self.signal_path(cx))
+                        .when(routed, |this| {
+                            this.child(Section::place(&self.cards.devices, cx))
+                        })
+                        .child(Section::place(&self.cards.transfer, cx))
+                        .child(Section::place(&self.cards.path, cx))
                     }),
             );
 

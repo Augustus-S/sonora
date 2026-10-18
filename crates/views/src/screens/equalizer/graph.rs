@@ -1,16 +1,17 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, Context};
+use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Window};
 use i18n::t;
+use music::Level;
 use music::equalizer::{
     Curve, FREQUENCY_RANGE, Filter, GAIN_RANGE, Invalid, Kind, OCTAVES_RANGE, Q_RANGE, Response,
     Width,
 };
+use state::{AppSettings, Outputs, Playback, Signal};
 use ui::{
     ActiveTheme as _, GraphEdit, ResponseAxes, ResponseGraph, ResponseGraphState, ResponseNode,
     ResponsePoint, Room,
 };
 
-use super::EqualizerView;
 use super::rows::{NEW_FILTER, figure};
 
 /// The graph's frequency axis in hertz, the band people hear.
@@ -37,10 +38,38 @@ const GAIN_SPANS: [f32; 3] = [12., 18., 24.];
 /// span does not tip the axis over on the rounding of its response.
 const SPAN_SLACK: f32 = 0.05;
 
+/// The response graph as a view of its own, which the screen lays out at a fixed height. It
+/// owns the ids and the selection of the filters, follows the playing curve, and plays the
+/// edits made on it.
+pub(super) struct EqualizerGraph {
+    playback: Entity<Playback>,
+    settings: Entity<AppSettings>,
+    outputs: Entity<Outputs>,
+    signal: Entity<Signal>,
+    graph: Graph,
+    /// What the graph last drew, so a notify that changed none of it draws nothing.
+    drawn: Option<Drawn>,
+}
+
+/// Emitted when the selected filter changes, which the filter list highlights too.
+pub(super) struct Selected;
+
+/// What the graph shows from playback, the output and the spectrum.
+#[derive(PartialEq)]
+struct Drawn {
+    curve: Curve,
+    on: bool,
+    preamp: f64,
+    rate: u32,
+    spectrum: Option<Vec<Level>>,
+    /// Whether advanced mode lets nodes be added, removed and widened on the graph.
+    advanced: bool,
+}
+
 /// What the graph keeps between renders: an id per filter of the playing curve, the selected
 /// filter, and the response as last sampled. Filters that came from anywhere but this screen
 /// get new ids, so a selection or a drag never carries into another profile's filters.
-pub(super) struct Graph {
+struct Graph {
     state: ResponseGraphState,
     /// One id per filter of `filters`, in its order.
     ids: Vec<u64>,
@@ -68,7 +97,7 @@ struct Plotted {
 }
 
 impl Graph {
-    pub(super) fn new() -> Self {
+    fn new() -> Self {
         Self {
             state: ResponseGraphState::new("equalizer-graph"),
             ids: Vec::new(),
@@ -83,7 +112,7 @@ impl Graph {
 
     /// Brings the ids in step with `curve`, which plays now. Filters this screen did not put in
     /// place get new ids and lose the selection.
-    pub(super) fn follow(&mut self, curve: &Curve) {
+    fn follow(&mut self, curve: &Curve) {
         let own = self.own.take();
         if curve.filters() == self.filters {
             return;
@@ -99,23 +128,13 @@ impl Graph {
     }
 
     /// Notes `curve` as this screen's own edit, to be applied next.
-    pub(super) fn edited(&mut self, curve: &Curve) {
+    fn edited(&mut self, curve: &Curve) {
         self.own = Some(curve.filters().to_vec());
     }
 
-    pub(super) fn id(&self, index: usize) -> Option<u64> {
-        self.ids.get(index).copied()
-    }
-
-    pub(super) fn selected(&self) -> Option<u64> {
-        self.selected
-    }
-
-    /// Selects filter `id`. Returns whether that changed anything.
-    pub(super) fn select(&mut self, id: u64) -> bool {
-        let changed = self.selected != Some(id);
-        self.selected = Some(id);
-        changed
+    /// Selects filter `id`, or none. Returns whether that changed anything.
+    fn select(&mut self, id: Option<u64>) -> bool {
+        std::mem::replace(&mut self.selected, id) != id
     }
 
     fn index(&self, id: u64) -> Option<usize> {
@@ -189,89 +208,82 @@ impl Graph {
     }
 }
 
-impl EqualizerView {
-    /// The live response of the filters, a node per filter on it, and the preamp as a level
-    /// across it. A node sits on its own filter's curve at its frequency.
-    pub(super) fn graph(&mut self, room: Room, cx: &mut Context<Self>) -> AnyElement {
-        let theme = *cx.theme();
-        let playback = self.playback.read(cx);
-        let on = playback.equalizer();
-        let curve = playback.equalizer_curve().clone();
-        let rate = self
-            .outputs
-            .read(cx)
-            .current()
-            .map_or(IDLE_RATE, |device| device.rate);
-        let preamp = playback.equalizer_preamp_db();
-        let spectrum: Vec<_> = self
-            .signal
-            .read(cx)
-            .levels()
-            .unwrap_or_default()
-            .iter()
-            .map(|level| ResponsePoint {
-                frequency_hz: level.frequency,
-                gain_db: level.dbfs,
-            })
-            .collect();
-        let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
-        let plotted = self.graph.plotted(&curve, rate);
-        let nodes: Vec<_> = curve
-            .filters()
-            .iter()
-            .zip(ids)
-            .map(|(filter, id)| {
-                let gain = match filter.kind().has_gain() {
-                    true => filter.gain(),
-                    false => plotted.response.db(filter.frequency()),
-                };
-                ResponseNode {
-                    id,
-                    position: ResponsePoint {
-                        frequency_hz: filter.frequency() as f32,
-                        gain_db: plotted_db(gain * lift(filter.kind())),
-                    },
-                    readout_db: plotted_db(gain),
-                    gain_adjustable: filter.kind().has_gain(),
-                    selected: selected == Some(id),
-                    enabled: on && filter.enabled(),
-                }
-            })
-            .collect();
-        let points = plotted.points.clone();
-        let reach = nodes
-            .iter()
-            .filter(|node| node.gain_adjustable)
-            .map(|node| node.position.gain_db.abs())
-            .fold(plotted.reach.max(preamp.abs() as f32), f32::max);
-        let span = match self.graph.state.dragging() {
-            true => self.graph.span,
-            false => fitted_span(reach),
-        };
-        self.graph.span = span;
-        let (low, high) = GRAPH_FREQUENCIES;
-        let axes = ResponseAxes::new(low as f32..=high as f32, -span..=span)
-            .expect("the graph's axes are valid");
-        let height = match room.fits(Room::Wide) {
-            true => GRAPH_TALL,
-            false => GRAPH_SHORT,
-        };
+impl EventEmitter<Selected> for EqualizerGraph {}
 
-        let (bottom, top) = SPECTRUM_SCALE;
-        ResponseGraph::new(&self.graph.state, axes)
-            .h(theme.metrics.cover * height)
-            .when(!spectrum.is_empty(), |graph| {
-                graph.spectrum(spectrum, bottom..=top)
-            })
-            .response(points)
-            .nodes(nodes)
-            .reference(
-                preamp as f32,
-                t!("equalizer-graph-preamp", db = figure(preamp, 1)),
-            )
-            .bypassed(!on)
-            .on_edit(cx.listener(|this, edit: &GraphEdit, _, cx| this.graph_edit(edit, cx)))
-            .into_any_element()
+impl EqualizerGraph {
+    pub(super) fn new(
+        playback: Entity<Playback>,
+        settings: Entity<AppSettings>,
+        outputs: Entity<Outputs>,
+        signal: Entity<Signal>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        cx.observe(&playback, |this, _, cx| this.redraw(cx))
+            .detach();
+        cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
+        cx.observe(&signal, |this, _, cx| this.redraw(cx)).detach();
+        cx.observe(&settings, |this, _, cx| this.redraw(cx))
+            .detach();
+        let mut graph = Self {
+            playback,
+            settings,
+            outputs,
+            signal,
+            graph: Graph::new(),
+            drawn: None,
+        };
+        graph.redraw(cx);
+        graph
+    }
+
+    /// Brings the ids in step with a curve that changed, and redraws when anything the graph
+    /// shows changed since it last drew.
+    fn redraw(&mut self, cx: &mut Context<Self>) {
+        let playback = self.playback.read(cx);
+        let drawn = Drawn {
+            curve: playback.equalizer_curve().clone(),
+            on: playback.equalizer(),
+            preamp: playback.equalizer_preamp_db(),
+            rate: rate(&self.outputs, cx),
+            spectrum: self.signal.read(cx).levels().map(<[Level]>::to_vec),
+            advanced: self.settings.read(cx).equalizer_advanced(),
+        };
+        if self.drawn.as_ref() == Some(&drawn) {
+            return;
+        }
+        if self
+            .drawn
+            .as_ref()
+            .is_none_or(|last| last.curve != drawn.curve)
+        {
+            self.graph.follow(&drawn.curve);
+        }
+        self.drawn = Some(drawn);
+        cx.notify();
+    }
+
+    /// The id of filter `index` of the playing curve.
+    pub(super) fn id(&self, index: usize) -> Option<u64> {
+        self.graph.ids.get(index).copied()
+    }
+
+    pub(super) fn selected(&self) -> Option<u64> {
+        self.graph.selected
+    }
+
+    /// Selects filter `id`, or none, and tells the screen when that changed the selection.
+    pub(super) fn select(&mut self, id: Option<u64>, cx: &mut Context<Self>) {
+        if self.graph.select(id) {
+            cx.emit(Selected);
+            cx.notify();
+        }
+    }
+
+    /// Plays `curve`, an edit made on this screen.
+    pub(super) fn apply(&mut self, curve: Curve, cx: &mut Context<Self>) {
+        self.graph.edited(&curve);
+        self.playback
+            .update(cx, |playback, cx| playback.set_equalizer_curve(curve, cx));
     }
 
     /// Appends `filter` to the playing curve and selects it, unless the curve is full.
@@ -297,9 +309,11 @@ impl EqualizerView {
         let span = self.graph.span;
         let glided = match *edit {
             GraphEdit::Select(id) => {
-                if self.graph.select(id) {
-                    cx.notify();
-                }
+                self.select(Some(id), cx);
+                None
+            }
+            GraphEdit::Deselect => {
+                self.select(None, cx);
                 None
             }
             GraphEdit::Move { id, position } => self.graph.change(&curve, id, |filter| {
@@ -364,6 +378,102 @@ impl EqualizerView {
                 .update(cx, |playback, cx| playback.glide_equalizer_curve(curve, cx));
         }
     }
+}
+
+/// The live response of the filters, a node per filter on it, and the preamp as a level across
+/// it. A node sits on its own filter's curve at its frequency. The graph fills the bounds the
+/// screen lays it out at.
+impl Render for EqualizerGraph {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let playback = self.playback.read(cx);
+        let on = playback.equalizer();
+        let advanced = self.settings.read(cx).equalizer_advanced();
+        let curve = playback.equalizer_curve().clone();
+        let rate = rate(&self.outputs, cx);
+        let preamp = playback.equalizer_preamp_db();
+        let spectrum: Vec<_> = self
+            .signal
+            .read(cx)
+            .levels()
+            .unwrap_or_default()
+            .iter()
+            .map(|level| ResponsePoint {
+                frequency_hz: level.frequency,
+                gain_db: level.dbfs,
+            })
+            .collect();
+        let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
+        let plotted = self.graph.plotted(&curve, rate);
+        let nodes: Vec<_> = curve
+            .filters()
+            .iter()
+            .zip(ids)
+            .map(|(filter, id)| {
+                let gain = match filter.kind().has_gain() {
+                    true => filter.gain(),
+                    false => plotted.response.db(filter.frequency()),
+                };
+                ResponseNode {
+                    id,
+                    position: ResponsePoint {
+                        frequency_hz: filter.frequency() as f32,
+                        gain_db: plotted_db(gain * lift(filter.kind())),
+                    },
+                    readout_db: plotted_db(gain),
+                    gain_adjustable: filter.kind().has_gain(),
+                    selected: selected == Some(id),
+                    enabled: on && filter.enabled(),
+                }
+            })
+            .collect();
+        let points = plotted.points.clone();
+        let reach = nodes
+            .iter()
+            .filter(|node| node.gain_adjustable)
+            .map(|node| node.position.gain_db.abs())
+            .fold(plotted.reach.max(preamp.abs() as f32), f32::max);
+        let span = match self.graph.state.dragging() {
+            true => self.graph.span,
+            false => fitted_span(reach),
+        };
+        self.graph.span = span;
+        let (low, high) = GRAPH_FREQUENCIES;
+        let axes = ResponseAxes::new(low as f32..=high as f32, -span..=span)
+            .expect("the graph's axes are valid");
+
+        let (bottom, top) = SPECTRUM_SCALE;
+        ResponseGraph::new(&self.graph.state, axes)
+            .size_full()
+            .when(!spectrum.is_empty(), |graph| {
+                graph.spectrum(spectrum, bottom..=top)
+            })
+            .response(points)
+            .nodes(nodes)
+            .reference(
+                preamp as f32,
+                t!("equalizer-graph-preamp", db = figure(preamp, 1)),
+            )
+            .bypassed(!on)
+            .reshape(advanced)
+            .on_edit(cx.listener(|this, edit: &GraphEdit, _, cx| this.graph_edit(edit, cx)))
+    }
+}
+
+/// How tall the graph stands in `room`, which the screen lays its view out at.
+pub(super) fn height(room: Room, cx: &App) -> Pixels {
+    let height = match room.fits(Room::Wide) {
+        true => GRAPH_TALL,
+        false => GRAPH_SHORT,
+    };
+    cx.theme().metrics.cover * height
+}
+
+/// The rate the output plays at, or the idle one while no stream is open.
+fn rate(outputs: &Entity<Outputs>, cx: &App) -> u32 {
+    outputs
+        .read(cx)
+        .current()
+        .map_or(IDLE_RATE, |device| device.rate)
 }
 
 /// The response sampled on a log grid up to the axis's high end or the rate's Nyquist frequency,

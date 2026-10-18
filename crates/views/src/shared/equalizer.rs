@@ -2,7 +2,10 @@ use gpui::{App, Entity, SharedString};
 use i18n::t;
 use music::equalizer::Preset;
 use state::{AppSettings, Playback};
-use ui::{MenuItem, Picker, Popovers};
+use ui::{ActiveTheme as _, MenuItem, Picker, Popovers};
+
+/// How tall the sound menu grows before it scrolls, in cover sizes.
+const MENU_HEIGHT: f32 = 2.4;
 
 /// One picker for every sound the equalizer can play: the built-in presets, the curve someone
 /// shaped from one, and the named profiles. Choosing any of them turns the equalizer on.
@@ -16,6 +19,7 @@ pub(crate) fn sound_picker(
     settings: &Entity<AppSettings>,
     cx: &App,
 ) -> Picker {
+    let height = cx.theme().metrics.cover * MENU_HEIGHT;
     let settings = settings.read(cx);
     let playing = settings.equalizer_profile();
     let scratch = settings.equalizer_scratch();
@@ -69,6 +73,7 @@ pub(crate) fn sound_picker(
     let divider = (!named.is_empty()).then(|| MenuItem::separator("equalizer-sound-profiles"));
 
     Picker::new(key, popovers, current)
+        .scroll_after(height)
         .items(custom_item)
         .items(presets)
         .items(divider)

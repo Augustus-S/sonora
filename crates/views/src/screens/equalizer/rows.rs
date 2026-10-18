@@ -108,7 +108,6 @@ impl EqualizerView {
             return;
         }
         let curve = curve.clone();
-        self.graph.follow(&curve);
         let texts: Vec<_> = self
             .fields()
             .map(|(field, input)| (input.clone(), shown(&curve, field)))
@@ -225,8 +224,9 @@ impl EqualizerView {
         wide: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let id = self.graph.id(index);
-        let selected = id.is_some() && id == self.graph.selected();
+        let graph = self.graph.read(cx);
+        let id = graph.id(index);
+        let selected = id.is_some() && id == graph.selected();
         let theme = *cx.theme();
         let cover = theme.metrics.cover;
         let row = &self.rows[index];
@@ -262,7 +262,10 @@ impl EqualizerView {
             .ghost()
             .icon("icons/x.svg")
             .tooltip("equalizer-remove-filter")
-            .on_click(cx.listener(move |this, _, _, cx| this.remove_filter(index, cx)));
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.graph
+                    .update(cx, |graph, cx| graph.remove_filter(index, cx))
+            }));
         let values = div()
             .flex()
             .flex_wrap()
@@ -305,9 +308,8 @@ impl EqualizerView {
         // In the capture phase, since the fields and the kind picker keep their mouse-down.
         .when_some(id, |row, id| {
             row.capture_any_mouse_down(cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                if this.graph.select(id) {
-                    cx.notify();
-                }
+                this.graph
+                    .update(cx, |graph, cx| graph.select(Some(id), cx))
             }))
         })
         .into_any_element()
@@ -341,7 +343,8 @@ impl EqualizerView {
                 let (kind, frequency, gain, q) = NEW_FILTER;
                 let filter = Filter::new(kind, frequency, gain, Width::Q(q), true)
                     .expect("the new filter is in range");
-                this.add_filter(filter, cx)
+                this.graph
+                    .update(cx, |graph, cx| graph.add_filter(filter, cx))
             }))
     }
 

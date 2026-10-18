@@ -4,7 +4,6 @@ use gpui::{
 };
 
 use crate::label::eyebrow;
-use crate::separator::Separator;
 use crate::theme::ActiveTheme as _;
 
 #[derive(IntoElement)]
@@ -82,14 +81,7 @@ impl RenderOnce for InfoCard {
                 this.border_1().border_color(theme.border)
             })
             .bg(theme.secondary.opacity(0.45))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(eyebrow(title, cx))
-                    .child(Separator::horizontal().flex_1()),
-            )
+            .child(eyebrow(title, cx))
             .children(children);
 
         card.style().refine(&overrides);
