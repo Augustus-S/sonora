@@ -1,11 +1,11 @@
 //! The equalizer the app plays through: the curve every engine reads, the profiles the settings
-//! store it in, undo and redo, the profile each output asks for, and the clip warning the output
-//! meter raises against it.
+//! store it in, undo and redo, the sound each device rule asks for, and the clip warning the
+//! output meter raises against it.
 
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{Context, Entity, Subscription, Task};
+use gpui::{App, Context, Entity, Subscription, Task};
 use music::Meter;
 use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, Preset, apo};
 use music::output::OutputId;
@@ -21,7 +21,7 @@ const UNDO_STEPS: usize = 50;
 
 /// The equalizer as it plays. Created once in `Sonora`, it hands every engine the same reader
 /// and meter, so a change reaches the output without a restart. It follows the output the sound
-/// plays on and switches to the profile bound to it.
+/// plays on and plays the sound that output's device rule names.
 pub struct Equalizer {
     settings: Entity<AppSettings>,
     writer: EqualizerWriter,
@@ -33,12 +33,36 @@ pub struct Equalizer {
     /// Stores a glided curve in the settings once the edits pause.
     glide_store: Option<Task<()>>,
     history: History,
-    /// The id of the output played on as `Outputs` last settled it, so a binding edit can play
-    /// what that output asks for and the same output again is not a move.
+    /// The id of the output played on as `Outputs` last settled it, so a rule added for it can
+    /// play at once and the same output again is not a move.
     output: Option<String>,
     /// The volume as playback last had it, so a change to it takes the clip warning down.
     volume: f32,
     _subscriptions: Vec<Subscription>,
+}
+
+/// A sound a device rule plays: a built-in preset, loaded into the unnamed profile the way
+/// picking it does, or a stored profile by its name. The unnamed profile is never one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Sound {
+    Preset(Preset),
+    Profile(String),
+}
+
+/// Which output a device rule is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleDevice {
+    /// One output, by the key `Outputs::binding_key` gives it. Its name is only shown.
+    Output(OutputId),
+    /// Every output no other rule names.
+    Other,
+}
+
+/// The sound to play once the sound moves to a device. A device has one rule at most.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceRule {
+    pub device: RuleDevice,
+    pub sound: Sound,
 }
 
 /// The playing profile's curves from before each edit and from before each undo, newest last.
@@ -47,6 +71,17 @@ pub struct Equalizer {
 struct History {
     undo: Vec<Curve>,
     redo: Vec<Curve>,
+}
+
+impl RuleDevice {
+    /// The output's key, or `None` for every other output. Two rules are for the same device
+    /// when their keys are equal, whatever names they were seen with.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Output(output) => Some(&output.id),
+            Self::Other => None,
+        }
+    }
 }
 
 impl History {
@@ -261,28 +296,34 @@ impl Equalizer {
         }
     }
 
-    /// Binds `output`, the one played on now, to profile `index`, or unbinds it with `None`,
-    /// and plays the profile the output then asks for.
-    pub fn bind_output(&mut self, output: &OutputId, index: Option<usize>, cx: &mut Context<Self>) {
-        self.settings.update(cx, |settings, cx| {
-            settings.bind_equalizer_output(output.clone(), index, cx)
+    /// Adds `rule` in place of the one its device had. When it is the rule the output played on
+    /// now goes by, its sound plays at once.
+    pub fn set_rule(&mut self, rule: DeviceRule, cx: &mut Context<Self>) {
+        let device = rule.device.clone();
+        self.settings
+            .update(cx, |settings, cx| settings.set_equalizer_rule(rule, cx));
+        let governs = self.output.as_deref().is_some_and(|id| {
+            self.settings
+                .read(cx)
+                .equalizer_rule_for_output(id)
+                .is_some_and(|rule| rule.device.id() == device.id())
         });
-        self.play_output_profile(cx);
+        if governs {
+            self.play_output_sound(cx);
+        }
     }
 
-    /// Makes profile `index` the one for outputs no profile is bound to, or none with `None`,
-    /// and plays it when the output played on is one of those.
-    pub fn set_other_outputs(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        self.settings.update(cx, |settings, cx| {
-            settings.set_equalizer_other_outputs(index, cx)
-        });
-        let settings = self.settings.read(cx);
-        let unbound = self
-            .output
-            .as_deref()
-            .is_some_and(|id| settings.equalizer_profile_bound_to(id).is_none());
-        if unbound {
-            self.play_output_profile(cx);
+    /// Removes the rule for `device`. What plays stays.
+    pub fn remove_rule(&mut self, device: &RuleDevice, cx: &mut Context<Self>) {
+        self.settings
+            .update(cx, |settings, cx| settings.remove_equalizer_rule(device, cx));
+    }
+
+    /// Plays `sound` and turns the equalizer on, the way picking it does. A profile that is no
+    /// longer stored plays nothing.
+    pub fn play_sound(&mut self, sound: &Sound, cx: &mut Context<Self>) {
+        if self.load_sound(sound, cx) && !self.enabled() {
+            self.set_enabled(true, cx);
         }
     }
 
@@ -306,6 +347,15 @@ impl Equalizer {
     /// Plays `preset` in the profile with no name, switching to it first when another plays, and
     /// turns the equalizer on. A named profile is never overwritten.
     pub fn play_preset(&mut self, preset: Preset, cx: &mut Context<Self>) {
+        self.load_preset(preset, cx);
+        if !self.enabled() {
+            self.set_enabled(true, cx);
+        }
+    }
+
+    /// Puts `preset` in the profile with no name and plays that profile, leaving the equalizer on
+    /// or off.
+    fn load_preset(&mut self, preset: Preset, cx: &mut Context<Self>) {
         let curve = preset.curve();
         let settings = self.settings.read(cx);
         if settings.equalizer_scratch() != Some(settings.equalizer_profile()) {
@@ -316,9 +366,24 @@ impl Equalizer {
             self.follow_settings(cx);
         }
         self.set_curve(curve, cx);
-        if !self.enabled() {
-            self.set_enabled(true, cx);
+    }
+
+    /// Switches to `sound` and leaves the equalizer on or off. A stored profile that plays
+    /// already keeps its undo history. Returns false when `sound` names no stored profile.
+    fn load_sound(&mut self, sound: &Sound, cx: &mut Context<Self>) -> bool {
+        match sound {
+            Sound::Preset(preset) => self.load_preset(*preset, cx),
+            Sound::Profile(name) => {
+                let settings = self.settings.read(cx);
+                let Some(index) = settings.equalizer_profile_named(name) else {
+                    return false;
+                };
+                if index != settings.equalizer_profile() {
+                    self.select_profile(index, cx);
+                }
+            }
         }
+        true
     }
 
     /// Adds a profile named after `name` holding `curve` and plays it. `AppSettings` makes the
@@ -347,7 +412,8 @@ impl Equalizer {
     }
 
     /// Removes profile `index` while it is still the one named `name`, unless it is the only
-    /// one. When it was playing, the output's own profile plays, else the one `AppSettings` picks.
+    /// one, and the rules that play it. When it was playing, the sound the output's rule names
+    /// plays, else the profile `AppSettings` picks.
     pub fn remove_profile(&mut self, index: usize, name: &str, cx: &mut Context<Self>) {
         self.store_glided(cx);
         let playing = self.settings.read(cx).equalizer_profile() == index;
@@ -355,8 +421,8 @@ impl Equalizer {
             settings.remove_equalizer_profile(index, name, cx)
         });
         self.follow_settings(cx);
-        if playing {
-            self.play_output_profile(cx);
+        if let Some(sound) = self.output_sound(cx).filter(|_| playing) {
+            self.load_sound(&sound, cx);
         }
     }
 
@@ -392,31 +458,32 @@ impl Equalizer {
         }
     }
 
-    /// Takes in output `id` as the one played on, and plays the profile it asks for when it is
+    /// Takes in output `id` as the one played on, and plays the sound its rule names when it is
     /// another output than the last one.
     fn follow_output(&mut self, id: String, cx: &mut Context<Self>) {
         if self.output.as_ref() == Some(&id) {
             return;
         }
         self.output = Some(id);
-        self.play_output_profile(cx);
+        self.play_output_sound(cx);
     }
 
-    /// Plays the profile the output played on asks for, when one is bound to it or set for
-    /// other outputs and it is not playing already.
-    fn play_output_profile(&mut self, cx: &mut Context<Self>) {
-        let settings = self.settings.read(cx);
-        let Some(index) = self
-            .output
-            .as_deref()
-            .and_then(|id| settings.equalizer_profile_for_output(id))
-        else {
+    /// The sound the output played on asks for: its own rule's, else the one for any other
+    /// device.
+    fn output_sound(&self, cx: &App) -> Option<Sound> {
+        let id = self.output.as_deref()?;
+        let rule = self.settings.read(cx).equalizer_rule_for_output(id)?;
+        Some(rule.sound.clone())
+    }
+
+    /// Plays the sound the output played on asks for and turns the equalizer on. Nothing changes
+    /// when no rule applies.
+    fn play_output_sound(&mut self, cx: &mut Context<Self>) {
+        let Some(sound) = self.output_sound(cx) else {
             return;
         };
-        if index != settings.equalizer_profile() {
-            log::info!("equalizer: playing profile {index}, the one for the output played on");
-            self.select_profile(index, cx);
-        }
+        log::info!("equalizer: playing {sound:?}, the sound for the output played on");
+        self.play_sound(&sound, cx);
     }
 
     /// Plays what the settings say, the equalizer on or off and the selected profile's curve,

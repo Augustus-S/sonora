@@ -1,4 +1,5 @@
-//! How equalizer profiles are stored in the settings file and edited through `AppSettings`.
+//! How equalizer profiles and device rules are stored in the settings file and edited through
+//! `AppSettings`.
 //! Every reader here is lenient, so a hand-edited mistake drops one value instead of making the
 //! whole file unreadable.
 
@@ -9,9 +10,13 @@ use gpui::{Context, SharedString};
 use music::equalizer::{Curve, Filter, Kind, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, Width};
 use music::output::OutputId;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{AppSettings, Values};
+use crate::equalizer::{DeviceRule, RuleDevice, Sound};
+
+/// How a rule for every output no other rule names stores its output.
+const OTHER_OUTPUTS: &str = "other";
 
 /// One stored equalizer curve, in plain numbers and strings, so a hand-edited mistake drops one
 /// filter instead of making the file unreadable. The name is empty for the profile Sonora made.
@@ -20,12 +25,32 @@ pub(super) struct Profile {
     name: String,
     preamp: StoredPreamp,
     filters: Vec<StoredFilter>,
-    /// The output devices this profile plays on. A device is named by one profile at most.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The outputs an older Sonora bound this profile to. Read once to make device rules from,
+    /// and never written back.
+    #[serde(skip_serializing)]
     outputs: Vec<OutputId>,
-    /// Whether this profile plays on every output no profile names. One profile at most.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// Whether an older Sonora played this profile on every output no profile named. Read once
+    /// like `outputs`.
+    #[serde(skip_serializing)]
     other_outputs: bool,
+}
+
+/// One device rule as the settings file holds it: the output, or `"other"`, and either a
+/// preset's id or a profile's name.
+#[derive(Serialize)]
+struct StoredRule<'a> {
+    output: StoredDevice<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preset: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum StoredDevice<'a> {
+    Output(&'a OutputId),
+    Other(&'static str),
 }
 
 /// `"auto"` or a number of decibels.
@@ -51,8 +76,8 @@ pub(super) struct StoredFilter {
 
 impl Values {
     /// Settles the equalizer values for use: one profile when the file had none, built from the
-    /// band gains an older Sonora saved when it had those, each output bound once, and the
-    /// chosen profile in range.
+    /// band gains an older Sonora saved when it had those, the outputs an older Sonora bound to
+    /// profiles made into rules, one rule per device, and the chosen profile in range.
     pub(super) fn settle_equalizer(&mut self) {
         if self.equalizer_profiles.is_empty() {
             let gains: Vec<f64> = self
@@ -64,28 +89,77 @@ impl Values {
                 .push(Profile::of(&Curve::bands(&gains)));
         }
         self.equalizer_bands = Vec::new();
-        let mut bound = HashSet::new();
-        let mut other = false;
-        for profile in &mut self.equalizer_profiles {
-            let before = profile.outputs.len();
-            profile
-                .outputs
-                .retain(|output| bound.insert(output.id.clone()));
-            if profile.outputs.len() < before {
-                log::warn!(
-                    "settings: an output named by two equalizer profiles stays with the first; the second binding is dropped the next time settings are saved"
-                );
-            }
-            if profile.other_outputs && std::mem::replace(&mut other, true) {
-                log::warn!(
-                    "settings: more than one equalizer profile plays on other outputs, keeping the first; the rest are cleared the next time settings are saved"
-                );
-                profile.other_outputs = false;
-            }
-        }
+        self.migrate_bindings();
+        self.settle_rules();
         self.equalizer_profile = self
             .equalizer_profile
             .min(self.equalizer_profiles.len() - 1);
+    }
+
+    /// Makes the outputs an older Sonora bound to each profile into rules after the stored ones,
+    /// which win for a device both name. A binding to the unnamed profile becomes a rule for the
+    /// preset its curve matches, or nothing.
+    fn migrate_bindings(&mut self) {
+        let mut migrated = Vec::new();
+        for profile in &mut self.equalizer_profiles {
+            let outputs = std::mem::take(&mut profile.outputs);
+            let other = std::mem::take(&mut profile.other_outputs);
+            if outputs.is_empty() && !other {
+                continue;
+            }
+            let sound = match profile.name.is_empty() {
+                true => Preset::matching(&profile.curve()).map(Sound::Preset),
+                false => Some(Sound::Profile(profile.name.clone())),
+            };
+            let Some(sound) = sound else {
+                log::warn!(
+                    "settings: dropping the outputs bound to the unnamed equalizer profile, whose curve is no preset"
+                );
+                continue;
+            };
+            let devices = outputs
+                .into_iter()
+                .map(RuleDevice::Output)
+                .chain(other.then_some(RuleDevice::Other));
+            migrated.extend(devices.map(|device| DeviceRule {
+                device,
+                sound: sound.clone(),
+            }));
+        }
+        if !migrated.is_empty() {
+            log::info!(
+                "settings: made {} equalizer output bindings into device rules; the bindings are dropped the next time settings are saved",
+                migrated.len()
+            );
+            self.equalizer_rules.extend(migrated);
+        }
+    }
+
+    /// Keeps the first rule for each device, drops rules for a profile that is not stored, and
+    /// puts the rule for every other device last.
+    fn settle_rules(&mut self) {
+        let mut seen = HashSet::new();
+        let profiles = &self.equalizer_profiles;
+        self.equalizer_rules.retain(|rule| {
+            if !seen.insert(rule.device.id().map(str::to_owned)) {
+                log::warn!(
+                    "settings: a device has two equalizer rules, keeping the first; the second is dropped the next time settings are saved"
+                );
+                return false;
+            }
+            let Sound::Profile(name) = &rule.sound else {
+                return true;
+            };
+            let stored = profiles.iter().any(|profile| profile.name == *name);
+            if !stored {
+                log::warn!(
+                    "settings: dropping an equalizer rule for {name:?}, which is no stored profile; it is gone the next time settings are saved"
+                );
+            }
+            stored
+        });
+        self.equalizer_rules
+            .sort_by_key(|rule| rule.device == RuleDevice::Other);
     }
 }
 
@@ -378,13 +452,19 @@ impl AppSettings {
             return true;
         }
         let name = self.free_profile_name(name, Some(index));
-        self.values.equalizer_profiles[index].name = name;
+        let values = &mut self.values;
+        let old = std::mem::replace(&mut values.equalizer_profiles[index].name, name.clone());
+        for rule in &mut values.equalizer_rules {
+            if rule.sound == Sound::Profile(old.clone()) {
+                rule.sound = Sound::Profile(name.clone());
+            }
+        }
         self.schedule_save(cx);
         true
     }
 
-    /// Removes profile `index`, unless it is the only one or no longer the profile named
-    /// `name`. When it was the one playing, its neighbour plays.
+    /// Removes profile `index` and the rules that play it, unless it is the only one or no
+    /// longer the profile named `name`. When it was the one playing, its neighbour plays.
     pub fn remove_equalizer_profile(&mut self, index: usize, name: &str, cx: &mut Context<Self>) {
         let values = &mut self.values;
         let named = values
@@ -395,6 +475,10 @@ impl AppSettings {
             return;
         }
         values.equalizer_profiles.remove(index);
+        if !name.is_empty() {
+            let gone = Sound::Profile(name.to_owned());
+            values.equalizer_rules.retain(|rule| rule.sound != gone);
+        }
         if index < values.equalizer_profile {
             values.equalizer_profile -= 1;
         }
@@ -425,52 +509,58 @@ impl AppSettings {
             .unwrap_or_else(|| name.to_owned())
     }
 
-    /// The profile that plays on output `id`: the one bound to it, else the one for other
-    /// outputs. `None` when neither is set, so the playing profile stays.
-    pub fn equalizer_profile_for_output(&self, id: &str) -> Option<usize> {
-        self.equalizer_profile_bound_to(id)
-            .or_else(|| self.equalizer_other_outputs())
-    }
-
-    /// The profile bound to output `id`, if one is.
-    pub fn equalizer_profile_bound_to(&self, id: &str) -> Option<usize> {
+    /// Where the stored profile named `name` sits. An empty name finds nothing, since presets
+    /// load into the unnamed profile rather than play it.
+    pub fn equalizer_profile_named(&self, name: &str) -> Option<usize> {
         self.values
             .equalizer_profiles
             .iter()
-            .position(|profile| profile.outputs.iter().any(|output| output.id == id))
+            .position(|profile| !name.is_empty() && profile.name == name)
     }
 
-    /// The profile that plays on outputs no profile names, if one does.
-    pub fn equalizer_other_outputs(&self) -> Option<usize> {
-        self.values
-            .equalizer_profiles
+    /// The device rules in the order they show, the rule for every other device last.
+    pub fn equalizer_rules(&self) -> &[DeviceRule] {
+        &self.values.equalizer_rules
+    }
+
+    /// The rule output `id` goes by: its own, else the one for every other device. `None` when
+    /// there is neither, so what plays stays.
+    pub fn equalizer_rule_for_output(&self, id: &str) -> Option<&DeviceRule> {
+        let rules = &self.values.equalizer_rules;
+        rules
             .iter()
-            .position(|profile| profile.other_outputs)
+            .find(|rule| rule.device.id() == Some(id))
+            .or_else(|| rules.iter().find(|rule| rule.device == RuleDevice::Other))
     }
 
-    /// Binds `output` to profile `index`, taking it from any other, or unbinds it with `None`.
-    pub fn bind_equalizer_output(
-        &mut self,
-        output: OutputId,
-        index: Option<usize>,
-        cx: &mut Context<Self>,
-    ) {
-        for profile in &mut self.values.equalizer_profiles {
-            profile.outputs.retain(|bound| bound.id != output.id);
-        }
-        if let Some(profile) = index.and_then(|index| self.values.equalizer_profiles.get_mut(index))
+    /// Adds `rule` in place of the rule its device had, else before the rule for every other
+    /// device, which stays last.
+    pub fn set_equalizer_rule(&mut self, rule: DeviceRule, cx: &mut Context<Self>) {
+        let rules = &mut self.values.equalizer_rules;
+        match rules
+            .iter_mut()
+            .find(|held| held.device.id() == rule.device.id())
         {
-            profile.outputs.push(output);
+            Some(held) => *held = rule,
+            None => {
+                let at = rules
+                    .iter()
+                    .position(|held| held.device == RuleDevice::Other)
+                    .unwrap_or(rules.len());
+                rules.insert(at, rule);
+            }
         }
         self.schedule_save(cx);
     }
 
-    /// Makes profile `index` the one for outputs no profile names, or none with `None`.
-    pub fn set_equalizer_other_outputs(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        for (at, profile) in self.values.equalizer_profiles.iter_mut().enumerate() {
-            profile.other_outputs = Some(at) == index;
+    /// Removes the rule for `device`, if it has one.
+    pub fn remove_equalizer_rule(&mut self, device: &RuleDevice, cx: &mut Context<Self>) {
+        let rules = &mut self.values.equalizer_rules;
+        let before = rules.len();
+        rules.retain(|rule| rule.device.id() != device.id());
+        if rules.len() < before {
+            self.schedule_save(cx);
         }
-        self.schedule_save(cx);
     }
 
     /// Stores `curve` as the profile that plays, keeping its name.
@@ -494,6 +584,54 @@ pub fn equalizer_profile_label(stored: &str) -> SharedString {
         true => i18n::t!("equalizer-profile-default"),
         false => SharedString::from(stored.to_owned()),
     }
+}
+
+/// The device rules as stored: every entry that reads as a rule, the rest dropped and logged,
+/// and anything but a list read as none.
+pub(super) fn read_rules<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<DeviceRule>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(items) = value else {
+        log::warn!(
+            "settings: equalizer_rules is not a list, starting with none; the stored value is replaced the next time settings are saved"
+        );
+        return Ok(Vec::new());
+    };
+    Ok(items
+        .into_iter()
+        .filter_map(|item| {
+            let rule = read_rule(&item);
+            if rule.is_none() {
+                log::warn!(
+                    "settings: dropping the equalizer rule {item}, which needs an output and a known preset or a profile name; it is gone the next time settings are saved"
+                );
+            }
+            rule
+        })
+        .collect())
+}
+
+/// Writes the device rules as `read_rules` reads them.
+pub(super) fn write_rules<S: Serializer>(
+    rules: &[DeviceRule],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(rules.iter().map(|rule| {
+        let output = match &rule.device {
+            RuleDevice::Output(output) => StoredDevice::Output(output),
+            RuleDevice::Other => StoredDevice::Other(OTHER_OUTPUTS),
+        };
+        let (preset, profile) = match &rule.sound {
+            Sound::Preset(preset) => (Some(preset.id()), None),
+            Sound::Profile(name) => (None, Some(name.as_str())),
+        };
+        StoredRule {
+            output,
+            preset,
+            profile,
+        }
+    }))
 }
 
 /// The band gains an older Sonora saved: a band that is not a number reads as 0 dB, so the
@@ -533,6 +671,24 @@ fn profile_field<T: DeserializeOwned>(
             );
         })
         .ok()
+}
+
+/// One stored device rule, or `None` when its output or its sound does not read.
+fn read_rule(item: &serde_json::Value) -> Option<DeviceRule> {
+    let device = match item.get("output")? {
+        serde_json::Value::String(word) if word == OTHER_OUTPUTS => RuleDevice::Other,
+        output => serde_json::from_value::<OutputId>(output.clone())
+            .ok()
+            .filter(|output| !output.id.is_empty())
+            .map(RuleDevice::Output)?,
+    };
+    let text = |key| item.get(key).and_then(serde_json::Value::as_str);
+    let sound = match (text("preset"), text("profile")) {
+        (Some(id), _) => Sound::Preset(Preset::ALL.into_iter().find(|preset| preset.id() == id)?),
+        (None, Some(name)) if !name.is_empty() => Sound::Profile(name.to_owned()),
+        _ => return None,
+    };
+    Some(DeviceRule { device, sound })
 }
 
 /// The profile index as stored: any number clamped at zero, and anything else as zero, so a

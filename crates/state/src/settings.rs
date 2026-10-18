@@ -34,6 +34,7 @@ use ui::{
 };
 
 use self::equalizer::Profile;
+use crate::equalizer::DeviceRule;
 use crate::pins::PinSort;
 use crate::queue::{Resume, gap_target};
 use crate::{Outcome, Repeat, Sonora, Toasts};
@@ -303,6 +304,13 @@ struct Values {
     equalizer_profiles: Vec<Profile>,
     #[serde(deserialize_with = "equalizer::read_index")]
     equalizer_profile: usize,
+    /// Which sound plays once the sound moves to a device, one rule per device, read leniently
+    /// like the profiles.
+    #[serde(
+        deserialize_with = "equalizer::read_rules",
+        serialize_with = "equalizer::write_rules"
+    )]
+    equalizer_rules: Vec<DeviceRule>,
     /// Whether the equalizer screen shows its advanced controls, off so a first look shows only
     /// the switch, the curve and the presets.
     equalizer_advanced: bool,
@@ -489,6 +497,7 @@ impl Default for Values {
             equalizer_bands: Vec::new(),
             equalizer_profiles: Vec::new(),
             equalizer_profile: 0,
+            equalizer_rules: Vec::new(),
             equalizer_advanced: false,
             sleep_timer: false,
             discord_presence: false,

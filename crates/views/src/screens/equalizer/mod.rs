@@ -1,6 +1,6 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Empty, Entity, FocusHandle, Focusable as _, Render,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Render,
     ScrollHandle, SharedString, StyleRefinement, Task, Window, div,
 };
 use i18n::t;
@@ -22,7 +22,6 @@ use rows::{Row, figure, measured};
 
 mod graph;
 mod meter;
-mod outputs;
 mod rows;
 mod transfer;
 
@@ -40,8 +39,8 @@ const SOUND_WIDTH: f32 = 2.2;
 const BLURB: f32 = 1.6;
 
 /// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
-/// and advanced mode adds a card each for the preamp, the filters, the per-output profiles
-/// and Equalizer APO text in and out.
+/// and advanced mode adds a card each for the preamp, the filters and Equalizer APO text in
+/// and out.
 pub(crate) struct EqualizerView {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -558,7 +557,6 @@ impl Render for EqualizerView {
         let room = Chrome::room(window, cx);
         let advanced = self.settings.read(cx).equalizer_advanced();
         let sound = self.sound(room, advanced, cx);
-        let routed = self.outputs.read(cx).binding_key().is_some();
 
         let view = cx.entity();
         let page = Scroller::new("equalizer-page", &self.scrollbar)
@@ -592,11 +590,6 @@ impl Render for EqualizerView {
                                     this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
                                 })),
                         )
-                        .when(routed, |this| {
-                            this.child(card(&view, "equalizer-devices", |this, _, cx| {
-                                this.outputs(cx).unwrap_or_else(|| Empty.into_any_element())
-                            }))
-                        })
                         .child(card(
                             &view,
                             "equalizer-transfer",
@@ -630,38 +623,6 @@ fn blurb(description: SharedString, action: Option<AnyElement>, cx: &App) -> Div
         .when_some(action, |this, action| {
             this.child(div().flex_none().child(action))
         })
-}
-
-/// One setting inside a card, laid out as on the settings page: a title over a muted detail on
-/// the left and its control on the right.
-fn entry(title: SharedString, detail: SharedString, action: impl IntoElement, cx: &App) -> Div {
-    let theme = cx.theme();
-    div()
-        .flex()
-        .flex_wrap()
-        .items_center()
-        .justify_between()
-        .gap_x_4()
-        .gap_y_2()
-        .py_3()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w(theme.metrics.cover * BLURB)
-                .gap_1()
-                .child(title)
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(theme.text(Text::Small))
-                        .text_color(theme.muted_foreground)
-                        .child(detail),
-                ),
-        )
-        .child(div().flex_none().child(action))
 }
 
 /// An advanced card that is built and laid out only while it is on screen, so scrolling the
