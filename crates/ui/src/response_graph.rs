@@ -621,14 +621,13 @@ fn paint_plot(
         }
     }
     line(&curve, CURVE_STROKE, stroke, window);
-    // The level's name goes over the curve on a plate, so a curve through it leaves it legible.
     if let Some((y, name)) = reference {
         text(
             name.clone(),
             point(bounds.left() + pad, y - theme.text(Text::Tiny) - pad),
             0.,
             label,
-            Some((theme.popover, theme.border)),
+            None,
             window,
             cx,
         );
