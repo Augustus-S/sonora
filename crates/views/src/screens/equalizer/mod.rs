@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Empty, Entity, FocusHandle, Focusable as _, FontWeight, Render,
-    ScrollHandle, SharedString, StyleRefinement, Task, Window, div, svg,
+    AnyElement, App, Context, Div, Empty, Entity, FocusHandle, Focusable as _, Render,
+    ScrollHandle, SharedString, StyleRefinement, Task, Window, div,
 };
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
@@ -20,9 +20,11 @@ use crate::shared::equalizer::sound_picker;
 use crate::shared::section::Section;
 
 use graph::{EqualizerGraph, Selected};
+use meter::OutputMeter;
 use rows::{Row, figure};
 
 mod graph;
+mod meter;
 mod outputs;
 mod path;
 mod rows;
@@ -30,8 +32,6 @@ mod transfer;
 
 const SOUND: &str = "equalizer-sound";
 const PREAMP: &str = "equalizer-preamp";
-/// Below this an overload rounds to no tenth of a decibel at all.
-const SLIGHT_OVERLOAD: f64 = 0.05;
 /// How wide a number field is, in cover sizes.
 const FIELD: f32 = 0.6;
 /// How wide the rename dialog is, in cover sizes.
@@ -42,9 +42,6 @@ const SOUND_WIDTH: f32 = 2.2;
 /// How narrow a card's description gets before the action beside it wraps underneath, in
 /// cover sizes.
 const BLURB: f32 = 1.6;
-/// How strongly the overload notice's border and fill take the danger color.
-const OVERLOAD_EDGE: f32 = 0.4;
-const OVERLOAD_FILL: f32 = 0.08;
 
 /// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
 /// and advanced mode adds a card each for the preamp, the filters, the per-output profiles,
@@ -68,6 +65,8 @@ pub(crate) struct EqualizerView {
     /// The curve the fields were last filled from, so they are only rewritten when it changes.
     shown: Option<Curve>,
     graph: Entity<EqualizerGraph>,
+    /// The level meter and clip warning under the graph, which redraw on their own.
+    meter: Entity<OutputMeter>,
     /// What the screen last drew from playback, the output and the signal path, so a notify
     /// from them that changed none of it draws nothing.
     drawn: Option<Drawn>,
@@ -82,16 +81,14 @@ pub(crate) struct EqualizerView {
 }
 
 /// What the screen shows from playback, the output and the signal path. Position ticks and
-/// meter reads that leave all of it as it was do not redraw the screen.
+/// meter reads that leave all of it as it was do not redraw the screen, and the level meter and
+/// clip warning redraw on their own.
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
     on: bool,
     history: (bool, bool),
     preamp: f64,
-    /// Whether the overload is too slight to round to a tenth, and its tenths as shown.
-    overload: Option<(bool, String)>,
-    fixable: bool,
     output: Option<BoundOutput>,
     port: Option<String>,
     path: Option<SignalPath>,
@@ -119,6 +116,7 @@ impl EqualizerView {
         let id = cx.entity_id();
         let preamp = cx.new(|cx| Input::new("", cx).compact());
         let rows = (0..MAX_FILTERS).map(|_| Row::new(cx)).collect();
+        let meter = cx.new(|cx| OutputMeter::new(playback.clone(), cx));
         let graph = cx.new(|cx| {
             EqualizerGraph::new(
                 playback.clone(),
@@ -188,6 +186,7 @@ impl EqualizerView {
             restore: None,
             shown: None,
             graph,
+            meter,
             drawn: None,
             cards,
             metering: None,
@@ -216,10 +215,6 @@ impl EqualizerView {
             on: playback.equalizer(),
             history: playback.equalizer_history(),
             preamp: playback.equalizer_preamp_db(),
-            overload: playback
-                .overload()
-                .map(|over| (over < SLIGHT_OVERLOAD, figure(over, 1))),
-            fixable: playback.equalizer() && playback.lowered_preamp().is_some(),
             output: outputs.output(),
             port: outputs.sink().and_then(|sink| sink.port.clone()),
             path: self
@@ -401,64 +396,9 @@ impl EqualizerView {
             .into_any_element()
     }
 
-    /// A slim notice of how far the output went over full scale lately, and the fix, while it
-    /// overloads. The fix is left out when the preamp is as low as it goes.
-    fn overload(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let playback = self.playback.read(cx);
-        let over = playback.overload()?;
-        let fixable = playback.equalizer() && playback.lowered_preamp().is_some();
-        let theme = *cx.theme();
-        let size = theme.text(Text::Small);
-        Some(
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_x_3()
-                .gap_y_2()
-                .px(theme.metrics.pad * 1.5)
-                .py(theme.metrics.pad)
-                .rounded(theme.radius)
-                .border_1()
-                .border_color(theme.danger.opacity(OVERLOAD_EDGE))
-                .bg(theme.danger.opacity(OVERLOAD_FILL))
-                .text_size(size)
-                .child(
-                    svg()
-                        .path(icons::path("icons/triangle-alert.svg"))
-                        .size(size)
-                        .flex_none()
-                        .text_color(theme.danger),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.danger)
-                        .child(match over < SLIGHT_OVERLOAD {
-                            true => t!("equalizer-overload-slight"),
-                            false => t!("equalizer-overload", db = figure(over, 1)),
-                        }),
-                )
-                .when(fixable, |this| {
-                    this.child(
-                        Button::new("equalizer-lower-preamp")
-                            .small()
-                            .outline()
-                            .label(t!("equalizer-lower-preamp"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.playback
-                                    .update(cx, |playback, cx| playback.lower_preamp(cx))
-                            })),
-                    )
-                })
-                .into_any_element(),
-        )
-    }
-
     /// The main card: the one picker for every preset and profile with undo and redo beside it,
-    /// then the response graph. Advanced mode adds what can be done to the playing profile.
+    /// then the response graph with the output meter under it. Advanced mode adds what can be
+    /// done to the playing profile.
     fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let graph = self.graph.clone().cached(
             StyleRefinement::default()
@@ -466,6 +406,11 @@ impl EqualizerView {
                 .h(graph::height(room, cx)),
         );
         let theme = *cx.theme();
+        let meter = self.meter.clone().cached(
+            StyleRefinement::default()
+                .w_full()
+                .h(theme.metrics.control_small),
+        );
         let wide = room.fits(Room::Wide);
         let on = self.playback.read(cx).equalizer();
         let only = self.settings.read(cx).equalizer_profiles().count() < 2;
@@ -557,6 +502,7 @@ impl EqualizerView {
                     .children(manage),
             )
             .child(graph)
+            .child(meter)
             .into_any_element()
     }
 
@@ -663,14 +609,7 @@ impl Render for EqualizerView {
                     .flex()
                     .flex_col()
                     .gap_6()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .child(self.header(advanced, cx))
-                            .children(self.overload(cx)),
-                    )
+                    .child(self.header(advanced, cx))
                     .child(sound)
                     .when(advanced, |this| {
                         this.child(

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
-use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Task};
 use music::equalizer::{Curve, Edit, EqualizerWriter, Preamp, Preset, apo};
 use music::{
     Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
@@ -85,7 +85,7 @@ impl QueuePlacement {
     }
 }
 
-use crate::overload::Overload;
+use crate::overload::{OutputLevel, Overload};
 use crate::queue::Queue;
 use serde::{Deserialize, Serialize};
 
@@ -447,6 +447,8 @@ pub struct Playback {
     /// Shared with every engine like the equalizer's reader, and read only while watched.
     meter: Meter,
     overload: Overload,
+    /// The output's level as the meter last read it, notified on its own.
+    output_level: Entity<OutputLevel>,
     /// Stores a glided curve in the settings once the edits pause.
     glide_store: Option<Task<()>>,
     history: History,
@@ -591,6 +593,7 @@ impl Playback {
             equalizer,
             meter: Meter::default(),
             overload: Overload::default(),
+            output_level: cx.new(|_| OutputLevel::default()),
             glide_store: None,
             history: History::default(),
             output: None,
@@ -2275,7 +2278,9 @@ impl Playback {
         self.equalizer.heard().clone()
     }
 
-    /// How many decibels over full scale the output went lately, while something watches.
+    /// How many decibels over full scale the clip warning says the output went, to a tenth,
+    /// while something watches. It changes at most about once a second, and playback notifies
+    /// only when it does.
     pub fn overload(&self) -> Option<f64> {
         self.overload.db()
     }
@@ -2286,11 +2291,18 @@ impl Playback {
         self.overload.lowered(self.equalizer.preamp_db())
     }
 
+    /// The output's recent level. It notifies on its own about ten times a second while the
+    /// meter is watched, so a level meter observes it rather than playback.
+    pub fn output_level(&self) -> Entity<OutputLevel> {
+        self.output_level.clone()
+    }
+
     /// Reads the output meter for as long as the returned task is held,
     /// starting from no overload.
     pub fn watch_overload(&mut self, cx: &mut Context<Self>) -> Task<()> {
         self.overload = Overload::default();
         self.meter.take();
+        self.output_level.update(cx, |level, cx| level.reset(cx));
         cx.notify();
         cx.spawn(async move |this, cx| {
             loop {
@@ -2313,9 +2325,13 @@ impl Playback {
         }
     }
 
+    /// Reads the meter once, feeding the level meter and the clip warning, and notifies only
+    /// when the warning changed.
     fn read_meter(&mut self, cx: &mut Context<Self>) {
-        let changed = self.overload.observe(self.meter.take(), Instant::now());
-        if changed {
+        let (peak, now) = (self.meter.take(), Instant::now());
+        self.output_level
+            .update(cx, |level, cx| level.observe(peak, now, cx));
+        if self.overload.observe(peak, now) {
             cx.notify();
         }
     }

@@ -848,6 +848,7 @@ equalizer-overload = Clipping by { $db } dB
 equalizer-overload-slight = Clipping by under 0.1 dB
 equalizer-graph-preamp = Preamp { $db } dB
 equalizer-lower-preamp = Lower preamp
+equalizer-level = Level
 settings-panel-lyrics-size = Lyrics size (panel)
 settings-panel-lyrics-size-detail = Size of the lyrics text in the side panel, on top of the base font size
 settings-fullscreen-lyrics-size = Lyrics size (fullscreen)
