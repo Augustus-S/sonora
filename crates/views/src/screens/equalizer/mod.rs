@@ -487,24 +487,13 @@ impl EqualizerView {
                     .on_click(cx.listener(move |this, _, _, cx| this.set_preamp(choice, cx)))
             }),
         );
-        // The automatic level reads beside the picker, in the room the manual field and its unit
-        // take, so switching modes moves nothing.
         let value = match auto {
             true => div()
-                .flex()
-                .items_center()
-                .gap_1()
+                .flex_none()
+                .whitespace_nowrap()
                 .text_size(theme.text(Text::Small))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(theme.metrics.cover * FIELD)
-                        .pl_3()
-                        .whitespace_nowrap()
-                        .text_color(theme.muted_foreground)
-                        .child(t!("equalizer-decibels-value", db = figure(resolved, 1))),
-                )
-                .child(div().invisible().child(t!("equalizer-decibels")))
+                .text_color(theme.muted_foreground)
+                .child(t!("equalizer-decibels-value", db = figure(resolved, 1)))
                 .into_any_element(),
             false => measured(self.preamp.clone(), t!("equalizer-decibels"), cx),
         };
