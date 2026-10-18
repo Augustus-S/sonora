@@ -4,9 +4,10 @@
 //! picked in settings is asked for instead, where the stream's rate reaches the hardware.
 //!
 //! On Windows the default config is the shared-mode engine's mix format, and the engine
-//! invalidates a stream whose format changes, which fails it. On macOS the default config's rate
-//! is the hardware's nominal rate, and cpal reports a change of it on an open stream as an error,
-//! which fails the stream too. Neither has to be watched.
+//! invalidates a stream whose format changes, which fails it, so it is not watched. On macOS the
+//! default config's rate is the hardware's nominal rate. cpal reports a change of it as an error
+//! on a stream opened on a named device, but not on one that follows the system default, so the
+//! rate is watched there.
 //!
 //! On Linux a sound server's default config is the rate it runs the device at. PipeWire only
 //! moves its graph to a stream's rate when the stream sets `node.rate`, which cpal sets from 0.19
@@ -15,7 +16,7 @@
 //! included, and ALSA open at the picked rate.
 
 use cpal::SupportedStreamConfig;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use cpal::traits::DeviceTrait as _;
 
 #[cfg(target_os = "linux")]
@@ -105,9 +106,18 @@ pub(crate) fn moved(device: &cpal::Device, rate: u32, wanted: Option<u32>) -> bo
         .is_ok_and(|default| config(device, default, wanted).sample_rate() != rate)
 }
 
+/// Whether `device` now runs at another rate than `rate`, the one its stream runs at. CoreAudio
+/// converts a stream that follows the system default rather than fail it.
+#[cfg(target_os = "macos")]
+pub(crate) fn moved(device: &cpal::Device, rate: u32, _wanted: Option<u32>) -> bool {
+    device
+        .default_output_config()
+        .is_ok_and(|default| default.sample_rate() != rate)
+}
+
 /// Whether `device` would now open at another rate than `rate`, where the platform would convert
-/// the stream rather than fail it. None does off Linux.
-#[cfg(not(target_os = "linux"))]
+/// the stream rather than fail it. WASAPI fails it instead.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn moved(_device: &cpal::Device, _rate: u32, _wanted: Option<u32>) -> bool {
     false
 }
