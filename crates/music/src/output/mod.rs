@@ -106,6 +106,17 @@ pub struct OutputId {
     pub name: String,
 }
 
+/// One port of a sound server's sink, as the equalizer's device rules offer it. It is keyed
+/// the way `Sink::id` keys the sink that plays, so a rule made for it matches once it plays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerOutput {
+    pub output: OutputId,
+    /// The port's own name, when its sink has more than one.
+    pub port: Option<String>,
+    /// Whether something is plugged into it. Only false when the server knows it is not.
+    pub available: bool,
+}
+
 /// The sink a sound server plays Sonora's stream on, as the server names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sink {
@@ -794,11 +805,17 @@ pub fn failing() -> bool {
 #[cfg(target_os = "linux")]
 pub use output_alsa::missing_bridge;
 #[cfg(target_os = "linux")]
-pub use output_server::follow;
+pub use output_server::{follow, server_outputs};
 
 #[cfg(not(target_os = "linux"))]
 pub fn missing_bridge() -> Option<Server> {
     None
+}
+
+/// Every port of every sink the sound server offers. There is no sound server to ask here.
+#[cfg(not(target_os = "linux"))]
+pub async fn server_outputs() -> Result<Vec<ServerOutput>> {
+    Ok(Vec::new())
 }
 
 /// Forgets the failures of devices that have left the system, so one that comes back is tried

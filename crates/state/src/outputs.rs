@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gpui::{App, Context, Entity, Task};
-use music::output::{self, DeviceInfo, DeviceOption, Failure, Opened, OutputId, Sink};
+use music::output::{
+    self, DeviceInfo, DeviceOption, Failure, Opened, OutputId, ServerOutput, Sink,
+};
 
 use crate::{AppSettings, Io, Outcome, Playback, Toasts, join};
 
@@ -53,6 +55,10 @@ pub struct Outputs {
     /// The picked device's stream, kept open until the engines have joined it.
     handover: Option<(Opened, Task<()>)>,
     listing: Option<Task<()>>,
+    /// Every port of every sink the sound server offers, read with `devices`. Empty where no
+    /// server answers.
+    server_outputs: Vec<ServerOutput>,
+    server_listing: Option<Task<()>>,
     /// The sink the sound server last played Sonora on. It names the output while Sonora plays on
     /// the device it was seen with, so the server going away and back is not a move.
     sink: Option<Sink>,
@@ -114,6 +120,8 @@ impl Outputs {
             holding: None,
             handover: None,
             listing: None,
+            server_outputs: Vec::new(),
+            server_listing: None,
             sink: None,
             settled: None,
             #[cfg(target_os = "linux")]
@@ -128,6 +136,12 @@ impl Outputs {
 
     pub fn devices(&self) -> &[DeviceOption] {
         &self.devices
+    }
+
+    /// Every port of every sink the sound server offers, keyed as `binding_key` keys the one that
+    /// plays. Empty where no server answers.
+    pub fn server_outputs(&self) -> &[ServerOutput] {
+        &self.server_outputs
     }
 
     /// Whether the system's devices have been read yet.
@@ -412,10 +426,29 @@ impl Outputs {
         self.follow_output(cx);
     }
 
-    /// Reads the system's devices again, as when a settings page comes into view. A saved device
-    /// that can never be found again, such as an ALSA device saved before a sound server played,
-    /// is forgotten here, and the system's default plays in its place.
+    /// Reads the system's devices and the sound server's outputs again, as when a settings page
+    /// comes into view. A saved device that can never be found again, such as an ALSA device
+    /// saved before a sound server played, is forgotten here, and the system's default plays in
+    /// its place.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let asked = Io::global(cx).spawn(output::server_outputs());
+        self.server_listing = Some(cx.spawn(async move |this, cx| {
+            let outputs = match join(asked).await {
+                Ok(outputs) => outputs,
+                Err(error) => {
+                    log::debug!("outputs: cannot list the sound server's outputs: {error:#}");
+                    Vec::new()
+                }
+            };
+            this.update(cx, |this, cx| {
+                this.server_listing = None;
+                if this.server_outputs != outputs {
+                    this.server_outputs = outputs;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
         let selected = self.selected.clone();
         let listed = cx.background_executor().spawn(async move {
             let retired = selected.filter(|id| output::retired(id));

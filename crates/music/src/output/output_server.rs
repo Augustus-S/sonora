@@ -1,21 +1,22 @@
-//! The sink Sonora plays on, read from PipeWire or PulseAudio over the PulseAudio native
-//! protocol, which `pipewire-pulse` speaks too. One socket carries the queries and the change
-//! events.
+//! The sink Sonora plays on and the sinks on offer, read from PipeWire or PulseAudio over the
+//! PulseAudio native protocol, which `pipewire-pulse` speaks too. One socket carries the queries
+//! and the change events.
 
 use std::io::Cursor;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
+use pulseaudio::protocol::port_info::{PortAvailable, PortInfo};
 use pulseaudio::protocol::{
     self, AuthParams, AuthReply, ClientInfoList, Command, CommandReply, GetSinkInfo, Prop, Props,
-    SampleFormat, ServerInfo, SetClientNameReply, SinkInfo, SinkInputInfoList, SubscriptionEvent,
-    SubscriptionEventFacility, SubscriptionEventType, SubscriptionMask,
+    SampleFormat, ServerInfo, SetClientNameReply, SinkInfo, SinkInfoList, SinkInputInfoList,
+    SubscriptionEvent, SubscriptionEventFacility, SubscriptionEventType, SubscriptionMask,
 };
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixStream;
 use tokio::sync::watch;
 
-use super::{Format, Sample, Sink};
+use super::{Format, OutputId, Sample, ServerOutput, Sink};
 
 /// How long the events of one change are let pass before the server is asked again. A new
 /// stream shows on the default sink for a few milliseconds, until the server links it
@@ -61,6 +62,14 @@ pub async fn follow(mut report: impl FnMut(Option<Sink>) + Send) -> Result<()> {
         connection.wait_for_change(&mut streams).await?;
         tokio::time::sleep(SETTLE).await;
     }
+}
+
+/// Every port of every sink the server offers, each keyed as `follow` keys the sink that plays,
+/// asked on a connection of its own. Run it on tokio.
+pub async fn server_outputs() -> Result<Vec<ServerOutput>> {
+    let mut connection = Connection::open().await?;
+    let sinks: SinkInfoList = connection.request(&Command::GetSinkInfoList).await?;
+    Ok(sinks.iter().flat_map(sink_outputs).collect())
 }
 
 impl Connection {
@@ -250,22 +259,10 @@ impl Connection {
 /// What the server says about a sink, keyed by its name and the port that plays, for Sonora's
 /// stream on `device`.
 fn of(sink: &SinkInfo, device: Option<String>) -> Sink {
-    let sink_name = sink.name.to_string_lossy();
     let port = sink.ports.get(sink.active_port);
-    let id = match port {
-        Some(port) => format!("{sink_name}#{}", port.name.to_string_lossy()),
-        None => sink_name.to_string(),
-    };
-    let name = sink
-        .description
-        .as_ref()
-        .map_or(sink_name.to_string(), |name| {
-            name.to_string_lossy().into_owned()
-        });
-    let port = port
-        .filter(|_| sink.ports.len() > 1)
-        .map(|port| port.description.as_ref().unwrap_or(&port.name))
-        .map(|port| port.to_string_lossy().into_owned());
+    let id = sink_id(sink, port);
+    let name = sink_name(sink);
+    let port = port_name(sink, port);
     let spec = sink.sample_spec;
     let sample = match spec.format {
         SampleFormat::U8 => Sample::Integer(8),
@@ -290,6 +287,48 @@ fn of(sink: &SinkInfo, device: Option<String>) -> Sink {
         format,
         device,
     }
+}
+
+/// Each port of `sink` as an output of its own, or the sink alone when it has no ports.
+fn sink_outputs(sink: &SinkInfo) -> Vec<ServerOutput> {
+    let output = |port: Option<&PortInfo>| ServerOutput {
+        output: OutputId {
+            id: sink_id(sink, port),
+            name: sink_name(sink),
+        },
+        port: port_name(sink, port),
+        available: port.is_none_or(|port| port.available != PortAvailable::No),
+    };
+    match sink.ports.is_empty() {
+        true => vec![output(None)],
+        false => sink.ports.iter().map(|port| output(Some(port))).collect(),
+    }
+}
+
+/// A sink's key while `port` plays: its name and the port's, so each port is an output of its
+/// own.
+fn sink_id(sink: &SinkInfo, port: Option<&PortInfo>) -> String {
+    let sink_name = sink.name.to_string_lossy();
+    match port {
+        Some(port) => format!("{sink_name}#{}", port.name.to_string_lossy()),
+        None => sink_name.into_owned(),
+    }
+}
+
+/// What the user knows a sink as: its description, else its name.
+fn sink_name(sink: &SinkInfo) -> String {
+    sink.description
+        .as_ref()
+        .unwrap_or(&sink.name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// What the user knows `port` as, only when its sink has more than one.
+fn port_name(sink: &SinkInfo, port: Option<&PortInfo>) -> Option<String> {
+    port.filter(|_| sink.ports.len() > 1)
+        .map(|port| port.description.as_ref().unwrap_or(&port.name))
+        .map(|port| port.to_string_lossy().into_owned())
 }
 
 /// The names a client of this process goes by, as its binary or application name, nul
