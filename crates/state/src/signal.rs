@@ -10,7 +10,7 @@ use gpui::{Context, Entity, Task};
 use music::output::{DeviceInfo, Sample, Sink};
 use music::{Level, Normalisation, TrackSignal};
 
-use crate::{Outputs, Playback, PlaybackState};
+use crate::{Equalizer, Outputs, Playback, PlaybackState};
 
 /// How often the spectrum is read while watched. The analysis moves on every eighth of its
 /// window, about 43 ms at 48 kHz, so this is as often as anything new can be drawn.
@@ -24,6 +24,7 @@ const FLOAT_BITS: u8 = 24;
 pub struct Signal {
     playback: Entity<Playback>,
     outputs: Entity<Outputs>,
+    equalizer: Entity<Equalizer>,
     /// The latest levels, `None` while nothing is loaded or before a window has filled.
     levels: Option<Vec<Level>>,
     path: Option<SignalPath>,
@@ -144,10 +145,15 @@ impl SignalPath {
 }
 
 impl Signal {
-    pub fn new(playback: Entity<Playback>, outputs: Entity<Outputs>) -> Self {
+    pub fn new(
+        playback: Entity<Playback>,
+        outputs: Entity<Outputs>,
+        equalizer: Entity<Equalizer>,
+    ) -> Self {
         Self {
             playback,
             outputs,
+            equalizer,
             levels: None,
             path: None,
         }
@@ -174,13 +180,14 @@ impl Signal {
     fn read_path(&mut self, cx: &mut Context<Self>) {
         let playback = self.playback.read(cx);
         let outputs = self.outputs.read(cx);
+        let eq = self.equalizer.read(cx);
         let path = playback.route().map(|(route, id)| {
             let stream = outputs.current().cloned();
-            let equalizer = playback.equalizer().then(|| Equalizing {
-                preamp_db: playback.equalizer_preamp_db(),
+            let equalizer = eq.enabled().then(|| Equalizing {
+                preamp_db: eq.preamp_db(),
                 passes_through: stream
                     .as_ref()
-                    .is_some_and(|stream| playback.equalizer_curve().passes_through(stream.rate)),
+                    .is_some_and(|stream| eq.curve().passes_through(stream.rate)),
             });
             SignalPath {
                 track: route.track(&id),
@@ -205,7 +212,7 @@ impl Signal {
     /// Analyses the music ahead of the equalizer for as long as the returned task is held. The
     /// analysis starts afresh, and stops with the task.
     pub fn watch(&mut self, cx: &mut Context<Self>) -> Task<()> {
-        let watch = Arc::new(self.playback.read(cx).equalizer_heard().watch());
+        let watch = Arc::new(self.equalizer.read(cx).heard().watch());
         self.levels = None;
         cx.notify();
         cx.spawn(async move |this, cx| {

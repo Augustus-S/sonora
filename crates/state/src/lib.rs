@@ -4,6 +4,7 @@ mod cover;
 mod detail;
 mod discord;
 mod drm;
+mod equalizer;
 mod genre;
 mod history;
 mod home;
@@ -41,6 +42,7 @@ pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
 pub use drm::{CdmState, Drm};
+pub use equalizer::Equalizer;
 pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
@@ -175,6 +177,7 @@ pub struct Sonora {
     pub session: Entity<Session>,
     pub cover: Entity<Cover>,
     pub drm: Entity<Drm>,
+    pub equalizer: Entity<Equalizer>,
     pub library: Entity<Library>,
     pub history: Entity<History>,
     pub lyrics: Entity<Lyrics>,
@@ -242,8 +245,20 @@ pub fn init(
     let queue = cx.new(|cx| Queue::new(session.clone(), settings.clone(), cx));
     // Playback starts no engine until a provider is up, so the saved device is handed over
     // before any stream opens.
-    let playback = cx.new(|cx| Playback::new(session.clone(), queue.clone(), settings.clone(), cx));
+    let equalizer = cx.new(|cx| Equalizer::new(settings.clone(), cx));
+    let playback = cx.new(|cx| {
+        Playback::new(
+            session.clone(),
+            queue.clone(),
+            settings.clone(),
+            &equalizer,
+            cx,
+        )
+    });
     let outputs = cx.new(|cx| Outputs::new(settings.clone(), playback.clone(), cx));
+    equalizer.update(cx, |equalizer, cx| {
+        equalizer.follow(&playback, &outputs, cx)
+    });
     let history = cx.new(|cx| {
         History::new(
             session.clone(),
@@ -289,7 +304,7 @@ pub fn init(
     let usage = cx.new(|cx| Usage::new(session.clone(), database, io.clone(), cx));
     let pins = cx.new(|cx| Pins::new(settings.clone(), library.clone(), session.clone(), cx));
     let potoken = potoken::attach(cx);
-    let signal = cx.new(|_| Signal::new(playback.clone(), outputs.clone()));
+    let signal = cx.new(|_| Signal::new(playback.clone(), outputs.clone(), equalizer.clone()));
     let wake = cx.new(|cx| Wake::new(settings.clone(), playback.clone(), io.clone(), cx));
     discord::attach(
         playback.clone(),
@@ -304,6 +319,7 @@ pub fn init(
         session,
         cover,
         drm,
+        equalizer,
         library,
         history,
         lyrics,

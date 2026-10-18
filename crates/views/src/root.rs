@@ -190,7 +190,8 @@ impl Root {
 
         let settings = cx.new(|cx| SettingsView::new(session.clone(), playback.clone(), cx));
         let settings_header = cx.new(|cx| SettingsHeader::new(settings.clone(), cx));
-        let equalizer = cx.new(|cx| EqualizerView::new(playback.clone(), window, cx));
+        let equalizer = Sonora::global(cx).equalizer.clone();
+        let equalizer = cx.new(|cx| EqualizerView::new(equalizer, window, cx));
 
         let song_detail = cx.new(|cx| SongDetail::new(session.clone(), io.clone(), cx));
         let song = cx.new(|cx| SongView::new(song_detail.clone(), playback.clone(), cx));

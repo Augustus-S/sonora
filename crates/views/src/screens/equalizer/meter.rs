@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{Context, Entity, FontWeight, Render, Window, div, svg};
 use i18n::t;
-use state::{OutputLevel, Playback};
+use state::{Equalizer, OutputLevel};
 use ui::{ActiveTheme as _, Button, LevelMeter, Text};
 
 use super::rows::figure;
@@ -15,9 +15,9 @@ const METER_WIDTH: f32 = 1.2;
 /// the output overloads. The screen places it as a cached view at a fixed height, so the
 /// meter's reads and the warning coming and going redraw only the strip and never move the page.
 pub(super) struct OutputMeter {
-    playback: Entity<Playback>,
+    equalizer: Entity<Equalizer>,
     level: Entity<OutputLevel>,
-    /// The warning as last drawn, so a playback notify that left it as it was draws nothing.
+    /// The warning as last drawn, so an equalizer notify that left it as it was draws nothing.
     warning: Option<Warning>,
 }
 
@@ -30,10 +30,10 @@ struct Warning {
 }
 
 impl OutputMeter {
-    pub(super) fn new(playback: Entity<Playback>, cx: &mut Context<Self>) -> Self {
-        let level = playback.read(cx).output_level();
+    pub(super) fn new(equalizer: Entity<Equalizer>, cx: &mut Context<Self>) -> Self {
+        let level = equalizer.read(cx).output_level();
         cx.observe(&level, |_, _, cx| cx.notify()).detach();
-        cx.observe(&playback, |this, _, cx| {
+        cx.observe(&equalizer, |this, _, cx| {
             let warning = this.warning(cx);
             if warning != this.warning {
                 this.warning = warning;
@@ -42,7 +42,7 @@ impl OutputMeter {
         })
         .detach();
         let mut meter = Self {
-            playback,
+            equalizer,
             level,
             warning: None,
         };
@@ -50,13 +50,13 @@ impl OutputMeter {
         meter
     }
 
-    /// The warning playback asks for right now, with the fix left out when the equalizer is off
-    /// or the preamp is as low as it goes.
+    /// The warning the equalizer asks for right now, with the fix left out when it is off or
+    /// the preamp is as low as it goes.
     fn warning(&self, cx: &Context<Self>) -> Option<Warning> {
-        let playback = self.playback.read(cx);
+        let equalizer = self.equalizer.read(cx);
         Some(Warning {
-            db: playback.overload()?,
-            fixable: playback.equalizer() && playback.lowered_preamp().is_some(),
+            db: equalizer.overload()?,
+            fixable: equalizer.enabled() && equalizer.lowered_preamp().is_some(),
         })
     }
 }
@@ -112,8 +112,8 @@ impl Render for OutputMeter {
                             .flex_none()
                             .label(t!("equalizer-lower-preamp"))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.playback
-                                    .update(cx, |playback, cx| playback.lower_preamp(cx))
+                                this.equalizer
+                                    .update(cx, |equalizer, cx| equalizer.lower_preamp(cx))
                             })),
                     )
                 })

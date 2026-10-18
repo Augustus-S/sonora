@@ -58,9 +58,8 @@ impl EqualizerView {
             others,
             t!("equalizer-output-keep"),
             |this, index, cx| {
-                this.playback.update(cx, |playback, cx| {
-                    playback.set_equalizer_other_outputs(index, cx)
-                })
+                this.equalizer
+                    .update(cx, |equalizer, cx| equalizer.set_other_outputs(index, cx))
             },
             cx,
         ));
@@ -113,9 +112,8 @@ impl EqualizerView {
     }
 
     fn bind(&mut self, output: &BoundOutput, index: Option<usize>, cx: &mut Context<Self>) {
-        self.playback.update(cx, |playback, cx| {
-            playback.bind_equalizer_output(output, index, cx)
-        });
+        self.equalizer
+            .update(cx, |equalizer, cx| equalizer.bind_output(output, index, cx));
     }
 }
 

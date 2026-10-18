@@ -6,7 +6,7 @@ use gpui::{
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp};
 use state::{
-    AppSettings, BoundOutput, Outputs, Playback, Signal, SignalPath, Sonora,
+    AppSettings, BoundOutput, Equalizer, Outputs, Signal, SignalPath, Sonora,
     equalizer_profile_label,
 };
 use ui::{
@@ -47,7 +47,7 @@ const BLURB: f32 = 1.6;
 /// and advanced mode adds a card each for the preamp, the filters, the per-output profiles,
 /// Equalizer APO text in and out, and the signal path.
 pub(crate) struct EqualizerView {
-    playback: Entity<Playback>,
+    equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
     signal: Entity<Signal>,
     outputs: Entity<Outputs>,
@@ -67,7 +67,7 @@ pub(crate) struct EqualizerView {
     graph: Entity<EqualizerGraph>,
     /// The level meter and clip warning under the graph, which redraw on their own.
     meter: Entity<OutputMeter>,
-    /// What the screen last drew from playback, the output and the signal path, so a notify
+    /// What the screen last drew from the equalizer, the output and the signal path, so a notify
     /// from them that changed none of it draws nothing.
     drawn: Option<Drawn>,
     cards: Cards,
@@ -80,7 +80,7 @@ pub(crate) struct EqualizerView {
     file: Option<Task<()>>,
 }
 
-/// What the screen shows from playback, the output and the signal path. Position ticks and
+/// What the screen shows from the equalizer, the output and the signal path. Position ticks and
 /// meter reads that leave all of it as it was do not redraw the screen, and the level meter and
 /// clip warning redraw on their own.
 #[derive(PartialEq)]
@@ -106,7 +106,7 @@ struct Cards {
 
 impl EqualizerView {
     pub(crate) fn new(
-        playback: Entity<Playback>,
+        equalizer: Entity<Equalizer>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -116,10 +116,10 @@ impl EqualizerView {
         let id = cx.entity_id();
         let preamp = cx.new(|cx| Input::new("", cx).compact());
         let rows = (0..MAX_FILTERS).map(|_| Row::new(cx)).collect();
-        let meter = cx.new(|cx| OutputMeter::new(playback.clone(), cx));
+        let meter = cx.new(|cx| OutputMeter::new(equalizer.clone(), cx));
         let graph = cx.new(|cx| {
             EqualizerGraph::new(
-                playback.clone(),
+                equalizer.clone(),
                 settings.clone(),
                 outputs.clone(),
                 signal.clone(),
@@ -127,7 +127,7 @@ impl EqualizerView {
             )
         });
 
-        cx.observe(&playback, |this, _, cx| {
+        cx.observe(&equalizer, |this, _, cx| {
             this.show_curve(cx);
             this.redraw(cx);
         })
@@ -172,7 +172,7 @@ impl EqualizerView {
         };
 
         let mut view = Self {
-            playback,
+            equalizer,
             settings,
             signal,
             outputs,
@@ -206,15 +206,15 @@ impl EqualizerView {
         view
     }
 
-    /// What the screen shows from playback, the output and the open signal path right now.
+    /// What the screen shows from the equalizer, the output and the open signal path right now.
     fn drawing(&self, cx: &App) -> Drawn {
-        let playback = self.playback.read(cx);
+        let equalizer = self.equalizer.read(cx);
         let outputs = self.outputs.read(cx);
         Drawn {
-            curve: playback.equalizer_curve().clone(),
-            on: playback.equalizer(),
-            history: playback.equalizer_history(),
-            preamp: playback.equalizer_preamp_db(),
+            curve: equalizer.curve().clone(),
+            on: equalizer.enabled(),
+            history: equalizer.history(),
+            preamp: equalizer.preamp_db(),
             output: outputs.output(),
             port: outputs.sink().and_then(|sink| sink.port.clone()),
             path: self
@@ -224,8 +224,8 @@ impl EqualizerView {
         }
     }
 
-    /// Redraws the screen when anything it shows from playback, the output or the signal path
-    /// changed since it last drew.
+    /// Redraws the screen when anything it shows from the equalizer, the output or the signal
+    /// path changed since it last drew.
     fn redraw(&mut self, cx: &mut Context<Self>) {
         let drawn = self.drawing(cx);
         if self.drawn.as_ref() != Some(&drawn) {
@@ -240,8 +240,8 @@ impl EqualizerView {
         if visible != self.metering.is_some() {
             self.metering = visible.then(|| {
                 [
-                    self.playback
-                        .update(cx, |playback, cx| playback.watch_overload(cx)),
+                    self.equalizer
+                        .update(cx, |equalizer, cx| equalizer.watch_overload(cx)),
                     self.signal.update(cx, |signal, cx| signal.watch(cx)),
                 ]
             });
@@ -260,7 +260,7 @@ impl EqualizerView {
         let Some(curve) = self.shown.clone() else {
             return;
         };
-        let preamp = self.playback.read(cx).equalizer_preamp_db();
+        let preamp = self.equalizer.read(cx).preamp_db();
         if auto == (curve.preamp() == Preamp::Auto) {
             return;
         }
@@ -281,18 +281,16 @@ impl EqualizerView {
         let count = self.settings.read(cx).equalizer_profiles().count();
         let name = t!("equalizer-profile-new", number = count + 1);
         let curve = Curve::new(Preamp::Auto, Vec::new()).expect("an empty curve is valid");
-        self.playback.update(cx, |playback, cx| {
-            playback.add_equalizer_profile(&name, curve, cx)
-        });
+        self.equalizer
+            .update(cx, |equalizer, cx| equalizer.add_profile(&name, curve, cx));
     }
 
     fn duplicate_profile(&mut self, cx: &mut Context<Self>) {
         let current = equalizer_profile_label(self.settings.read(cx).equalizer_profile_name());
         let name = t!("equalizer-profile-copy", name = &current);
-        let curve = self.playback.read(cx).equalizer_curve().clone();
-        self.playback.update(cx, |playback, cx| {
-            playback.add_equalizer_profile(&name, curve, cx)
-        });
+        let curve = self.equalizer.read(cx).curve().clone();
+        self.equalizer
+            .update(cx, |equalizer, cx| equalizer.add_profile(&name, curve, cx));
     }
 
     /// Opens the rename dialog on the playing profile, filled with the name it shows.
@@ -340,12 +338,12 @@ impl EqualizerView {
         let settings = self.settings.read(cx);
         let index = settings.equalizer_profile();
         let name = settings.equalizer_profile_name().to_owned();
-        let playback = self.playback.clone();
+        let equalizer = self.equalizer.clone();
         Confirm::ask(
             confirm::Kind::EqualizerProfile(name.clone().into()),
             move |cx| {
-                playback.update(cx, |playback, cx| {
-                    playback.remove_equalizer_profile(index, &name, cx)
+                equalizer.update(cx, |equalizer, cx| {
+                    equalizer.remove_profile(index, &name, cx)
                 })
             },
             cx,
@@ -412,12 +410,12 @@ impl EqualizerView {
                 .h(theme.metrics.control_small),
         );
         let wide = room.fits(Room::Wide);
-        let on = self.playback.read(cx).equalizer();
+        let on = self.equalizer.read(cx).enabled();
         let only = self.settings.read(cx).equalizer_profiles().count() < 2;
-        let (undo, redo) = self.playback.read(cx).equalizer_history();
+        let (undo, redo) = self.equalizer.read(cx).history();
         let width = theme.metrics.cover * SOUND_WIDTH;
 
-        let picker = sound_picker(SOUND, &self.popovers, &self.playback, &self.settings, cx)
+        let picker = sound_picker(SOUND, &self.popovers, &self.equalizer, &self.settings, cx)
             .large()
             .left()
             .width(width)
@@ -436,16 +434,16 @@ impl EqualizerView {
                 action("equalizer-undo", "icons/undo-2.svg", "equalizer-undo")
                     .disabled(!undo)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.playback
-                            .update(cx, |playback, cx| playback.undo_equalizer(cx))
+                        this.equalizer
+                            .update(cx, |equalizer, cx| equalizer.undo(cx))
                     })),
             )
             .child(
                 action("equalizer-redo", "icons/redo-2.svg", "equalizer-redo")
                     .disabled(!redo)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.playback
-                            .update(cx, |playback, cx| playback.redo_equalizer(cx))
+                        this.equalizer
+                            .update(cx, |equalizer, cx| equalizer.redo(cx))
                     })),
             );
         let manage = advanced.then(|| {
@@ -510,9 +508,9 @@ impl EqualizerView {
     /// level.
     fn preamp_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let curve = self.playback.read(cx).equalizer_curve();
+        let curve = self.equalizer.read(cx).curve();
         let auto = curve.preamp() == Preamp::Auto;
-        let resolved = self.playback.read(cx).equalizer_preamp_db();
+        let resolved = self.equalizer.read(cx).preamp_db();
         let mode = Picker::new(
             PREAMP,
             &self.popovers,

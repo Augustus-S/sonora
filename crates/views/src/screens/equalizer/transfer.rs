@@ -19,8 +19,8 @@ impl EqualizerView {
     /// lines it left out.
     fn import(&mut self, name: &str, text: &str, cx: &mut Context<Self>) {
         let result = self
-            .playback
-            .update(cx, |playback, cx| playback.import_equalizer(name, text, cx));
+            .equalizer
+            .update(cx, |equalizer, cx| equalizer.import(name, text, cx));
         // The new profile plays, under the name the settings made unique.
         let name = equalizer_profile_label(self.settings.read(cx).equalizer_profile_name());
         let toast = match result {
@@ -107,13 +107,13 @@ impl EqualizerView {
     }
 
     fn copy(&mut self, cx: &mut Context<Self>) {
-        let text = self.playback.read(cx).export_equalizer();
+        let text = self.equalizer.read(cx).export();
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         Toasts::show(Outcome::Done, "equalizer-copied", cx);
     }
 
     fn export_file(&mut self, cx: &mut Context<Self>) {
-        let text = self.playback.read(cx).export_equalizer();
+        let text = self.equalizer.read(cx).export();
         let name = equalizer_profile_label(self.settings.read(cx).equalizer_profile_name())
             .replace(['/', '\\', ':'], "-");
         let directory = dirs::document_dir()

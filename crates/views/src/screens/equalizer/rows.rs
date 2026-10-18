@@ -103,7 +103,7 @@ impl EqualizerView {
     /// Fills every field whose text differs from the playing curve once it changed, the field
     /// being typed in included, since what it held belongs to the curve that was replaced.
     pub(super) fn show_curve(&mut self, cx: &mut Context<Self>) {
-        let curve = self.playback.read(cx).equalizer_curve();
+        let curve = self.equalizer.read(cx).curve();
         if self.shown.as_ref() == Some(curve) {
             return;
         }
@@ -125,7 +125,7 @@ impl EqualizerView {
     pub(super) fn commit(&mut self, field: Field, cx: &mut Context<Self>) {
         let input = self.input(field).clone();
         let text = input.read(cx).text().trim().to_owned();
-        let curve = self.playback.read(cx).equalizer_curve().clone();
+        let curve = self.equalizer.read(cx).curve().clone();
         let current = shown(&curve, field);
         if text == current {
             return;
@@ -172,7 +172,7 @@ impl EqualizerView {
 
     /// Puts the focused field back as it was and leaves it, which is what Escape does.
     pub(super) fn revert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let curve = self.playback.read(cx).equalizer_curve().clone();
+        let curve = self.equalizer.read(cx).curve().clone();
         let texts: Vec<_> = self
             .fields()
             .filter(|(_, input)| input.read(cx).focus_handle(cx).is_focused(window))
@@ -192,7 +192,7 @@ impl EqualizerView {
         change: impl FnOnce(Filter) -> Filter,
         cx: &mut Context<Self>,
     ) {
-        let mut curve = self.playback.read(cx).equalizer_curve().clone();
+        let mut curve = self.equalizer.read(cx).curve().clone();
         let Some(filter) = curve.filters_mut().get_mut(index) else {
             return;
         };
@@ -352,7 +352,7 @@ impl EqualizerView {
     /// state that offers the first filter while there are none.
     pub(super) fn filters(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let filters = self.playback.read(cx).equalizer_curve().filters().to_vec();
+        let filters = self.equalizer.read(cx).curve().filters().to_vec();
         let full = filters.len() >= MAX_FILTERS;
         let empty = filters.is_empty();
         let rows: Vec<_> = filters

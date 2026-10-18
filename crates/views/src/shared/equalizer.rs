@@ -1,7 +1,7 @@
 use gpui::{App, Entity, SharedString};
 use i18n::t;
 use music::equalizer::Preset;
-use state::{AppSettings, Playback};
+use state::{AppSettings, Equalizer};
 use ui::{ActiveTheme as _, MenuItem, Picker, Popovers};
 
 /// How tall the sound menu grows before it scrolls, in cover sizes.
@@ -15,7 +15,7 @@ const MENU_HEIGHT: f32 = 2.4;
 pub(crate) fn sound_picker(
     key: &'static str,
     popovers: &Popovers,
-    playback: &Entity<Playback>,
+    equalizer: &Entity<Equalizer>,
     settings: &Entity<AppSettings>,
     cx: &App,
 ) -> Picker {
@@ -40,20 +40,18 @@ pub(crate) fn sound_picker(
     };
 
     let custom_item = custom.then(|| {
-        let playback = playback.clone();
+        let equalizer = equalizer.clone();
         let index = scratch.unwrap_or_default();
         MenuItem::new("equalizer-sound-custom", t!("settings-equalizer-custom"))
             .selected(on_scratch)
-            .on_click(move |_, _, cx| play_profile(&playback, index, cx))
+            .on_click(move |_, _, cx| play_profile(&equalizer, index, cx))
     });
     let presets = Preset::ALL.map(|preset| {
-        let playback = playback.clone();
+        let equalizer = equalizer.clone();
         MenuItem::new(preset.id(), i18n::lookup(preset_key(preset), None))
             .selected(on_scratch && shaped == Some(Some(preset)))
             .on_click(move |_, _, cx| {
-                playback.update(cx, |playback, cx| {
-                    playback.play_equalizer_preset(preset, cx)
-                });
+                equalizer.update(cx, |equalizer, cx| equalizer.play_preset(preset, cx));
             })
     });
     let named: Vec<_> = settings
@@ -61,13 +59,13 @@ pub(crate) fn sound_picker(
         .enumerate()
         .filter(|(_, name)| !name.is_empty())
         .map(|(index, name)| {
-            let playback = playback.clone();
+            let equalizer = equalizer.clone();
             MenuItem::new(
                 ("equalizer-profile", index),
                 SharedString::from(name.to_owned()),
             )
             .selected(index == playing)
-            .on_click(move |_, _, cx| play_profile(&playback, index, cx))
+            .on_click(move |_, _, cx| play_profile(&equalizer, index, cx))
         })
         .collect();
     let divider = (!named.is_empty()).then(|| MenuItem::separator("equalizer-sound-profiles"));
@@ -99,11 +97,6 @@ pub(crate) fn preset_key(preset: Preset) -> &'static str {
 }
 
 /// Plays stored profile `index` and turns the equalizer on.
-fn play_profile(playback: &Entity<Playback>, index: usize, cx: &mut App) {
-    playback.update(cx, |playback, cx| {
-        playback.select_equalizer_profile(index, cx);
-        if !playback.equalizer() {
-            playback.set_equalizer(true, cx);
-        }
-    });
+fn play_profile(equalizer: &Entity<Equalizer>, index: usize, cx: &mut App) {
+    equalizer.update(cx, |equalizer, cx| equalizer.play_profile(index, cx));
 }

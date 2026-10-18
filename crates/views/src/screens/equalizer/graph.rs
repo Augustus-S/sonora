@@ -6,7 +6,7 @@ use music::equalizer::{
     Curve, FREQUENCY_RANGE, Filter, GAIN_RANGE, Invalid, Kind, OCTAVES_RANGE, Q_RANGE, Response,
     Width,
 };
-use state::{AppSettings, Outputs, Playback, Signal};
+use state::{AppSettings, Equalizer, Outputs, Signal};
 use ui::{
     ActiveTheme as _, GraphEdit, ResponseAxes, ResponseGraph, ResponseGraphState, ResponseNode,
     ResponsePoint, Room,
@@ -42,7 +42,7 @@ const SPAN_SLACK: f32 = 0.05;
 /// owns the ids and the selection of the filters, follows the playing curve, and plays the
 /// edits made on it.
 pub(super) struct EqualizerGraph {
-    playback: Entity<Playback>,
+    equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
     signal: Entity<Signal>,
@@ -54,7 +54,7 @@ pub(super) struct EqualizerGraph {
 /// Emitted when the selected filter changes, which the filter list highlights too.
 pub(super) struct Selected;
 
-/// What the graph shows from playback, the output and the spectrum.
+/// What the graph shows from the equalizer, the output and the spectrum.
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
@@ -212,20 +212,20 @@ impl EventEmitter<Selected> for EqualizerGraph {}
 
 impl EqualizerGraph {
     pub(super) fn new(
-        playback: Entity<Playback>,
+        equalizer: Entity<Equalizer>,
         settings: Entity<AppSettings>,
         outputs: Entity<Outputs>,
         signal: Entity<Signal>,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.observe(&playback, |this, _, cx| this.redraw(cx))
+        cx.observe(&equalizer, |this, _, cx| this.redraw(cx))
             .detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
         cx.observe(&signal, |this, _, cx| this.redraw(cx)).detach();
         cx.observe(&settings, |this, _, cx| this.redraw(cx))
             .detach();
         let mut graph = Self {
-            playback,
+            equalizer,
             settings,
             outputs,
             signal,
@@ -239,11 +239,11 @@ impl EqualizerGraph {
     /// Brings the ids in step with a curve that changed, and redraws when anything the graph
     /// shows changed since it last drew.
     fn redraw(&mut self, cx: &mut Context<Self>) {
-        let playback = self.playback.read(cx);
+        let equalizer = self.equalizer.read(cx);
         let drawn = Drawn {
-            curve: playback.equalizer_curve().clone(),
-            on: playback.equalizer(),
-            preamp: playback.equalizer_preamp_db(),
+            curve: equalizer.curve().clone(),
+            on: equalizer.enabled(),
+            preamp: equalizer.preamp_db(),
             rate: rate(&self.outputs, cx),
             spectrum: self.signal.read(cx).levels().map(<[Level]>::to_vec),
             advanced: self.settings.read(cx).equalizer_advanced(),
@@ -282,20 +282,20 @@ impl EqualizerGraph {
     /// Plays `curve`, an edit made on this screen.
     pub(super) fn apply(&mut self, curve: Curve, cx: &mut Context<Self>) {
         self.graph.edited(&curve);
-        self.playback
-            .update(cx, |playback, cx| playback.set_equalizer_curve(curve, cx));
+        self.equalizer
+            .update(cx, |equalizer, cx| equalizer.set_curve(curve, cx));
     }
 
     /// Appends `filter` to the playing curve and selects it, unless the curve is full.
     pub(super) fn add_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
-        let curve = self.playback.read(cx).equalizer_curve().clone();
+        let curve = self.equalizer.read(cx).curve().clone();
         if let Some(curve) = self.graph.add(&curve, filter) {
             self.apply(curve, cx);
         }
     }
 
     pub(super) fn remove_filter(&mut self, index: usize, cx: &mut Context<Self>) {
-        let curve = self.playback.read(cx).equalizer_curve().clone();
+        let curve = self.equalizer.read(cx).curve().clone();
         if let Some(curve) = self.graph.remove(&curve, index) {
             self.apply(curve, cx);
         }
@@ -305,7 +305,7 @@ impl EqualizerGraph {
     /// moves, and adding and removing cross-fade like the list's own buttons. A dragged or added
     /// gain stays within the axis shown, a shelf's whole step included.
     fn graph_edit(&mut self, edit: &GraphEdit, cx: &mut Context<Self>) {
-        let curve = self.playback.read(cx).equalizer_curve().clone();
+        let curve = self.equalizer.read(cx).curve().clone();
         let span = self.graph.span;
         let glided = match *edit {
             GraphEdit::Select(id) => {
@@ -374,8 +374,8 @@ impl EqualizerGraph {
             }
         };
         if let Some(curve) = glided {
-            self.playback
-                .update(cx, |playback, cx| playback.glide_equalizer_curve(curve, cx));
+            self.equalizer
+                .update(cx, |equalizer, cx| equalizer.glide_curve(curve, cx));
         }
     }
 }
@@ -385,12 +385,12 @@ impl EqualizerGraph {
 /// screen lays it out at.
 impl Render for EqualizerGraph {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let playback = self.playback.read(cx);
-        let on = playback.equalizer();
+        let equalizer = self.equalizer.read(cx);
+        let on = equalizer.enabled();
         let advanced = self.settings.read(cx).equalizer_advanced();
-        let curve = playback.equalizer_curve().clone();
+        let curve = equalizer.curve().clone();
         let rate = rate(&self.outputs, cx);
-        let preamp = playback.equalizer_preamp_db();
+        let preamp = equalizer.preamp_db();
         let spectrum: Vec<_> = self
             .signal
             .read(cx)

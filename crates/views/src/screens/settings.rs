@@ -28,7 +28,7 @@ use music::{
 };
 use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
 use state::{
-    AppSettings, CdmState, DiscordName, Drm, Failure, FullscreenControlsAutohide, Io,
+    AppSettings, CdmState, DiscordName, Drm, Equalizer, Failure, FullscreenControlsAutohide, Io,
     LYRICS_SOURCES, Outputs, Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling, Session,
     SessionState, Sleep, Sonora,
 };
@@ -326,6 +326,7 @@ pub struct SettingsView {
     session: Entity<Session>,
     playback: Entity<Playback>,
     drm: Entity<Drm>,
+    equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
     output_picker: Entity<OutputPicker>,
@@ -393,8 +394,10 @@ impl SettingsView {
         let settings = Sonora::global(cx).settings.clone();
         let scrobbling = Sonora::global(cx).scrobbling.clone();
         let drm = Sonora::global(cx).drm.clone();
+        let equalizer = Sonora::global(cx).equalizer.clone();
         let outputs = Sonora::global(cx).outputs.clone();
         cx.observe(&drm, |_, _, cx| cx.notify()).detach();
+        cx.observe(&equalizer, |_, _, cx| cx.notify()).detach();
         cx.observe(&outputs, |_, _, cx| cx.notify()).detach();
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
         cx.observe(&scrobbling, |_, _, cx| cx.notify()).detach();
@@ -443,6 +446,7 @@ impl SettingsView {
             session,
             playback,
             drm,
+            equalizer,
             settings,
             outputs,
             output_picker,
@@ -683,7 +687,7 @@ impl SettingsView {
                     slots.extend([Slot::SampleRate, Slot::Buffer]);
                 }
                 slots.extend([Slot::Title("settings-group-equalizer"), Slot::Equalizer]);
-                if self.playback.read(cx).equalizer() {
+                if self.equalizer.read(cx).enabled() {
                     slots.push(Slot::EqualizerPreset);
                 }
                 slots.extend([Slot::Title("settings-group-lyrics"), Slot::LyricsProviders]);
@@ -2671,7 +2675,7 @@ impl SettingsView {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
         let small = theme.text(Text::Small);
-        let on = self.playback.read(cx).equalizer();
+        let on = self.equalizer.read(cx).enabled();
 
         self.row(
             t!("settings-equalizer"),
@@ -2691,8 +2695,8 @@ impl SettingsView {
                 )
                 .child(
                     Switch::new("equalizer", on).on_click(cx.listener(move |this, _, _, cx| {
-                        this.playback
-                            .update(cx, |playback, cx| playback.set_equalizer(!on, cx));
+                        this.equalizer
+                            .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx));
                     })),
                 )
                 .into_any_element(),
@@ -2705,7 +2709,7 @@ impl SettingsView {
         let picker = sound_picker(
             EQUALIZER_PRESETS,
             &self.popovers,
-            &self.playback,
+            &self.equalizer,
             &self.settings,
             cx,
         )
