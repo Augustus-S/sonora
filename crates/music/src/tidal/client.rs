@@ -1,7 +1,7 @@
-//! Tidal data access over `api.tidal.com`, the api the official players use: `v1` for nearly
-//! everything, and `v2` for the home feed and a playlist's visibility. Every call carries the
-//! account's country, which decides what the catalog holds, and a bearer token renewed in
-//! place before it runs out.
+//! Tidal data access over `api.tidal.com`, the api the official players use. It reads `v1`
+//! for nearly everything and `v2` for the home feed and a playlist's visibility. Every call
+//! carries the account's country, which decides what the catalog holds, and a bearer token
+//! renewed in place before it runs out.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -33,8 +33,8 @@ const V2: &str = "https://api.tidal.com/v2";
 const OPENAPI: &str = "https://openapi.tidal.com/v2";
 
 /// The web player version every call names. The `v2` home feed refuses a call without one
-/// with a bare `400`; the rest of the api ignores it. It is the version tidalapi sends, and
-/// when Tidal retires it the home feed is what stops loading: the current one is in the
+/// with a bare `400`, and the rest of the api ignores it. It is the version tidalapi sends.
+/// When Tidal retires it the home feed stops loading, and the current one is in the
 /// `x-tidal-client-version` header the web player at listen.tidal.com sends.
 const CLIENT_VERSION: &str = "2025.7.16";
 
@@ -96,8 +96,8 @@ static RENEWING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// so nothing the session renews is written before the sign-in has fully worked.
 const UNSTORED: u64 = u64::MAX;
 
-/// A signed-in Tidal session: the api calls behind [`MusicApi`] and the playback lookup. Clones
-/// share one session, so a token renewed by one is the token every clone uses next.
+/// A signed-in Tidal session, with the api calls behind [`MusicApi`] and the playback lookup.
+/// Clones share one session, so a token renewed by one is the token every clone uses next.
 #[derive(Clone)]
 pub struct TidalClient {
     inner: Arc<Inner>,
@@ -617,8 +617,8 @@ impl TidalClient {
         Ok(wire::album_list(&page))
     }
 
-    /// Every one of an artist's releases of one kind: albums with no `filter`,
-    /// `EPSANDSINGLES`, or `COMPILATIONS`, which is what Tidal lists as appearing on.
+    /// Every one of an artist's releases of one kind. No `filter` lists albums,
+    /// `EPSANDSINGLES` the EPs and singles, and `COMPILATIONS` what Tidal lists as appearing on.
     async fn discography(&self, artist_id: &str, filter: Option<&str>) -> Result<Vec<Album>> {
         let query: Vec<(&str, &str)> = filter
             .map(|filter| ("filter", filter))
@@ -652,7 +652,7 @@ impl TidalClient {
         Ok(wire::artist_list(&page))
     }
 
-    /// One kind of search result: `types` is what Tidal is asked for, and `key` the list in its
+    /// One kind of search result. `types` is what Tidal is asked for, and `key` the list in its
     /// answer that holds them. An answer without that list is no results.
     async fn search_kind(&self, query: &str, types: &str, key: &str) -> Result<Value> {
         let mut found = self
@@ -710,7 +710,8 @@ impl TidalClient {
         }
     }
 
-    /// A mix, through the page Tidal draws it on: a header naming it, and its tracks.
+    /// A mix, read from the page Tidal draws it on, which holds a header naming it and its
+    /// tracks.
     async fn mix(&self, mix_id: &str) -> Result<PlaylistDetail> {
         let page = self
             .get(
@@ -770,7 +771,7 @@ impl TidalClient {
         Ok(self.mix(mix_id).await?.tracks)
     }
 
-    /// The home feed as the web player draws it: rows of cards, each a list of one kind or a
+    /// The home feed as the web player draws it, in rows of cards that each hold one kind or a
     /// mix of kinds.
     async fn home_feed(&self) -> Result<HomeFeed> {
         let answer = self
@@ -937,8 +938,8 @@ impl MusicApi for TidalClient {
         })
     }
 
-    /// The releases the overview leaves out: EPs and singles beside the albums, and what Tidal
-    /// lists the artist as appearing on.
+    /// The releases the overview leaves out, which are the EPs and singles beside the albums
+    /// and what Tidal lists the artist as appearing on.
     async fn artist_catalogue(&self, artist_id: &str, _known: &[Track]) -> Result<ArtistCatalogue> {
         let (albums, singles, appears_on) = tokio::join!(
             self.discography(artist_id, None),
@@ -1465,8 +1466,8 @@ fn releases_path(artist_id: &str) -> String {
 }
 
 /// Whether the page at `page` of `size` rows was the last of a listing. Tidal leaves rows it
-/// cannot serve in this country out of a page, so a short page proves nothing; the total it
-/// reports does. A listing that reports none ends at the first empty page.
+/// cannot serve in this country out of a page, so a short page proves nothing and the total it
+/// reports decides. A listing that reports none ends at the first empty page.
 fn exhausted(answer: &Value, page: usize, size: usize) -> bool {
     match wire::count::<usize>(answer, "totalNumberOfItems") {
         Some(total) => (page + 1) * size >= total,

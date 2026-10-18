@@ -60,9 +60,9 @@ pub fn decimal(value: &Value, key: &str) -> Option<f64> {
     value.get(key)?.as_f64()
 }
 
-/// The items of a paged answer. Favorites and playlist items come wrapped as
-/// `{ "item": …, "created" | "dateAdded": … }`, and the wrapper is kept so the caller can read
-/// when the item was added.
+/// The items of a paged answer. Favorites and playlist items come wrapped in an object with
+/// `item` beside `created` or `dateAdded`, and the wrapper is kept so the caller can read when
+/// the item was added.
 pub fn items(page: &Value) -> &[Value] {
     page.get("items")
         .and_then(Value::as_array)
@@ -292,8 +292,8 @@ pub fn mix(value: &Value) -> Option<Playlist> {
     })
 }
 
-/// An artist biography without Tidal's link markup: `[wimpLink artistId="…"]Name[/wimpLink]`
-/// keeps its name, and the `<br/>` breaks become new lines.
+/// An artist biography without Tidal's link markup. A `[wimpLink artistId="…"]Name[/wimpLink]`
+/// link keeps its name, and the `<br/>` breaks become new lines.
 pub fn plain_bio(text: &str) -> String {
     let mut plain = String::with_capacity(text.len());
     let mut rest = text;
@@ -323,7 +323,7 @@ fn added(wrapper: &Value) -> Option<i64> {
 
 /// The artists of a track or an album, as one line to show and as links.
 fn artists_of(value: &Value) -> (String, Vec<ArtistRef>) {
-    // Most answers list every artist; a few only name the main one.
+    // Most answers list every artist, and a few only name the main one.
     let list: &[Value] = match value.get("artists").and_then(Value::as_array) {
         Some(list) if !list.is_empty() => list,
         _ => value
