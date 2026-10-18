@@ -7,11 +7,12 @@
 //! onto the segment that covers the position instead of decoding its way there.
 
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
+use reqwest::StatusCode;
 use rodio::Source as _;
 
 use crate::audio::Trimmed;
@@ -22,16 +23,33 @@ use crate::tidal::lock;
 use crate::tidal::manifest::Manifest;
 use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
 
-/// How many times one segment is asked for before the track gives up on it. A track is a
-/// hundred or so requests, so one that fails now and then is ordinary.
-const PART_ATTEMPTS: u32 = 3;
+/// How long one part keeps being asked for, with the wait between asks doubling from
+/// `FIRST_WAIT` up to `LONGEST_WAIT`. A track is a hundred or so requests, so one that fails
+/// now and then is ordinary, and a connection that drops for half a minute comes back to the
+/// same track.
+const RETRY_WINDOW: Duration = Duration::from_secs(45);
+const FIRST_WAIT: Duration = Duration::from_millis(500);
+const LONGEST_WAIT: Duration = Duration::from_secs(8);
+
+/// How many times one track asks Tidal for fresh urls when the signed ones it holds are refused.
+const RENEWALS: u32 = 3;
+
+/// How long a media request may take to connect, and how long it may wait between two reads.
+/// Both sit well under the patience of a reader waiting at the end of the download, so a stalled
+/// request is asked again while that reader still waits.
+const MEDIA_CONNECT: Duration = Duration::from_secs(5);
+const MEDIA_STALL: Duration = Duration::from_secs(8);
+
+/// How long a track may take to arrive as far as the preroll before its load fails.
+const PRIMING: Duration = Duration::from_secs(20);
 
 /// The most one segment may hold. A hi-res segment is a megabyte or two, so this only bounds
 /// what a wrong answer can cost.
 const SEGMENT_CEILING: usize = 64 * 1024 * 1024;
 
 /// The most one Tidal track may spool. 24-bit FLAC at 192 kHz runs to about 40 MB a minute, so
-/// this holds an hour and a half of it. On a 32-bit target it is as much as a size can count.
+/// this holds more than an hour and a half of it. On a 32-bit target it is as much as a size
+/// can count.
 const SPOOL_CEILING: u64 = 4 * 1024 * 1024 * 1024;
 
 /// A decoder over a Tidal track, with what comes before the asked-for position trimmed off.
@@ -65,10 +83,40 @@ struct Entry {
 /// an abandoned track stops downloading.
 struct Parts {
     http: reqwest::Client,
-    urls: std::vec::IntoIter<String>,
+    /// The init segment's url, then the media segments' in order.
+    urls: Vec<String>,
+    /// The index in `urls` of the part to fetch next.
+    next: usize,
     /// How many bytes have been handed to the stream, which is where the next part starts.
     sent: usize,
     timeline: Weak<Mutex<Timeline>>,
+    renewal: Renewal,
+}
+
+/// What a download needs to ask Tidal for fresh urls once the signed ones it holds are refused.
+struct Renewal {
+    client: TidalClient,
+    id: String,
+    /// The codec the download started in, which fresh urls have to name too.
+    codec: String,
+    /// How many more times the urls may be renewed.
+    left: u32,
+}
+
+/// The waits between asks for one thing, and when the asking stops.
+struct Backoff {
+    since: Instant,
+    wait: Duration,
+}
+
+/// Why a media request failed, which decides what is tried next.
+enum Failure {
+    /// The signed url was refused or has gone, so Tidal is asked for fresh ones.
+    Expired(anyhow::Error),
+    /// The connection or the server failed, which waiting may cure.
+    Passing(anyhow::Error),
+    /// Asking again would get the same answer.
+    Final(anyhow::Error),
 }
 
 /// The body of a Tidal track, taken as it comes but allowed to run as long as hi-res does.
@@ -88,11 +136,15 @@ pub struct Loaded {
 /// hands the app.
 pub struct Factory {
     client: TidalClient,
+    media: reqwest::Client,
 }
 
 /// What the shared engine is given: how to fetch a Tidal track and open a decoder over it.
 struct Tidal {
     client: TidalClient,
+    /// The http client the track's bytes come through, which gives up on a stalled request
+    /// sooner than the api client does.
+    media: reqwest::Client,
 }
 
 impl Timeline {
@@ -111,50 +163,55 @@ impl Timeline {
 }
 
 impl Parts {
-    /// Fetches one part whole, again after a short wait when the request, the server or the
-    /// connection fails. `None` when the track was abandoned, which is checked before every
-    /// attempt.
-    async fn fetch(&self, url: &str) -> Result<Option<Bytes>> {
-        let mut attempt = 1;
+    /// Fetches the next part whole. A failed connection or server is asked again with a growing
+    /// wait, and a refused url is renewed before the same part is asked for again. `None` once
+    /// every part is in or the track was abandoned, which is checked before every attempt.
+    async fn fetch(&mut self) -> Result<Option<Bytes>> {
+        let mut backoff = Backoff::new();
         loop {
             if self.timeline.strong_count() == 0 {
                 return Ok(None);
             }
-            match self.attempt(url).await {
+            let Some(url) = self.urls.get(self.next) else {
+                return Ok(None);
+            };
+            match whole(&self.http, url).await {
                 Ok(part) => return Ok(Some(part)),
-                Err(error) if attempt >= PART_ATTEMPTS => {
-                    return Err(error.context("cannot fetch a segment of the tidal track"));
+                Err(Failure::Expired(error)) => {
+                    log::debug!("tidal: segment {} was refused: {error:#}", self.next);
+                    self.renew().await?;
                 }
-                Err(error) => {
-                    log::debug!("tidal: asking for a segment again after {error:#}");
-                    tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
-                    attempt += 1;
-                }
+                Err(Failure::Passing(error)) => backoff.wait(error).await?,
+                Err(Failure::Final(error)) => return Err(error),
             }
         }
     }
 
-    /// One request for a part, read whole. A part longer than `SEGMENT_CEILING` is refused
-    /// before it can fill memory, since nothing past here would stop it.
-    async fn attempt(&self, url: &str) -> Result<Bytes> {
-        let mut response = self.http.get(url).send().await?.error_for_status()?;
-        let mut part = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if part.len() + chunk.len() > SEGMENT_CEILING {
-                anyhow::bail!("a segment runs past {SEGMENT_CEILING} bytes");
-            }
-            part.extend_from_slice(&chunk);
+    /// Swaps in fresh urls for the same segments, so the download carries on from the part it
+    /// was on.
+    async fn renew(&mut self) -> Result<()> {
+        let Manifest::Segments { init, media, .. } = self.renewal.manifest().await? else {
+            bail!("tidal no longer streams the track as segments");
+        };
+        if media.len() + 1 != self.urls.len() {
+            bail!(
+                "tidal now cuts the track into {} segments rather than {}",
+                media.len(),
+                self.urls.len() - 1
+            );
         }
-        Ok(Bytes::from(part))
+        self.urls = std::iter::once(init).chain(media).collect();
+        Ok(())
     }
 }
 
 impl stream::Source for Parts {
     async fn chunk(&mut self) -> Result<Option<Bytes>> {
-        let Some(url) = self.urls.next() else {
-            return Ok(None);
-        };
-        let Some(part) = self.fetch(&url).await? else {
+        let Some(part) = self
+            .fetch()
+            .await
+            .context("cannot fetch a segment of the tidal track")?
+        else {
             return Ok(None);
         };
         let Some(timeline) = self.timeline.upgrade() else {
@@ -162,7 +219,79 @@ impl stream::Source for Parts {
         };
         lock(&timeline).offsets.push(self.sent);
         self.sent += part.len();
+        self.next += 1;
         Ok(Some(part))
+    }
+}
+
+impl Renewal {
+    /// A fresh manifest for the same track in the same codec. It fails once `RENEWALS` are
+    /// spent, since a refusal that outlasts them is not an expired url.
+    async fn manifest(&mut self) -> Result<Manifest> {
+        if self.left == 0 {
+            bail!("tidal keeps refusing the urls of {}", self.id);
+        }
+        self.left -= 1;
+        log::info!("tidal: asking for fresh urls for {}", self.id);
+        let manifest = self.client.playback(&self.id).await?.manifest;
+        if manifest.codec() != self.codec {
+            bail!(
+                "tidal now streams {} as {} rather than {}",
+                self.id,
+                manifest.codec(),
+                self.codec
+            );
+        }
+        Ok(manifest)
+    }
+}
+
+impl Backoff {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            wait: FIRST_WAIT,
+        }
+    }
+
+    /// Waits before the next ask, or hands `error` back once `RETRY_WINDOW` has passed since
+    /// the first one.
+    async fn wait(&mut self, error: anyhow::Error) -> Result<()> {
+        if self.since.elapsed() >= RETRY_WINDOW {
+            return Err(error);
+        }
+        log::debug!("tidal: asking again in {:?} after {error:#}", self.wait);
+        tokio::time::sleep(self.wait).await;
+        self.wait = (self.wait * 2).min(LONGEST_WAIT);
+        Ok(())
+    }
+}
+
+impl Failure {
+    /// Sorts a response by its status, passing a successful one through.
+    fn check(response: reqwest::Response) -> Result<reqwest::Response, Self> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+        let error = anyhow!("the tidal media server answered {status}");
+        Err(match status {
+            StatusCode::FORBIDDEN | StatusCode::GONE => Self::Expired(error),
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS => Self::Passing(error),
+            status if status.is_server_error() => Self::Passing(error),
+            _ => Self::Final(error),
+        })
+    }
+}
+
+impl From<reqwest::Error> for Failure {
+    /// A request that could not be built fails the same way every time. Anything else went
+    /// wrong on the way and may not again.
+    fn from(error: reqwest::Error) -> Self {
+        match error.is_builder() {
+            true => Self::Final(error.into()),
+            false => Self::Passing(error.into()),
+        }
     }
 }
 
@@ -174,7 +303,11 @@ impl stream::Body for Long {
 
 impl Factory {
     pub fn new(client: TidalClient) -> Self {
-        Self { client }
+        let media = media_http().unwrap_or_else(|error| {
+            log::warn!("tidal: {error:#}, streaming through the api client");
+            client.http().clone()
+        });
+        Self { client, media }
     }
 }
 
@@ -183,35 +316,30 @@ impl PlaybackFactory for Factory {
         engine::start(
             Tidal {
                 client: self.client.clone(),
+                media: self.media.clone(),
             },
             config,
         )
     }
 }
 
-#[async_trait]
-impl Fetch for Tidal {
-    type Loaded = Loaded;
-    type Source = Opened;
-
-    fn name(&self) -> &'static str {
-        "tidal"
-    }
-
-    /// Asks for the best quality the account may play and starts the download, waiting only
-    /// for the preroll.
-    async fn load(&self, id: &str) -> Result<Loaded> {
-        let playback = self.client.playback(id).await?;
-        log::info!(
-            "tidal: {id} streams as {} {}",
-            playback.quality,
-            playback.manifest.codec()
-        );
-        let (stream, timeline) = match playback.manifest {
+impl Tidal {
+    /// Starts the download a manifest describes and waits for the preroll.
+    async fn arrive(
+        &self,
+        id: &str,
+        manifest: Manifest,
+    ) -> Result<(Stream<Long>, Option<Arc<Mutex<Timeline>>>)> {
+        let renewal = Renewal {
+            client: self.client.clone(),
+            id: id.to_owned(),
+            codec: manifest.codec().to_owned(),
+            left: RENEWALS,
+        };
+        let (stream, timeline) = match manifest {
             Manifest::File { url, .. } => {
                 let response = self
-                    .client
-                    .http()
+                    .media
                     .get(&url)
                     .send()
                     .await
@@ -230,19 +358,43 @@ impl Fetch for Tidal {
                     offsets: Vec::new(),
                 }));
                 let parts = Parts {
-                    http: self.client.http().clone(),
-                    urls: std::iter::once(init)
-                        .chain(media)
-                        .collect::<Vec<_>>()
-                        .into_iter(),
+                    http: self.media.clone(),
+                    urls: std::iter::once(init).chain(media).collect(),
+                    next: 0,
                     sent: 0,
                     timeline: Arc::downgrade(&timeline),
+                    renewal,
                 };
                 (Stream::pulling(parts, None, Long), Some(timeline))
             }
         };
+        Ok((stream.primed().await?, timeline))
+    }
+}
+
+#[async_trait]
+impl Fetch for Tidal {
+    type Loaded = Loaded;
+    type Source = Opened;
+
+    fn name(&self) -> &'static str {
+        "tidal"
+    }
+
+    /// Asks for the best quality the account may play and starts the download, waiting only
+    /// for the preroll, and for that no longer than `PRIMING`.
+    async fn load(&self, id: &str) -> Result<Loaded> {
+        let playback = self.client.playback(id).await?;
+        log::info!(
+            "tidal: {id} streams as {} {}",
+            playback.quality,
+            playback.manifest.codec()
+        );
+        let (stream, timeline) = tokio::time::timeout(PRIMING, self.arrive(id, playback.manifest))
+            .await
+            .context("the tidal track did not start arriving in time")??;
         Ok(Loaded {
-            stream: stream.primed().await?,
+            stream,
             timeline,
             duration: playback.duration,
             loudness: playback.loudness,
@@ -363,6 +515,31 @@ fn file_decoder(id: &str, stream: &Stream<Long>) -> Option<rodio::Decoder<Reader
         None => builder,
     };
     decoder(id, builder)
+}
+
+/// One request for a part, read whole. A part longer than `SEGMENT_CEILING` is refused before
+/// it can fill memory, since nothing past here would stop it.
+async fn whole(http: &reqwest::Client, url: &str) -> Result<Bytes, Failure> {
+    let mut response = Failure::check(http.get(url).send().await?)?;
+    let mut part = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if part.len() + chunk.len() > SEGMENT_CEILING {
+            return Err(Failure::Final(anyhow!(
+                "a segment runs past {SEGMENT_CEILING} bytes"
+            )));
+        }
+        part.extend_from_slice(&chunk);
+    }
+    Ok(Bytes::from(part))
+}
+
+/// The http client a track's bytes come through.
+fn media_http() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(MEDIA_CONNECT)
+        .read_timeout(MEDIA_STALL)
+        .build()
+        .context("cannot build the tidal media client")
 }
 
 /// Builds a decoder, or reports a track that will not decode.
