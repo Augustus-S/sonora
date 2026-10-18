@@ -14,7 +14,7 @@ use gpui::{
     AnyElement, App, Entity, Hsla, InteractiveElement as _, IntoElement as _, SharedString,
     Styled as _, WeakEntity,
 };
-use music::{Shape, Track};
+use music::Track;
 use router::Destination;
 use state::{Detail, History, Library, Origin, Playback, Shelf, Sonora};
 use ui::{
@@ -277,7 +277,7 @@ impl TrackSource {
 
     fn catalog(&self, cx: &App) -> bool {
         match (self.starrable, &self.is_liked) {
-            (Some(shelf), Some(library)) => library.read(cx).shape(shelf) == Shape::Catalog,
+            (Some(shelf), Some(library)) => library.read(cx).shape(shelf).is_catalog(),
             _ => false,
         }
     }
@@ -289,7 +289,12 @@ impl TrackSource {
         let Some(id) = self.album.as_ref().and_then(|album| album.read(cx).id()) else {
             return Numbering::Listing;
         };
-        if Sonora::global(cx).library.read(cx).shape(Shelf::of(id)) != Shape::Catalog {
+        if !Sonora::global(cx)
+            .library
+            .read(cx)
+            .shape(Shelf::of(id))
+            .is_catalog()
+        {
             return Numbering::Listing;
         }
 

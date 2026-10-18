@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{App, Context, Entity, SharedString, Task};
-use music::{Album, MediaKind, MusicApi, Page, Pages, Playlist, SavedArtist, Shape, Track};
+use music::{
+    Album, Catalog, MediaKind, MusicApi, Page, Pages, Playlist, SavedArtist, Shape, Track,
+};
 use tokio::sync::Semaphore;
 
 use crate::snapshot::{Kind, Remembered, Snapshots};
@@ -127,7 +129,7 @@ impl Held {
                     artists: &ready.artists,
                 })
             }
-            Shape::Catalog => Some(Favorites {
+            Shape::Catalog(_) => Some(Favorites {
                 tracks: &self.starred.tracks,
                 albums: &self.starred.albums,
                 artists: &self.starred.artists,
@@ -145,7 +147,7 @@ impl Held {
                     artists: &mut ready.artists,
                 })
             }
-            Shape::Catalog => Some(FavoritesMut {
+            Shape::Catalog(_) => Some(FavoritesMut {
                 tracks: &mut self.starred.tracks,
                 albums: &mut self.starred.albums,
                 artists: &mut self.starred.artists,
@@ -829,7 +831,7 @@ impl Savable for Track {
             return;
         };
         let shelf = Shelf::of(&id);
-        if !library.session.read(cx).capabilities_of(shelf).library {
+        if !library.session.read(cx).shape_of(shelf).editable() {
             return;
         }
         let Some(ready) = library.held_mut(shelf).ready_mut() else {
@@ -1192,7 +1194,7 @@ impl Library {
             raised_rows: HashMap::new(),
         };
         library.held_mut(Shelf::Streaming).state = LibraryState::Loading;
-        library.held_mut(Shelf::Local).shape = Shape::Catalog;
+        library.held_mut(Shelf::Local).shape = Shape::Catalog(Catalog::Fixed);
         library.prime(Shelf::Streaming, cx);
         match library.session.read(cx).client_of(Shelf::Local).is_some() {
             true => library.load(Shelf::Local, cx),
@@ -1575,7 +1577,7 @@ impl Library {
     }
 
     /// Whether a track or album is in the shelf's own library, apart from its favorites. Only
-    /// a `Capabilities::library` provider draws the distinction, and there the pages list the
+    /// a `Catalog::Editable` provider draws the distinction, and there the pages list the
     /// library, so this is what they list.
     pub fn in_library(&self, id: &str) -> bool {
         let state = &self.held(Shelf::of(id)).state;
@@ -2579,7 +2581,7 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => tracks.saved_tracks_paged().await,
-                        Shape::Catalog => tracks.all_tracks_paged().await,
+                        Shape::Catalog(_) => tracks.all_tracks_paged().await,
                     }
                 },
                 Landed::Tracks,
@@ -2596,7 +2598,7 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => albums.saved_albums_paged().await,
-                        Shape::Catalog => albums.all_albums_paged().await,
+                        Shape::Catalog(_) => albums.all_albums_paged().await,
                     }
                 },
                 Landed::Albums,
@@ -2608,14 +2610,14 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => artists.saved_artists_paged().await,
-                        Shape::Catalog => artists.all_artists_paged().await,
+                        Shape::Catalog(_) => artists.all_artists_paged().await,
                     }
                 },
                 Landed::Artists,
                 cx,
             ),
         ];
-        if shape == Shape::Catalog {
+        if shape.is_catalog() {
             let tracks = client.clone();
             let albums = client.clone();
             tasks.extend([

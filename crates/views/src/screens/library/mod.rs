@@ -128,9 +128,9 @@ impl Section {
             (Shelf::Streaming, Shape::Saved, Section::Songs) => "library-no-songs",
             (Shelf::Streaming, Shape::Saved, Section::Albums) => "library-no-albums",
             (Shelf::Streaming, Shape::Saved, Section::Artists) => "library-no-artists",
-            (Shelf::Streaming, Shape::Catalog, Section::Songs) => "library-no-catalog-songs",
-            (Shelf::Streaming, Shape::Catalog, Section::Albums) => "library-no-catalog-albums",
-            (Shelf::Streaming, Shape::Catalog, Section::Artists) => "library-no-catalog-artists",
+            (Shelf::Streaming, Shape::Catalog(_), Section::Songs) => "library-no-catalog-songs",
+            (Shelf::Streaming, Shape::Catalog(_), Section::Albums) => "library-no-catalog-albums",
+            (Shelf::Streaming, Shape::Catalog(_), Section::Artists) => "library-no-catalog-artists",
             (Shelf::Streaming, _, Section::Playlists) => "library-no-playlists",
         }
     }
@@ -138,7 +138,7 @@ impl Section {
     fn glyph(self, shape: Shape) -> &'static str {
         match (self, shape) {
             (Section::Songs, Shape::Saved) => "icons/heart.svg",
-            (Section::Songs, Shape::Catalog) => "icons/music.svg",
+            (Section::Songs, Shape::Catalog(_)) => "icons/music.svg",
             (Section::Albums, _) => "icons/disc-3.svg",
             (Section::Playlists, _) => "icons/list-music.svg",
             (Section::Artists, _) => "icons/user-round.svg",
@@ -609,10 +609,10 @@ impl LibraryView {
             strip = strip.text(runtime(duration));
         }
         let (title, icon, eyebrow) = match (self.shape(cx), self.shelf) {
-            (Shape::Catalog, Shelf::Local) => {
+            (Shape::Catalog(_), Shelf::Local) => {
                 (t!("nav-songs"), "icons/disc-3.svg", t!("nav-local"))
             }
-            (Shape::Catalog, Shelf::Streaming) => {
+            (Shape::Catalog(_), Shelf::Streaming) => {
                 (t!("nav-songs"), "icons/disc-3.svg", t!("nav-library"))
             }
             (Shape::Saved, _) => (

@@ -11,7 +11,7 @@ use async_trait::async_trait;
 pub use client::SubsonicClient;
 
 use crate::subsonic::playback::Factory;
-use crate::{Capabilities, MusicApi as _, MusicProvider, ProviderSession, Shape, SignIn};
+use crate::{Capabilities, Catalog, MusicApi as _, MusicProvider, ProviderSession, Shape, SignIn};
 
 pub struct SubsonicProvider;
 
@@ -47,7 +47,7 @@ impl SubsonicProvider {
             profile,
             api: Arc::new(client.clone()),
             playback: Arc::new(Factory::new(client)),
-            shape: Shape::Catalog,
+            shape: Shape::Catalog(Catalog::Fixed),
             authenticated: true,
             capabilities: Capabilities::ALL,
         })
@@ -75,7 +75,7 @@ impl SubsonicProvider {
                 profile,
                 api: Arc::new(client.clone()),
                 playback: Arc::new(Factory::new(client)),
-                shape: Shape::Catalog,
+                shape: Shape::Catalog(Catalog::Fixed),
                 authenticated: true,
                 capabilities: Capabilities::ALL,
             })),
