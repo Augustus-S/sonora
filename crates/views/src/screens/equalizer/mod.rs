@@ -259,14 +259,6 @@ impl EqualizerView {
         cx.notify();
     }
 
-    fn duplicate_profile(&mut self, cx: &mut Context<Self>) {
-        let current = equalizer_profile_label(self.settings.read(cx).equalizer_profile_name());
-        let name = t!("equalizer-profile-copy", name = &current);
-        let curve = self.equalizer.read(cx).curve().clone();
-        self.equalizer
-            .update(cx, |equalizer, cx| equalizer.add_profile(&name, curve, cx));
-    }
-
     /// Opens the name dialog to save the playing sound as a new profile.
     fn open_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.suggested_name(cx);
@@ -429,14 +421,6 @@ impl EqualizerView {
                 .child(
                     action("equalizer-save-as", "icons/plus.svg", "equalizer-save-as")
                         .on_click(cx.listener(|this, _, window, cx| this.open_save(window, cx))),
-                )
-                .child(
-                    action(
-                        "equalizer-duplicate",
-                        "icons/copy.svg",
-                        "equalizer-duplicate",
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.duplicate_profile(cx))),
                 )
                 .child(
                     action("equalizer-rename", "icons/pencil.svg", "equalizer-rename")
