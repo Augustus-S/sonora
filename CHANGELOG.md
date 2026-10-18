@@ -80,6 +80,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while Sonora shows it paused.
 - Apple Music songs that Apple has re-released under a new id play again instead of showing as
   unavailable in your library and playlists.
+- On Windows, maximizing Sonora on a monitor bigger than your main one fills the whole screen
+  instead of stopping at the main monitor's size.
 
 ## [0.43.0] - 2026-10-13
 
