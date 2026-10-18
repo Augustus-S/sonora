@@ -1,3 +1,4 @@
+mod aac;
 pub mod apple;
 pub mod artwork;
 mod audio;

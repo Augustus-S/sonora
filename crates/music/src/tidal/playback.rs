@@ -15,6 +15,7 @@ use bytes::Bytes;
 use reqwest::StatusCode;
 use rodio::Source as _;
 
+use crate::aac::Aac;
 use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::{self, Reader, Stream};
@@ -597,6 +598,7 @@ fn open_segments(
     let decoder = decoder(
         id,
         rodio::Decoder::builder()
+            .with_symphonia_decoder::<Aac>()
             .with_data(reader)
             .with_seekable(false),
     )?;
@@ -633,6 +635,7 @@ fn open_file(id: &str, stream: &Stream<Long>, at: Duration) -> Option<(Opened, D
 /// A seekable decoder over the whole of a track that is one file.
 fn file_decoder(id: &str, stream: &Stream<Long>) -> Option<rodio::Decoder<Reader<Long>>> {
     let builder = rodio::Decoder::builder()
+        .with_symphonia_decoder::<Aac>()
         .with_data(stream.reader())
         .with_seekable(true);
     let builder = match stream.total() {

@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use ytmusic::{AudioStream, YtMusic};
 
+use crate::aac::Aac;
 use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::{PREROLL, Plain, Reader, Source, Stream};
@@ -29,9 +30,9 @@ const PATIENCE: Duration = Duration::from_secs(15);
 const ATTEMPTS: u32 = 2;
 /// The level the stream host measures `loudnessDb` against, in LUFS.
 const REFERENCE_LUFS: f32 = -14.0;
-/// The levels YouTube Music serves Sonora, best first. High is the best AAC stream there is, 256
-/// kbps for a Premium account and 128 kbps otherwise, and normal is the 128 kbps one. The 48 kbps
-/// stream is left out because it is HE-AAC, whose SBR half the decoder cannot play.
+/// The levels YouTube Music serves, best first. High is the best AAC stream there is, 256 kbps
+/// for a Premium account and 128 kbps otherwise, normal is the 128 kbps one and low the 48 kbps
+/// HE-AAC one.
 pub(crate) const QUALITIES: &[Offer] = &[
     Offer {
         quality: Quality::High,
@@ -41,6 +42,11 @@ pub(crate) const QUALITIES: &[Offer] = &[
     Offer {
         quality: Quality::Normal,
         encoding: Encoding::Aac { kbps: 128 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Low,
+        encoding: Encoding::Aac { kbps: 48 },
         up_to: false,
     },
 ];
@@ -164,6 +170,7 @@ impl Fetch for YouTube {
             None => loaded.stream.reader(),
         };
         let decoder = match rodio::Decoder::builder()
+            .with_symphonia_decoder::<Aac>()
             .with_data(reader)
             .with_seekable(false)
             .build()
@@ -227,11 +234,12 @@ async fn attempt_open(api: &Arc<YtMusic>, id: &str, ceiling: Option<u32>) -> Res
     })
 }
 
-/// The bitrate ceiling a level stands for, in bits per second. Normal sits between the 128 and
-/// 256 kbps streams, since the bitrate YouTube reports runs a little above the nominal one.
+/// The bitrate ceiling a level stands for, in bits per second. Each sits between two streams,
+/// since the bitrate YouTube reports runs a little above the nominal one.
 fn ceiling(quality: Quality) -> Option<u32> {
     match quality.within(QUALITIES) {
         Quality::HiRes | Quality::Lossless | Quality::High => None,
-        Quality::Normal | Quality::Low => Some(160_000),
+        Quality::Normal => Some(160_000),
+        Quality::Low => Some(64_000),
     }
 }

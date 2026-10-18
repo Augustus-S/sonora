@@ -26,8 +26,8 @@ use async_trait::async_trait;
 
 use crate::apple::playback::Factory;
 use crate::{
-    Capabilities, Catalog, Encoding, InputSource, MusicApi as _, MusicProvider, Offer, PromptSink,
-    ProviderSession, Quality, Shape, SignIn, SignInPrompt, WebSignIn,
+    Capabilities, Catalog, InputSource, MusicApi as _, MusicProvider, PromptSink, ProviderSession,
+    Shape, SignIn, SignInPrompt, WebSignIn,
 };
 
 pub use client::AppleClient;
@@ -47,14 +47,6 @@ const LANDING: &str = "music.apple.com";
 /// The cookie filter runs on bare domains, so no leading dot. The account cookie is set on
 /// `music.apple.com`, which this covers.
 const COOKIE_DOMAIN: &str = "apple.com";
-
-/// The one level Apple Music serves Sonora, AAC at 256 kbps. Its 64 kbps stream is HE-AAC, whose
-/// SBR half the decoder cannot play, and every other flavour is FairPlay only.
-const QUALITIES: &[Offer] = &[Offer {
-    quality: Quality::High,
-    encoding: Encoding::Aac { kbps: 256 },
-    up_to: false,
-}];
 
 pub struct AppleProvider;
 
@@ -113,7 +105,7 @@ fn session(client: AppleClient, profile: crate::UserProfile) -> ProviderSession 
             radio: true,
             follow_artists: true,
             pins: true,
-            qualities: QUALITIES,
+            qualities: stream::QUALITIES,
             ..Capabilities::NONE
         },
     }

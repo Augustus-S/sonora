@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use rodio::Source as _;
 
 use super::{tags, wire};
+use crate::aac::Aac;
 use crate::engine::{self, Fetch, Loudness};
 use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player};
 
@@ -122,6 +123,7 @@ fn decode(id: &str) -> Result<rodio::Decoder<BufReader<Audio>>> {
     let reader = BufReader::new(Audio { file, skip });
 
     let mut builder = rodio::Decoder::builder()
+        .with_symphonia_decoder::<Aac>()
         .with_data(reader)
         .with_seekable(true)
         .with_gapless(gapless);

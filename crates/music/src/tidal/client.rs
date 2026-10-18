@@ -38,9 +38,8 @@ const OPENAPI: &str = "https://openapi.tidal.com/v2";
 /// `x-tidal-client-version` header the web player at listen.tidal.com sends.
 const CLIENT_VERSION: &str = "2025.7.16";
 
-/// The levels Tidal serves Sonora, best first. Hi-res comes as DASH segments of FLAC, lossless
-/// as one FLAC file and high as AAC at 320 kbps. Low is left out because it is HE-AAC, whose
-/// SBR half the decoder cannot play, so it would sound duller than its bitrate.
+/// The levels Tidal serves, best first. Hi-res comes as DASH segments of FLAC, lossless as one
+/// FLAC file, high as AAC at 320 kbps and low as HE-AAC at 96 kbps.
 pub(crate) const QUALITIES: &[Offer] = &[
     Offer {
         quality: Quality::HiRes,
@@ -61,6 +60,11 @@ pub(crate) const QUALITIES: &[Offer] = &[
     Offer {
         quality: Quality::High,
         encoding: Encoding::Aac { kbps: 320 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Low,
+        encoding: Encoding::Aac { kbps: 96 },
         up_to: false,
     },
 ];
@@ -1585,7 +1589,8 @@ fn audio_quality(quality: Quality) -> &'static str {
     match quality.within(QUALITIES) {
         Quality::HiRes => "HI_RES_LOSSLESS",
         Quality::Lossless => "LOSSLESS",
-        Quality::High | Quality::Normal | Quality::Low => "HIGH",
+        Quality::High | Quality::Normal => "HIGH",
+        Quality::Low => "LOW",
     }
 }
 

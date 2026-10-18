@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::aac::Aac;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::{Plain, Reader, Stream};
 use crate::subsonic::client::{Details, SubsonicClient};
@@ -94,6 +95,7 @@ impl Fetch for Subsonic {
     fn open(&self, id: &str, loaded: &Loaded, at: Duration) -> Option<Self::Source> {
         let total = loaded.stream.total();
         let mut builder = rodio::Decoder::builder()
+            .with_symphonia_decoder::<Aac>()
             .with_data(loaded.stream.reader())
             .with_seekable(total.is_some());
         if let Some(total) = total {
