@@ -42,9 +42,6 @@ const DEADZONE: f32 = 3.;
 const FREQUENCIES: [f32; 10] = [
     20., 50., 100., 200., 500., 1000., 2000., 5000., 10000., 20000.,
 ];
-/// How far apart the spectrum's scale is labelled, in decibels. Sparse and dim, so it never
-/// reads as the response's own scale.
-const SPECTRUM_STEP: f32 = 60.;
 
 type Edit = Rc<dyn Fn(&GraphEdit, &mut Window, &mut App)>;
 
@@ -490,7 +487,7 @@ impl RenderOnce for ResponseGraph {
                         let plot_bounds = Bounds::from_corners(
                             point(bounds.left() + pad * 7., bounds.top() + pad * 3.),
                             point(
-                                (bounds.right() - pad * 7.).max(bounds.left() + pad * 7.),
+                                (bounds.right() - pad * 3.).max(bounds.left() + pad * 7.),
                                 (bounds.bottom() - pad * 4.).max(bounds.top() + pad * 3.),
                             ),
                         );
@@ -592,7 +589,7 @@ fn paint_plot(
     let pad = theme.metrics.pad;
     let axes = plot.axes;
     if let Some(spectrum) = spectrum {
-        paint_spectrum(bounds, axes, spectrum, theme, window, cx);
+        paint_spectrum(bounds, axes, spectrum, theme, window);
     }
     paint_grid(bounds, axes, theme, window, cx);
     let curve: Vec<_> = response
@@ -859,15 +856,14 @@ fn paint_node(
     }
 }
 
-/// Fills the spectrum from the bottom of the plot up to its levels, and labels its scale along
-/// the right edge, all dim so it stays behind the response.
+/// Fills the spectrum from the bottom of the plot up to its levels, dim so it stays behind the
+/// response. It carries no scale of its own, since it only hints at what the curve shapes.
 fn paint_spectrum(
     bounds: Bounds<Pixels>,
     axes: ResponseAxes,
     spectrum: &Spectrum,
     theme: &Theme,
     window: &mut Window,
-    cx: &mut App,
 ) {
     let scale = ResponseAxes {
         gain: spectrum.scale,
@@ -902,25 +898,6 @@ fn paint_spectrum(
             HAIRLINE,
             theme.muted_foreground.opacity(0.2),
             window,
-        );
-    }
-    let [bottom, top] = spectrum.scale;
-    let start = (bottom / SPECTRUM_STEP).ceil() as i32;
-    let end = (top / SPECTRUM_STEP).floor() as i32;
-    for tick in start..=end {
-        let level = tick as f32 * SPECTRUM_STEP;
-        let y = scale.y(level, bounds);
-        text(
-            t!("response-graph-dbfs", value = level),
-            point(
-                bounds.right() + theme.metrics.pad * 6.,
-                y - theme.text(Text::Tiny) / 2.,
-            ),
-            1.,
-            theme.muted_foreground.opacity(0.4),
-            None,
-            window,
-            cx,
         );
     }
 }
