@@ -27,7 +27,7 @@ use state::Sonora;
 use ui::{ActiveTheme as _, Theme};
 
 /// How many blobs make up the field.
-const BLOBS: usize = 5;
+pub(crate) const BLOBS: usize = 5;
 /// The widest blur, in device pixels, the renderer still runs at full resolution. It picks
 /// the buffer from the radius: four or less keeps every pixel, eight halves the frame, and
 /// anything wider drops to a quarter. The field is already drawn at `DOWNSCALE`, so a wider
@@ -124,7 +124,7 @@ impl Ambient {
     /// carried from a light highlight down to a dark shadow, plus its runner-up
     /// where the art names one. Art with no colour leaves no tints behind, and
     /// then the stage is quiet neutrals.
-    fn colors(theme: &Theme) -> [Hsla; BLOBS] {
+    pub(crate) fn colors(theme: &Theme) -> [Hsla; BLOBS] {
         let neutral = |light: f32| Hsla {
             h: 0.06,
             s: 0.12,
