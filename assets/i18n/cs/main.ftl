@@ -58,7 +58,6 @@ library-part-not-loaded = Tato část tvé knihovny se nenačetla
 library-local-unconfigured = Nastav svou místní knihovnu
 
 # app menu
-app-refresh-library = Obnovit knihovnu
 app-sign-out = Odhlásit se
 app-quit = Ukončit
 app-settings = Nastavení…

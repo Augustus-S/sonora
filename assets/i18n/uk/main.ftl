@@ -58,7 +58,7 @@ library-part-not-loaded = Цей розділ бібліотеки не зава
 library-local-unconfigured = Налаштуйте локальну бібліотеку
 
 # app menu
-app-refresh-library = Оновити медіатеку
+app-refresh = Оновити
 app-sign-out = Вийти
 app-quit = Вихід
 app-settings = Налаштування…

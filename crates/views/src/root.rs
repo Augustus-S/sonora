@@ -3,7 +3,8 @@ use gpui::{App, Font, FontFallbacks, SharedString, StyleRefinement, font, prelud
 use gpui::{Window, div};
 use input::{
     CloseWindow, MinimizeWindow, NavigateBack, NavigateForward, OpenFilter, OpenSearch,
-    OpenSettings, ToggleFullscreen, ToggleLyrics, ToggleQueue, ToggleWindowFullscreen, ZoomWindow,
+    OpenSettings, Refresh, ToggleFullscreen, ToggleLyrics, ToggleQueue, ToggleWindowFullscreen,
+    ZoomWindow,
 };
 use router::{Destination, NavigationEvent, Screen, SettingsTab, back, forward, navigate};
 use state::{
@@ -501,6 +502,39 @@ impl Root {
         cx.notify();
     }
 
+    /// Fetches what the current page shows again from its provider, together with the library
+    /// shelf behind it. Ctrl/Cmd+R, the menu and the title-bar button all land here while a
+    /// window is open.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let library = Sonora::global(cx).library.clone();
+        let shelf = match router::trail(cx).read(cx).current() {
+            Destination::Home => {
+                self.screens.home.update(cx, |home, cx| home.refresh(cx));
+                return;
+            }
+            Destination::History => {
+                let history = Sonora::global(cx).history.clone();
+                history.update(cx, |history, cx| history.refresh(cx));
+                return;
+            }
+            Destination::Album(id) => {
+                if let Some(detail) = self.screens.album_detail.clone() {
+                    detail.update(cx, |detail, cx| detail.refresh(cx));
+                }
+                Shelf::of(&id)
+            }
+            Destination::Playlist(id) => {
+                if let Some(detail) = self.screens.playlist_detail.clone() {
+                    detail.update(cx, |detail, cx| detail.refresh(cx));
+                }
+                Shelf::of(&id)
+            }
+            Destination::Local(_) => Shelf::Local,
+            _ => Shelf::Streaming,
+        };
+        library.update(cx, |library, cx| library.refresh(shelf, cx));
+    }
+
     fn transition_to(&mut self, destination: Destination, cx: &mut Context<Self>) {
         self.navigation_transition = None;
         self.shell_entrance = None;
@@ -961,6 +995,7 @@ impl Render for Root {
             .on_action(cx.listener(|this, _: &OpenFilter, window, cx| this.open_filter(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSearch, _, cx| this.open_search(cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.open_settings(cx)))
+            .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
             .on_action(cx.listener(|this, _: &ToggleFullscreen, _, cx| this.toggle_fullscreen(cx)))
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .on_action(|_: &MinimizeWindow, window, _| window.minimize_window())

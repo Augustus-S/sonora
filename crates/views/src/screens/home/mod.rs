@@ -105,6 +105,11 @@ impl HomeView {
             .update(cx, |home, cx| home.set_visible(visible, cx));
     }
 
+    /// Fetches the feed and the library it mixes from again.
+    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.home.update(cx, |home, cx| home.refresh(cx));
+    }
+
     /// The Quick picks deck, headed by the name of the account it was drawn from. It is the
     /// one deck on the page: what the provider lists as played lately and its picks after
     /// them, a skeleton while they are on their way.

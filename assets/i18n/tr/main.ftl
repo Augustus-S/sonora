@@ -55,7 +55,6 @@ library-part-not-loaded = Kitaplığının bu bölümü yüklenemedi
 library-local-unconfigured = Yerel kitaplığını yapılandır
 
 # app menu
-app-refresh-library = Kitaplığı Yenile
 app-sign-out = Oturumu Kapat
 app-quit = Çık
 app-settings = Ayarlar…

@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A refresh button beside Back and Forward, or Ctrl+R (Cmd+R on macOS), loads the page you are
+  on again from your server, so changes made in another app show up without restarting Sonora.
 - You can pick a streaming quality for Tidal, Deezer, Spotify, YouTube Music and Apple Music in
   Settings → Playback → Streaming. Each level says what it streams as. Go as low as 48 kbps to
   save data, or choose Hi-res on Tidal for 24-bit FLAC. When your plan or a track has nothing at
