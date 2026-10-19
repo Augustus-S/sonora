@@ -141,11 +141,12 @@ impl Screen {
     }
 }
 
-/// One page of the settings shell. The rail lists the first ten in `RAIL` order, and the last two
-/// are drill-ins that open from a row on their parent page.
+/// One page of the settings takeover. The hub shows the first ten as tiles in `HUB` order, and
+/// the last two are drill-ins that open from a row on their parent page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsPage {
-    Accounts,
+    Providers,
+    General,
     Appearance,
     NowPlaying,
     Lyrics,
@@ -153,16 +154,16 @@ pub enum SettingsPage {
     Sound,
     Discord,
     Scrobbling,
-    General,
     About,
     LyricsSources,
     MusicFolders,
 }
 
 impl SettingsPage {
-    /// The pages the rail lists, top to bottom.
-    pub const RAIL: [Self; 10] = [
-        Self::Accounts,
+    /// The pages the hub shows as tiles, in reading order.
+    pub const HUB: [Self; 10] = [
+        Self::Providers,
+        Self::General,
         Self::Appearance,
         Self::NowPlaying,
         Self::Lyrics,
@@ -170,13 +171,13 @@ impl SettingsPage {
         Self::Sound,
         Self::Discord,
         Self::Scrobbling,
-        Self::General,
         Self::About,
     ];
 
-    /// Every page, the rail's first and the drill-ins after them.
+    /// Every page, the hub's first and the drill-ins after them.
     pub const ALL: [Self; 12] = [
-        Self::Accounts,
+        Self::Providers,
+        Self::General,
         Self::Appearance,
         Self::NowPlaying,
         Self::Lyrics,
@@ -184,7 +185,6 @@ impl SettingsPage {
         Self::Sound,
         Self::Discord,
         Self::Scrobbling,
-        Self::General,
         Self::About,
         Self::LyricsSources,
         Self::MusicFolders,
@@ -192,7 +192,8 @@ impl SettingsPage {
 
     pub fn id(self) -> &'static str {
         match self {
-            Self::Accounts => "accounts",
+            Self::Providers => "providers",
+            Self::General => "general",
             Self::Appearance => "appearance",
             Self::NowPlaying => "now-playing",
             Self::Lyrics => "lyrics",
@@ -200,7 +201,6 @@ impl SettingsPage {
             Self::Sound => "sound",
             Self::Discord => "discord",
             Self::Scrobbling => "scrobbling",
-            Self::General => "general",
             Self::About => "about",
             Self::LyricsSources => "lyrics-sources",
             Self::MusicFolders => "music-folders",
@@ -210,7 +210,8 @@ impl SettingsPage {
     /// The Fluent key of the page's name.
     pub fn key(self) -> &'static str {
         match self {
-            Self::Accounts => "settings-page-accounts",
+            Self::Providers => "settings-page-providers",
+            Self::General => "settings-page-general",
             Self::Appearance => "settings-page-appearance",
             Self::NowPlaying => "settings-page-now-playing",
             Self::Lyrics => "settings-page-lyrics",
@@ -218,17 +219,17 @@ impl SettingsPage {
             Self::Sound => "settings-page-sound",
             Self::Discord => "settings-page-discord",
             Self::Scrobbling => "settings-page-scrobbling",
-            Self::General => "settings-page-general",
             Self::About => "settings-page-about",
             Self::LyricsSources => "settings-page-lyrics-sources",
             Self::MusicFolders => "settings-page-music-folders",
         }
     }
 
-    /// The icon beside the page's name in the rail.
+    /// The icon that stands for the page beside a search result found on it.
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Accounts => "icons/user-round.svg",
+            Self::Providers => "icons/user-round.svg",
+            Self::General => "icons/settings.svg",
             Self::Appearance => "icons/palette.svg",
             Self::NowPlaying => "icons/maximize.svg",
             Self::Lyrics | Self::LyricsSources => "icons/mic-vocal.svg",
@@ -236,27 +237,18 @@ impl SettingsPage {
             Self::Sound => "icons/volume-2.svg",
             Self::Discord => "icons/radio.svg",
             Self::Scrobbling => "icons/list-music.svg",
-            Self::General => "icons/settings.svg",
             Self::About => "icons/info.svg",
             Self::MusicFolders => "icons/file-music.svg",
         }
     }
 
-    /// The page a drill-in returns to, or `None` for a page the rail lists.
+    /// The page a drill-in returns to, or `None` for a page the hub lists.
     pub fn parent(self) -> Option<Self> {
         match self {
             Self::LyricsSources => Some(Self::Lyrics),
-            Self::MusicFolders => Some(Self::Accounts),
+            Self::MusicFolders => Some(Self::Providers),
             _ => None,
         }
-    }
-
-    /// Whether the rail sets this page apart from the one above it, as the first of a cluster.
-    pub fn opens_cluster(self) -> bool {
-        matches!(
-            self,
-            Self::Appearance | Self::Playback | Self::Discord | Self::General
-        )
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -277,8 +269,10 @@ pub enum Destination {
     User(SharedString),
     Genre(SharedString),
     Search,
+    /// The tiles every settings page opens from, inside the workspace.
+    SettingsHub,
     Settings(SettingsPage),
-    /// The equalizer's own page in the settings shell, opened from Sound.
+    /// The equalizer's own page in the settings takeover, opened from Sound.
     Equalizer,
     Fullscreen,
 }
@@ -300,14 +294,20 @@ impl Destination {
         match (self, other) {
             (Destination::Library(_), Destination::Library(_))
             | (Destination::Local(_), Destination::Local(_)) => true,
-            _ if self.in_settings() && other.in_settings() => true,
+            _ if self.settings_related() && other.settings_related() => true,
             _ => self == other,
         }
     }
 
-    /// Whether the settings shell draws this destination rather than the workspace.
+    /// Whether the settings takeover draws this destination rather than the workspace.
     pub fn in_settings(&self) -> bool {
         matches!(self, Destination::Settings(_) | Destination::Equalizer)
+    }
+
+    /// Whether this is the settings hub or a page of the takeover, which the sidebar's Settings
+    /// entry lights for alike.
+    pub fn settings_related(&self) -> bool {
+        self.in_settings() || matches!(self, Destination::SettingsHub)
     }
 
     /// The settings page a drill-in's back button returns to. Only drill-ins have one.
@@ -319,7 +319,7 @@ impl Destination {
         }
     }
 
-    /// The rail page this destination belongs to: the page itself, or a drill-in's parent.
+    /// The hub page this destination belongs to: the page itself, or a drill-in's parent.
     pub fn settings_page(&self) -> Option<SettingsPage> {
         match self {
             Destination::Equalizer => Some(SettingsPage::Sound),
@@ -366,8 +366,8 @@ pub fn up(parent: Destination, cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.up(parent, cx));
 }
 
-/// Closes the settings shell on the destination the user left for it, however many settings
-/// pages were visited in between.
+/// Leaves the settings takeover for the hub, however many settings pages were visited in
+/// between.
 pub fn close_settings(cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.leave_settings(cx));
 }

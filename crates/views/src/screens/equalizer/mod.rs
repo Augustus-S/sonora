@@ -6,13 +6,13 @@ use gpui::{
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
 use music::output::{DeviceOption, OutputId, Port};
-use router::SettingsPage;
+use router::Destination;
 use state::{
     AppSettings, Equalizer, Outputs, RuleDevice, Signal, Sonora, Sound, equalizer_profile_label,
 };
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
-    Picker, Popovers, Room, Scrollbar, Scroller, Submit, Switch, TabBar, Text, heading,
+    Picker, Popovers, Room, Scrollbar, Submit, Switch, TabBar, Text,
 };
 
 use crate::chrome::Chrome;
@@ -210,6 +210,15 @@ impl EqualizerView {
         }
     }
 
+    /// What stands in the preview column beside the page, or `None` for no column.
+    pub(crate) fn preview(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        None
+    }
+
     /// Closes an open menu on escape. Returns false when none was open, so the escape can close
     /// settings instead.
     pub(crate) fn escape(&mut self) -> bool {
@@ -349,8 +358,8 @@ impl EqualizerView {
         );
     }
 
-    /// The page title and what the screen is for, with the Simple and Advanced switch on the
-    /// right. The choice is remembered across launches.
+    /// The Simple and Advanced switch the page opens with. The trail in the header names the page,
+    /// so it carries no title of its own. The choice is remembered across launches.
     fn header(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let mode = |id: &'static str, label: SharedString, choice: bool| {
             Button::new(id)
@@ -369,21 +378,10 @@ impl EqualizerView {
             mode("equalizer-advanced", t!("equalizer-advanced"), true),
         ];
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(settings::back(SettingsPage::Sound))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .child(heading(t!("settings-equalizer"), cx))
-                    .child(TabBar::new("equalizer-mode").flex_none().items(modes)),
-            )
+        TabBar::new("equalizer-mode")
+            .flex_none()
+            .self_start()
+            .items(modes)
             .into_any_element()
     }
 
@@ -591,47 +589,51 @@ impl Render for EqualizerView {
         let sound = self.sound(room, advanced, cx);
 
         let view = cx.entity();
-        let page = Scroller::new("equalizer-page", &self.scrollbar)
+        let preview = self.preview(window, cx);
+        let body = div()
             .flex()
             .flex_col()
-            .items_center()
-            .child(
-                settings::column(cx)
-                    .gap_6()
-                    .child(self.header(advanced, cx))
-                    .child(sound)
-                    .when(advanced, |this| {
-                        this.child(
-                            div()
-                                .key_context(FORM_CONTEXT)
-                                .on_action(cx.listener(|this, _: &Submit, window, cx| {
-                                    cx.stop_propagation();
-                                    this.submit(window, cx);
-                                }))
-                                .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
-                                    cx.stop_propagation();
-                                    this.revert(window, cx);
-                                }))
-                                .flex()
-                                .flex_col()
-                                .gap_6()
-                                .child(card(&view, "equalizer-preamp", |this, _, cx| {
-                                    this.preamp_card(cx)
-                                }))
-                                .child(card(&view, "equalizer-filters", |this, window, cx| {
-                                    this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
-                                })),
-                        )
-                        .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
-                        .child(card(
-                            &view,
-                            "equalizer-transfer",
-                            |this, _, cx| this.transfer(cx),
-                        ))
-                    }),
-            );
+            .gap_6()
+            .child(self.header(advanced, cx))
+            .child(sound)
+            .when(advanced, |this| {
+                this.child(
+                    div()
+                        .key_context(FORM_CONTEXT)
+                        .on_action(cx.listener(|this, _: &Submit, window, cx| {
+                            cx.stop_propagation();
+                            this.submit(window, cx);
+                        }))
+                        .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+                            cx.stop_propagation();
+                            this.revert(window, cx);
+                        }))
+                        .flex()
+                        .flex_col()
+                        .gap_6()
+                        .child(card(&view, "equalizer-preamp", |this, _, cx| {
+                            this.preamp_card(cx)
+                        }))
+                        .child(card(&view, "equalizer-filters", |this, window, cx| {
+                            this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
+                        })),
+                )
+                .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
+                .child(card(&view, "equalizer-transfer", |this, _, cx| {
+                    this.transfer(cx)
+                }))
+            });
 
-        div().size_full().child(page).children(self.name_dialog(cx))
+        settings::frame(
+            &Destination::Equalizer,
+            "equalizer-page",
+            &self.scrollbar,
+            body,
+            preview,
+            window,
+            cx,
+        )
+        .children(self.name_dialog(cx))
     }
 }
 

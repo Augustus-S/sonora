@@ -489,11 +489,10 @@ month-12 = Dec
 
 # settings
 settings-search = Search settings
-settings-close = Close settings
 settings-search-results = Results
 # where a search result lives: a drill-in page under the page it opens from
 settings-result-place = { $parent } › { $page }
-settings-page-accounts = Accounts
+settings-page-providers = Providers
 settings-page-appearance = Appearance
 settings-page-now-playing = Now playing
 settings-page-lyrics = Lyrics
@@ -503,9 +502,10 @@ settings-page-discord = Discord
 settings-page-scrobbling = Scrobbling
 settings-page-general = General
 settings-page-about = About
+settings-about-name = Sonora
 settings-page-lyrics-sources = Lyrics sources
 settings-page-music-folders = Music folders
-settings-group-services = Services
+settings-group-services = Streaming services
 settings-group-local-files = Local files
 settings-group-background = Background
 settings-group-controls = Controls
@@ -518,6 +518,13 @@ settings-group-output = Output
 settings-group-status = Status
 settings-group-startup = Startup
 settings-group-context-menus = Context menus
+settings-group-you = You
+settings-group-look = Look
+settings-group-listen = Listen
+settings-group-share = Share
+settings-group-sonora = Sonora
+shortcut-filter = Ctrl F
+shortcut-filter-mac = ⌘F
 settings-lyrics-sources = Lyrics sources
 settings-local-folder-count = { $count ->
     [one] { $count } folder
@@ -889,7 +896,7 @@ settings-group-motion = Motion
 settings-group-streaming = Streaming
 settings-adaptive-menu = Adaptive context menu
 settings-adaptive-menu-detail = Leaves out entries the row already shows, such as the album or the artist
-settings-accounts = Manage accounts
+settings-accounts = Streaming services
 settings-accounts-detail = The services this device can play from
 settings-provider-none = Not connected
 settings-provider-connected = Connected

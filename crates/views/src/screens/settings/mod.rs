@@ -14,8 +14,8 @@ use state::{
     Sleep, Sonora,
 };
 use ui::{
-    ActiveTheme as _, Button, Card, Deck, Dismiss, InfoCard, Input, Popovers, SMALL_INSET,
-    Scrollbar, Scroller, ScrubberState, Vacancy, faint, heading, snapped,
+    ActiveTheme as _, Card, Deck, Dismiss, Input, Popovers, Scrollbar, ScrubberState, Vacancy,
+    faint, heading, snapped,
 };
 
 use crate::chrome::OutputPicker;
@@ -27,16 +27,21 @@ mod accounts;
 mod appearance;
 mod discord;
 mod general;
+mod hub;
+mod layout;
 mod lyrics;
 mod now_playing;
 mod playback;
+mod preview;
 mod rows;
 mod scrobbling;
 mod sound;
-mod stage;
 
-/// How wide a page's column grows at most.
-const COLUMN: Pixels = px(760.);
+pub use hub::HubView;
+pub(crate) use layout::{Layout, SIDEBAR, frame};
+
+/// The space between two groups of a page.
+const GROUPS: Pixels = px(40.);
 /// How much a query found in a setting's title counts over one found in its detail.
 const TITLE_WEIGHT: u32 = 2;
 /// The picker keys the page's render watches, shared with the rows that open them.
@@ -234,7 +239,7 @@ pub struct SettingsView {
     loading_fonts: bool,
     font_task: Option<Task<()>>,
     /// What the pages' previews keep between frames.
-    stages: stage::Stages,
+    previews: preview::Previews,
 }
 
 impl SettingsView {
@@ -274,6 +279,10 @@ impl SettingsView {
         let search = cx.new(|cx| {
             Input::new("settings-search", cx)
                 .icon("icons/search.svg")
+                .shortcut(match cfg!(target_os = "macos") {
+                    true => "shortcut-filter-mac",
+                    false => "shortcut-filter",
+                })
                 .clearable()
         });
         cx.observe(&search, |this, input, cx| {
@@ -290,7 +299,7 @@ impl SettingsView {
 
         let popovers = Popovers::default();
         let output_picker = cx.new(|cx| OutputPicker::new(outputs.clone(), popovers.clone(), cx));
-        let stages = stage::Stages::new(cx);
+        let previews = preview::Previews::new(cx);
 
         Self {
             session,
@@ -300,7 +309,7 @@ impl SettingsView {
             settings,
             outputs,
             output_picker,
-            page: SettingsPage::Accounts,
+            page: SettingsPage::Providers,
             search,
             query: String::new(),
             reveal: None,
@@ -331,7 +340,7 @@ impl SettingsView {
             installed: None,
             loading_fonts: false,
             font_task: None,
-            stages,
+            previews,
         }
     }
 
@@ -387,7 +396,7 @@ impl SettingsView {
     /// The groups a page shows, in order.
     fn groups(&self, page: SettingsPage, cx: &App) -> Vec<Group> {
         match page {
-            SettingsPage::Accounts => self.accounts_groups(),
+            SettingsPage::Providers => self.accounts_groups(),
             SettingsPage::Appearance => self.appearance_groups(),
             SettingsPage::NowPlaying => self.now_playing_groups(cx),
             SettingsPage::Lyrics => self.lyrics_groups(),
@@ -405,7 +414,8 @@ impl SettingsView {
     /// What a page shows between its title and its groups, other than a preview.
     fn header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         match self.page {
-            SettingsPage::Accounts => Some(self.profile(cx).into_any_element()),
+            SettingsPage::Providers => Some(self.profile(cx).into_any_element()),
+            SettingsPage::About => Some(self.mark(cx).into_any_element()),
             _ => None,
         }
     }
@@ -421,21 +431,22 @@ impl SettingsView {
         }
     }
 
-    /// The live preview of the page on show, framed, for the pages that have one.
-    fn stage(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let preview = match self.page {
-            SettingsPage::Appearance => {
-                stage::appearance::stage(&self.stages.appearance, self, window, cx)
-            }
+    /// The live preview of the page on show, for the pages that have one. A search shows none,
+    /// since its results come from every page.
+    fn preview(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.searching() {
+            return None;
+        }
+        let previews = &self.previews;
+        match self.page {
             SettingsPage::NowPlaying => {
-                stage::now_playing::stage(&self.stages.now_playing, self, window, cx)
+                preview::now_playing::preview(&previews.now_playing, self, window, cx)
             }
-            SettingsPage::Lyrics => stage::lyrics::stage(&self.stages.lyrics, self, window, cx),
-            SettingsPage::Sound => stage::sound::stage(&self.stages.sound, self, window, cx),
-            SettingsPage::Discord => stage::discord::stage(&self.stages.discord, self, window, cx),
+            SettingsPage::Lyrics => preview::lyrics::preview(&previews.lyrics, self, window, cx),
+            SettingsPage::Sound => preview::sound::preview(&previews.sound, self, window, cx),
+            SettingsPage::Discord => preview::discord::preview(&previews.discord, self, window, cx),
             _ => None,
-        }?;
-        Some(stage::frame(preview, cx))
+        }
     }
 
     /// Every setting of every page that answers the query, best match first, with the page it
@@ -774,8 +785,8 @@ impl SettingsView {
         }
     }
 
-    /// One group: its heading, its option cards, then its rows on one surface with nothing
-    /// between them.
+    /// One group: a faint heading, its option cards, then its rows, all on the page itself with
+    /// no surface around them and nothing between the rows.
     fn group(&self, group: Group, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let Group {
@@ -789,7 +800,6 @@ impl SettingsView {
                 .flex()
                 .items_center()
                 .gap_1p5()
-                .px_5()
                 .mb(theme.metrics.pad)
                 .children(icon.map(|icon| {
                     svg()
@@ -812,11 +822,11 @@ impl SettingsView {
                 self.revealing(slot, row, cx)
             })
             .collect::<Vec<_>>();
-        let surface = (!rows.is_empty()).then(|| {
-            InfoCard::new("")
-                .untitled()
-                .flush()
-                .when(carded, |surface| surface.mt_3())
+        let rows = (!rows.is_empty()).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .when(carded, |rows| rows.mt_3())
                 .children(rows)
         });
 
@@ -825,19 +835,18 @@ impl SettingsView {
             .flex_col()
             .children(heading)
             .children(cards)
-            .children(surface)
+            .children(rows)
             .into_any_element()
     }
 
     /// Wraps the element of the setting a search result opened so that, once it is laid out,
-    /// the page scrolls to put it near the top.
+    /// the page scrolls to put it just below the header.
     fn revealing(&self, slot: Slot, element: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         if self.reveal != Some(slot) {
             return element;
         }
         let bar = self.scrollbar.clone();
         let view = cx.entity().downgrade();
-        let lead = cx.theme().metrics.inset;
 
         div()
             .relative()
@@ -845,6 +854,7 @@ impl SettingsView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
+                        let lead = Layout::of(false, window, cx).header;
                         let scroll = bar.read(cx).scroll().clone();
                         let top = bounds.top() - scroll.bounds().top() - scroll.offset().y;
                         let to = -(top - lead).max(Pixels::ZERO);
@@ -865,39 +875,28 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// The page on show: the way back for a drill-in, the title, the preview, the groups.
+    /// The page on show: what it opens with, the groups, and what it closes with. The trail in
+    /// the header names the page, so the page carries no title of its own.
     fn page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let theme = *cx.theme();
-        let title = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .mb(theme.metrics.inset)
-            .when_some(self.page.parent(), |this, parent| this.child(back(parent)))
-            .child(heading(i18n::lookup(self.page.key(), None), cx));
         let header = self.header(cx);
-        let stage = self.stage(window, cx);
         let groups = self
             .groups(self.page, cx)
             .into_iter()
             .map(|group| self.group(group, window, cx))
             .collect::<Vec<_>>();
 
-        div().child(title).child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.metrics.inset * 1.5)
-                .children(header)
-                .children(stage)
-                .children(groups)
-                .children(self.footer(cx)),
-        )
+        div()
+            .flex()
+            .flex_col()
+            .gap(GROUPS)
+            .children(header)
+            .children(groups)
+            .children(self.footer(cx))
     }
 
     /// What a search shows instead of the page: every setting that answers it, each naming the
     /// page it lives on and opening it there.
-    fn results(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn results(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let theme = *cx.theme();
         let hits = self.found(cx);
         let title = heading(t!("settings-search-results"), cx).mb(theme.metrics.inset);
@@ -994,29 +993,6 @@ impl SettingsView {
     }
 }
 
-/// The button above a drill-in's title that returns to the page it opened from.
-pub(crate) fn back(parent: SettingsPage) -> Button {
-    Button::new("settings-back")
-        .small()
-        .ghost()
-        .icon("icons/chevron-left.svg")
-        .label(i18n::lookup(parent.key(), None))
-        .ml(-SMALL_INSET)
-        .self_start()
-        .on_click(move |_, _, cx| router::up(Destination::Settings(parent), cx))
-}
-
-/// The column every settings page is laid out in: centred, no wider than `COLUMN`, inset all
-/// round by half as much again as a workspace page.
-pub(crate) fn column(cx: &App) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .max_w(COLUMN)
-        .p(cx.theme().metrics.inset * 1.5)
-}
-
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !cx.has_active_drag() {
@@ -1090,44 +1066,45 @@ impl Render for SettingsView {
             _ => {}
         }
 
+        let preview = self.preview(window, cx);
         let body = match self.searching() {
             true => self.results(window, cx),
             false => self.page(window, cx),
         };
+        let destination = Destination::Settings(self.page);
 
-        div()
-            .relative()
-            .size_full()
-            .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
-                if this.escape(cx) {
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                Scroller::new("settings", &self.scrollbar)
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(column(cx).child(body)),
-            )
-            .when_some(accounts, |this, accounts| {
-                this.child(self.account_modal(accounts, cx).into_any_element())
-            })
-            .when_some(code, |this, (code, url)| {
-                this.child(self.code_prompt(code, url, cx).into_any_element())
-            })
-            .when_some(manual_secret, |this, (slug, provider)| {
-                this.child(self.secret_prompt(slug, provider, cx).into_any_element())
-            })
-            .when(self.credentials_for.is_some(), |this| {
-                this.child(self.credentials_prompt(cx).into_any_element())
-            })
-            .when_some(self.scrobble_prompt, |this, service| {
-                this.child(self.scrobble_modal(service, cx).into_any_element())
-            })
-            .when_some(sign_in_for, |this, (slug, provider)| {
-                this.child(self.sign_in_prompt(slug, provider, cx).into_any_element())
-            })
+        layout::frame(
+            &destination,
+            "settings",
+            &self.scrollbar,
+            body,
+            preview,
+            window,
+            cx,
+        )
+        .track_focus(&self.focus)
+        .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
+            if this.escape(cx) {
+                cx.stop_propagation();
+            }
+        }))
+        .when_some(accounts, |this, accounts| {
+            this.child(self.account_modal(accounts, cx).into_any_element())
+        })
+        .when_some(code, |this, (code, url)| {
+            this.child(self.code_prompt(code, url, cx).into_any_element())
+        })
+        .when_some(manual_secret, |this, (slug, provider)| {
+            this.child(self.secret_prompt(slug, provider, cx).into_any_element())
+        })
+        .when(self.credentials_for.is_some(), |this| {
+            this.child(self.credentials_prompt(cx).into_any_element())
+        })
+        .when_some(self.scrobble_prompt, |this, service| {
+            this.child(self.scrobble_modal(service, cx).into_any_element())
+        })
+        .when_some(sign_in_for, |this, (slug, provider)| {
+            this.child(self.sign_in_prompt(slug, provider, cx).into_any_element())
+        })
     }
 }

@@ -3,14 +3,17 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, FontWeight, SharedString, div};
+use gpui::{AnyElement, Context, FontWeight, SharedString, div, svg};
 use i18n::t;
-use ui::{ActiveTheme as _, Avatar, InfoCard, Switch, Text, faint};
+use ui::{ActiveTheme as _, Avatar, Switch, Text, faint};
 
 use super::rows::outward;
 use super::{Group, SettingsView, Slot};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// How large the tile under the app mark stands, in covers, and how much of it the mark fills.
+const MARK_TILE: f32 = 0.5;
+const MARK: f32 = 0.55;
 const LICENSE_URL: &str = "https://www.gnu.org/licenses/gpl-3.0.html";
 const SOURCE_URL: &str = "https://github.com/sonorahq/sonora";
 
@@ -126,11 +129,45 @@ impl SettingsView {
             .into_any_element()
     }
 
+    /// What the About page opens with: the app mark and the name, centred over the column.
+    pub(super) fn mark(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = *cx.theme();
+        let tile = theme.metrics.cover * MARK_TILE;
+
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(tile)
+                    .rounded(theme.radius)
+                    .bg(theme.secondary)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(
+                        svg()
+                            .path(icons::path("icons/sonora.svg"))
+                            .size(tile * MARK)
+                            .text_color(theme.foreground),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(theme.text(Text::Title))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("settings-about-name")),
+            )
+    }
+
     pub(super) fn notice(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
 
         div()
-            .px_5()
             .text_color(theme.muted_foreground)
             .text_size(theme.text(Text::Small))
             .child(t!("settings-notice"))
@@ -143,42 +180,37 @@ impl SettingsView {
         div()
             .flex()
             .flex_col()
-            .child(
-                faint(cx)
-                    .px_5()
-                    .mb(theme.metrics.pad)
-                    .child(t!("settings-team")),
-            )
-            .child(InfoCard::new("").untitled().flush().children(
-                MEMBERS.into_iter().enumerate().map(|(index, member)| {
-                    div()
-                        .id(("team-member", index))
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .h(theme.metrics.list_row)
-                        .px_5()
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.secondary_hover))
-                        .on_click(move |_, _, cx| cx.open_url(member.profile))
-                        .child(Avatar::new(Some(member.avatar)).size(theme.metrics.thumb))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(member.login),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(theme.text(Text::Label))
-                                .text_color(theme.muted_foreground)
-                                .child(member.role.label()),
-                        )
-                }),
-            ))
+            .child(faint(cx).mb(theme.metrics.pad).child(t!("settings-team")))
+            .children(MEMBERS.into_iter().enumerate().map(|(index, member)| {
+                div()
+                    .id(("team-member", index))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .h(theme.metrics.list_row)
+                    .mx_neg_3()
+                    .px_3()
+                    .rounded(theme.radius)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.secondary_hover))
+                    .on_click(move |_, _, cx| cx.open_url(member.profile))
+                    .child(Avatar::new(Some(member.avatar)).size(theme.metrics.thumb))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(member.login),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(theme.text(Text::Label))
+                            .text_color(theme.muted_foreground)
+                            .child(member.role.label()),
+                    )
+            }))
     }
 }
 

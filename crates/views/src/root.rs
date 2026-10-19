@@ -5,7 +5,7 @@ use input::{
     CloseWindow, MinimizeWindow, NavigateBack, NavigateForward, OpenFilter, OpenSearch,
     OpenSettings, ToggleFullscreen, ToggleLyrics, ToggleQueue, ToggleWindowFullscreen, ZoomWindow,
 };
-use router::{Destination, NavigationEvent, Screen, SettingsPage, back, forward, navigate};
+use router::{Destination, NavigationEvent, Screen, back, forward, navigate};
 use state::{
     ArtistDetail, Detail, GenreDetails, Genres, Home, Io, Library, Network, Playback, Profile,
     Queue, Reconnected, SYSTEM_FONT, Scan, Search, Session, SessionEvent, SessionState, Shelf,
@@ -24,7 +24,7 @@ use crate::shells::settings::SettingsShell;
 use crate::shells::workspace::Workspace;
 use crate::{
     Adaptive, ArtistView, DetailView, EqualizerView, FullscreenView, GenreView, HistoryView,
-    HomeView, LibraryView, LoginView, SettingsView, SongView, UserView,
+    HomeView, HubView, LibraryView, LoginView, SettingsView, SongView, UserView,
 };
 
 struct Screens {
@@ -46,6 +46,9 @@ struct Screens {
     genres: Entity<Genres>,
     genre: Option<Entity<GenreView>>,
     genre_detail: Option<Entity<GenreDetails>>,
+    /// The settings pages' view, whose search the hub and the takeover share.
+    settings: Entity<SettingsView>,
+    hub: Entity<HubView>,
 }
 
 struct Shells {
@@ -100,8 +103,6 @@ pub struct Root {
     os_follow: Option<bool>,
     /// Whether the window is in OS fullscreen because opening the fullscreen view put it there.
     os_entered: bool,
-    /// The settings page that was on show last, where settings opens again.
-    last_settings: Option<Destination>,
     screens: Screens,
     adaptive: Entity<Adaptive>,
     background: Option<gpui::WindowBackgroundAppearance>,
@@ -204,10 +205,10 @@ impl Root {
         let search = cx.new(|cx| SearchView::new(queries, genres.clone(), playback.clone(), cx));
 
         let settings = cx.new(|cx| SettingsView::new(session.clone(), playback.clone(), cx));
+        let hub = cx.new(|cx| HubView::new(settings.clone(), cx));
         let equalizer = Sonora::global(cx).equalizer.clone();
         let equalizer = cx.new(|cx| EqualizerView::new(equalizer, window, cx));
-        let settings_shell =
-            cx.new(|cx| SettingsShell::new(settings, equalizer, playback.clone(), cx));
+        let settings_shell = cx.new(|cx| SettingsShell::new(settings.clone(), equalizer, cx));
 
         let song_detail = cx.new(|cx| SongDetail::new(session.clone(), io.clone(), cx));
         let song = cx.new(|cx| SongView::new(song_detail.clone(), playback.clone(), cx));
@@ -312,7 +313,6 @@ impl Root {
             shell_entrance: None,
             os_follow: None,
             os_entered: false,
-            last_settings: None,
             screens: Screens {
                 home,
                 history,
@@ -332,6 +332,8 @@ impl Root {
                 genres,
                 genre: None,
                 genre_detail: None,
+                settings,
+                hub,
             },
             adaptive,
             ambient,
@@ -443,7 +445,15 @@ impl Root {
         cx.notify();
     }
 
+    /// Focuses the filter of the page on show. In settings, the hub and the takeover alike, that
+    /// is the settings search.
     fn open_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = router::trail(cx).read(cx).current();
+        if current.settings_related() {
+            let search = self.screens.settings.read(cx).search();
+            search.update(cx, |search, cx| search.focus(window, cx));
+            return;
+        }
         let Some(toolbar) = self.toolbar.clone() else {
             return;
         };
@@ -515,18 +525,12 @@ impl Root {
         }
     }
 
-    /// Opens settings on the page that was on show last, or on Accounts the first time.
+    /// Opens the settings hub, leaving the takeover for it when a page is up.
     fn open_settings(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.view, RootView::Settings) {
-            return;
+        match self.view {
+            RootView::Settings => router::close_settings(cx),
+            RootView::Workspace | RootView::Fullscreen => navigate(Destination::SettingsHub, cx),
         }
-        let page = self
-            .last_settings
-            .clone()
-            .unwrap_or(Destination::Settings(SettingsPage::Accounts));
-        navigate(page, cx);
-        self.pending = Some(Focus::Settings);
-        cx.notify();
     }
 
     /// Moves to `destination`. A move to another shell plays the entrance over the whole
@@ -659,7 +663,6 @@ impl Root {
         if settings {
             self.view = RootView::Settings;
             self.toolbar = None;
-            self.last_settings = Some(destination);
             self.pending = Some(Focus::Settings);
             cx.notify();
             return;
@@ -732,6 +735,7 @@ impl Root {
                 genre.into()
             }
             Destination::Search => self.screens.search.clone().into(),
+            Destination::SettingsHub => self.screens.hub.clone().into(),
         };
 
         self.toolbar = toolbar;

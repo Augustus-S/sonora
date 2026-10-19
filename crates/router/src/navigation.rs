@@ -78,8 +78,8 @@ impl Navigation {
     }
 
     /// Drops the run of settings pages that ends at the current one, and the history after it,
-    /// landing where the user was before settings opened. A trail that started in settings
-    /// lands on Home.
+    /// landing on the settings hub. A run opened from the hub steps back onto it, and any other
+    /// gets the hub pushed after where the user was, so Back from the hub still reaches it.
     pub fn leave_settings(&mut self, cx: &mut Context<Self>) {
         if !self.current().in_settings() {
             return;
@@ -88,17 +88,11 @@ impl Navigation {
             .iter()
             .rposition(|destination| !destination.in_settings())
             .map_or(0, |before| before + 1);
-        match start {
-            0 => {
-                self.trail.truncate(1);
-                self.trail[0] = Destination::Home;
-                self.at = 0;
-            }
-            start => {
-                self.trail.truncate(start);
-                self.at = start - 1;
-            }
+        self.trail.truncate(start);
+        if self.trail.last() != Some(&Destination::SettingsHub) {
+            self.trail.push(Destination::SettingsHub);
         }
+        self.at = self.trail.len() - 1;
         self.arrive(cx);
     }
 

@@ -13,7 +13,7 @@ pub(crate) use aside::Aside;
 pub(crate) use notice::AppNotice;
 pub(crate) use output_picker::OutputPicker;
 pub(crate) use player_bar::PlayerBar;
-pub(crate) use sidebar_left::{SidebarLeft, sidebar_width};
+pub(crate) use sidebar_left::SidebarLeft;
 pub(crate) use sidebar_right::SidebarRight;
 #[cfg(target_os = "macos")]
 pub use title_bar::traffic_lights;

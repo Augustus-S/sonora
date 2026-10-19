@@ -9,8 +9,8 @@ use crate::chrome::Chrome;
 const HINT: gpui::Pixels = px(14.);
 
 /// One row of a group: the label at the start, an info mark beside it when the setting needs a
-/// word of explanation, and the control at the end. It stands one list row tall and pads itself
-/// to the group's inset, so rows stacked in a surface run edge to edge with nothing between.
+/// word of explanation, and the control at the end. It stands one list row tall with no inset of
+/// its own, so its label lines up with the group's heading and rows stack with nothing between.
 #[derive(IntoElement)]
 pub(super) struct Row {
     title: SharedString,
@@ -49,7 +49,6 @@ impl RenderOnce for Row {
             .justify_between()
             .gap_4()
             .min_h(theme.metrics.list_row)
-            .px_5()
             .child(
                 div()
                     .flex()
@@ -113,7 +112,8 @@ pub(super) fn outward(
     whole(id, title, value, "icons/external-link.svg", cx)
 }
 
-/// A row that is one button from edge to edge, ending in `trailing`.
+/// A row that is one button from edge to edge, ending in `trailing`. Its hover reaches a little
+/// past the column on both sides, so the label still lines up with the rows around it.
 fn whole(
     id: impl Into<ElementId>,
     title: SharedString,
@@ -128,11 +128,10 @@ fn whole(
         .label(title)
         .when_some(value, Button::detail)
         .trailing(trailing)
-        .w_full()
         .h(theme.metrics.list_row)
-        .px_5()
+        .mx_neg_3()
+        .px_3()
         .gap_3()
-        .rounded_none()
 }
 
 /// The grid option cards stand in: `columns` across where the page is wide, fewer as it narrows.

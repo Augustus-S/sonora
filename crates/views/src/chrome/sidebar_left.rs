@@ -11,10 +11,7 @@ use gpui::{
     Pixels, Point, Render, ScrollHandle, svg,
 };
 use gpui::{Window, div, px};
-use input::OpenSettings;
-use router::{
-    Destination, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsPage, navigate,
-};
+use router::{Destination, LibraryTab, NavEntry, Navigation, NavigationEvent, navigate};
 use state::{AppSettings, Library, Origin, PinSort, Pins, Playback, Session, Shelf, Sonora};
 
 use crate::shared::menus::{ItemMenu, item_menu};
@@ -45,11 +42,7 @@ const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
         "icons/rotate-ccw-clock.svg",
         Destination::History,
     ),
-    (
-        None,
-        "icons/settings.svg",
-        Destination::Settings(SettingsPage::Accounts),
-    ),
+    (None, "icons/settings.svg", Destination::SettingsHub),
 ];
 
 const LIBRARY_TABS: [(&str, LibraryTab); 4] = [
@@ -558,10 +551,6 @@ impl SidebarLeft {
                     this.flip(group);
                     cx.notify();
                 })),
-            // Settings opens where it was last left, which only the root knows.
-            None if destination.in_settings() => row
-                .when(active, |button| button.bg(accent))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
             None => row
                 .when(active, |button| button.bg(accent))
                 .on_click(move |_, _, cx| navigate(destination.clone(), cx)),
@@ -794,7 +783,7 @@ fn chevron(open: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use router::{Destination, LibraryTab, SettingsPage};
+    use router::{Destination, LibraryTab};
 
     use super::expanded;
 
@@ -808,10 +797,7 @@ mod tests {
             expanded(&Destination::Local(LibraryTab::Albums)),
             (false, true)
         );
-        assert_eq!(
-            expanded(&Destination::Settings(SettingsPage::Accounts)),
-            (false, false)
-        );
+        assert_eq!(expanded(&Destination::SettingsHub), (false, false));
     }
 
     #[test]
