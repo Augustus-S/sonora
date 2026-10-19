@@ -509,6 +509,8 @@ settings-page-music-folders = Music folders
 settings-hub-lyrics-first = Turn the volume up a little
 settings-hub-lyrics-second = and let the words come in on time
 settings-hub-lyrics-third = every line a little brighter
+# the header of the Discord status drawn on the Discord tile of the settings hub, as Discord words it
+settings-hub-discord-listening = Listening to { $name }
 settings-group-services = Streaming services
 settings-group-local-files = Local files
 settings-group-background = Background
