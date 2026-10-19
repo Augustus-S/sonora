@@ -67,6 +67,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Active shuffle and repeat show a dot beneath their icons in the player bar and fullscreen,
   so their state is visible without relying on color alone.
+- Settings now open full-window with ten pages listed down the left side, and the search above
+  them finds any setting by name and takes you to it. Themes, icon packs, corners, the
+  visualizer and streaming quality are picked from cards that show what you get.
+- The equalizer, lyrics sources and music folders each have a page of their own inside
+  settings, and Esc or the close button takes you back to where you were before settings.
 - With YouTube Music Premium, songs stream at 256 kbps instead of 128 kbps.
 - An equalizer preset that boosts no longer distorts loud passages. Sonora lowers the level by
   the curve's highest boost, so the balance you chose is what you hear.
