@@ -23,6 +23,7 @@ mod metrics;
 mod modal;
 pub mod motion;
 mod notice;
+mod option_card;
 mod palette;
 mod panel;
 mod picker;
@@ -91,6 +92,7 @@ pub use motion::{
     ease_out_quad, entering, entrance_span, mix, paced, veiled,
 };
 pub use notice::Notice;
+pub use option_card::OptionCard;
 pub use palette::{CoverPalette, palette, tint};
 pub use panel::{Panel, Side};
 pub use picker::Picker;

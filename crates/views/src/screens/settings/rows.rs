@@ -1,8 +1,9 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, ElementId, SharedString, Window, div, px, svg};
-use ui::{ActiveTheme as _, Button, Perch, Tipped as _};
+use gpui::{AnyElement, App, Div, ElementId, SharedString, Window, div, px, svg};
+use ui::{ActiveTheme as _, Button, Perch, Room, Tipped as _};
 
 use super::SettingsView;
+use crate::chrome::Chrome;
 
 /// How large the info mark beside a hinted label draws.
 const HINT: gpui::Pixels = px(14.);
@@ -132,4 +133,15 @@ fn whole(
         .px_5()
         .gap_3()
         .rounded_none()
+}
+
+/// The grid option cards stand in: `columns` across where the page is wide, fewer as it narrows.
+pub(super) fn grid(columns: u16, window: &Window, cx: &App) -> Div {
+    let columns = match Chrome::room(window, cx) {
+        Room::Tight => columns.min(2),
+        Room::Snug => columns.min(3),
+        Room::Roomy => columns.min(4),
+        Room::Wide | Room::Vast => columns,
+    };
+    div().grid().grid_cols(columns.max(1)).gap_3()
 }

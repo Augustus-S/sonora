@@ -1092,6 +1092,15 @@ impl AppSettings {
             .map(|theme| (theme.id.as_str(), theme.name.as_str()))
     }
 
+    /// The colours the custom theme `id` sets over the dark palette, or `None` when no custom
+    /// theme has that id.
+    pub fn custom_theme(&self, id: &str) -> Option<ThemeOverrides> {
+        self.themes
+            .iter()
+            .find(|theme| theme.id == id)
+            .map(|theme| theme.theme.clone())
+    }
+
     pub fn adaptive_theme(&self) -> bool {
         self.values.appearance.adaptive_theme
     }

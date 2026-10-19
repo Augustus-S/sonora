@@ -1,18 +1,25 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, SharedString, div, px, svg};
+use gpui::{
+    AnyElement, App, Context, Div, Hsla, Pixels, SharedString, Window, div, px, relative, svg,
+};
 use i18n::t;
 use state::SYSTEM_FONT;
 use ui::{
-    ActiveTheme as _, Button, Look, MAX_FONT, MAX_TRANSPARENCY, MIN_FONT, MenuItem, Picker,
-    Rounding, Scrubber, Switch, Theme, ThemeKind,
+    ActiveTheme as _, Button, Look, MAX_FONT, MAX_TRANSPARENCY, MIN_FONT, MenuItem, OptionCard,
+    Picker, Rounding, Scrubber, Switch, Theme, ThemeKind,
 };
 
+use super::rows::grid;
 use super::{Group, SettingsView, Slot, TYPEFACES};
 use crate::shared::popups::matches_query;
 
-const THEMES: &str = "themes";
-const PACKS: &str = "packs";
-const CORNERS: &str = "corners";
+/// How many theme cards stand in a row where the page is wide enough.
+const THEME_COLUMNS: u16 = 5;
+/// How large a pack's sample glyphs and the open folder glyph draw on their cards.
+const SAMPLE: Pixels = px(14.);
+const GLYPH: Pixels = px(18.);
+/// How thick the lines of a theme card's miniature window draw.
+const STROKE: Pixels = px(3.);
 const TYPEFACE_LIMIT: usize = 200;
 const TYPEFACE_LEAD: usize = 2;
 /// How many faces are previewed before a row has been measured.
@@ -23,9 +30,11 @@ const TYPEFACE_BATCH: usize = 3;
 impl SettingsView {
     pub(super) fn appearance_groups(&self) -> Vec<Group> {
         vec![
-            Group::new("settings-theme").rows([Slot::Theme, Slot::Adaptive]),
-            Group::new("settings-icons").rows([Slot::Icons]),
-            Group::new("settings-corners").rows([Slot::Corners]),
+            Group::new("settings-theme")
+                .cards(Slot::Theme)
+                .rows([Slot::Adaptive]),
+            Group::new("settings-icons").cards(Slot::Icons),
+            Group::new("settings-corners").cards(Slot::Corners),
             Group::new("settings-group-text").rows([Slot::Typeface, Slot::Font]),
             Group::new("settings-group-window").rows(
                 [Slot::Opacity]
@@ -205,31 +214,6 @@ impl SettingsView {
         self.row(t!("settings-typeface"), keys.into_any_element())
     }
 
-    pub(super) fn corners_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let look = self.look(cx);
-        let overrides = self.settings.read(cx).theme_overrides();
-
-        let picker = Picker::new(CORNERS, &self.popovers, look.rounding.label())
-            .width(Picker::NARROW)
-            .items(Rounding::ALL.into_iter().map(|rounding| {
-                let overrides = overrides.clone();
-                MenuItem::new(rounding.id(), rounding.label())
-                    .selected(look.rounding == rounding)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings.update(cx, |settings, cx| {
-                            settings.set_rounding(rounding.id(), cx);
-                        });
-                        Theme::set(Look { rounding, ..look }, &overrides, cx);
-                        cx.notify();
-                    }))
-            }));
-
-        self.row(t!("settings-corners"), picker.into_any_element())
-    }
-
-    /// Turns every frosted treatment in the app on or off at once: the menus, the fields, the
-    /// floating panels and the bands the chrome lays over the page. A backdrop blur is the
-    /// priciest thing the renderer does per frame, which is the whole reason it is a choice.
     pub(super) fn blur_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
@@ -316,7 +300,11 @@ impl SettingsView {
         self.row(t!("settings-font"), actions.into_any_element())
     }
 
-    pub(super) fn theme_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The theme cards: every built-in palette, then the custom themes, then the card that opens
+    /// the folder they live in. While the adaptive theme is on only the neutral palettes can be
+    /// chosen, since the tint is laid over those. A saved theme that is gone keeps a card of its
+    /// own, chosen and disabled, so the page says what became of it.
+    pub(super) fn theme_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let (selected, adaptive, custom) = {
             let settings = self.settings.read(cx);
@@ -325,49 +313,57 @@ impl SettingsView {
                 settings.adaptive_theme(),
                 settings
                     .custom_themes()
-                    .map(|(id, name)| (id.to_owned(), name.to_owned()))
+                    .map(|(id, name)| {
+                        let overrides = settings.custom_theme(id).unwrap_or_default();
+                        (id.to_owned(), name.to_owned(), overrides)
+                    })
                     .collect::<Vec<_>>(),
             )
         };
         let built_in = ThemeKind::ALL
             .into_iter()
             .find(|kind| kind.id() == selected);
-        let custom_selected = custom.iter().any(|(id, _)| id == &selected);
-        let current = custom
-            .iter()
-            .find(|(id, _)| id == &selected)
-            .map(|(_, name)| SharedString::from(name.clone()))
-            .or_else(|| built_in.map(ThemeKind::label))
-            .unwrap_or_else(|| t!("theme-unavailable", name = selected.clone()));
+        let custom_selected = custom.iter().any(|(id, ..)| id == &selected);
 
-        let mut items = ThemeKind::ALL
+        let mut cards = ThemeKind::ALL
             .into_iter()
             .map(|kind| {
-                let item = MenuItem::new(kind.id(), kind.label()).selected(selected == kind.id());
-                match adaptive
-                    && !matches!(kind, ThemeKind::System | ThemeKind::Dark | ThemeKind::Light)
-                {
-                    true => item.disabled().tooltip("settings-theme-unavailable"),
-                    false => item.on_click(cx.listener(move |this, _, _, cx| {
+                let locked = adaptive
+                    && !matches!(kind, ThemeKind::System | ThemeKind::Dark | ThemeKind::Light);
+                OptionCard::new(kind.id())
+                    .thumb(match kind {
+                        ThemeKind::System => div()
+                            .size_full()
+                            .flex()
+                            .child(div().flex_1().child(swatch(&Theme::dark(), cx)))
+                            .child(div().flex_1().child(swatch(&Theme::light(), cx))),
+                        kind => swatch(&Theme::for_kind(kind), cx),
+                    })
+                    .label(kind.label())
+                    .selected(selected == kind.id())
+                    .disabled(locked)
+                    .when(locked, |card| card.tooltip("settings-theme-unavailable"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         let overrides = this.settings.update(cx, |settings, cx| {
                             settings.set_theme(kind.id(), cx);
                             settings.theme_overrides()
                         });
                         Theme::fade(Look { kind, ..look }, &overrides, cx);
                         cx.notify();
-                    })),
-                }
+                    }))
+                    .into_any_element()
             })
             .collect::<Vec<_>>();
 
-        if !custom.is_empty() || built_in.is_none() {
-            items.push(MenuItem::separator(("custom-themes", 0usize)));
-        }
-        items.extend(custom.into_iter().map(|(id, name)| {
-            let item = MenuItem::new(format!("custom-theme:{id}"), name).selected(selected == id);
-            match adaptive {
-                true => item.disabled().tooltip("settings-theme-unavailable"),
-                false => item.on_click(cx.listener(move |this, _, _, cx| {
+        cards.extend(custom.into_iter().map(|(id, name, overrides)| {
+            let palette = Theme::for_kind(ThemeKind::Dark).with_overrides(&overrides);
+            OptionCard::new(SharedString::from(format!("custom-theme:{id}")))
+                .thumb(swatch(&palette, cx))
+                .label(name)
+                .selected(selected == id)
+                .disabled(adaptive)
+                .when(adaptive, |card| card.tooltip("settings-theme-unavailable"))
+                .on_click(cx.listener(move |this, _, _, cx| {
                     let overrides = this.settings.update(cx, |settings, cx| {
                         settings.set_theme(id.clone(), cx);
                         settings.theme_overrides()
@@ -381,66 +377,90 @@ impl SettingsView {
                         cx,
                     );
                     cx.notify();
-                })),
-            }
+                }))
+                .into_any_element()
         }));
+
         if built_in.is_none() && !custom_selected {
-            items.push(
-                MenuItem::new(
-                    "unavailable-theme",
-                    t!("theme-unavailable", name = selected.clone()),
-                )
-                .selected(true)
-                .disabled(),
+            cards.push(
+                OptionCard::new("unavailable-theme")
+                    .label(t!("theme-unavailable", name = selected.clone()))
+                    .selected(true)
+                    .disabled(true)
+                    .into_any_element(),
             );
         }
 
-        let picker = Picker::new(THEMES, &self.popovers, current)
-            .width(Picker::REGULAR)
-            .items(items);
-
         let settings = self.settings.clone();
-        let actions = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                Button::new("open-theme-folder")
-                    .label(t!("settings-theme-folder"))
-                    .small()
-                    .outline()
-                    .on_click(move |_, _, cx| {
-                        let path =
-                            settings.update(cx, |settings, _| settings.ensure_themes_directory());
-                        if let Err(error) = open::that_detached(&path) {
-                            log::warn!("settings: cannot open {}: {error}", path.display());
-                        }
-                    }),
-            )
-            .child(picker);
+        cards.push(
+            OptionCard::new("open-theme-folder")
+                .dashed()
+                .thumb(centred(
+                    svg()
+                        .path(icons::path("icons/folder-plus.svg"))
+                        .size(GLYPH)
+                        .text_color(cx.theme().muted_foreground),
+                ))
+                .label(t!("settings-theme-folder"))
+                .on_click(move |_, _, cx| {
+                    let path =
+                        settings.update(cx, |settings, _| settings.ensure_themes_directory());
+                    if let Err(error) = open::that_detached(&path) {
+                        log::warn!("settings: cannot open {}: {error}", path.display());
+                    }
+                })
+                .into_any_element(),
+        );
 
-        self.row(t!("settings-theme"), actions.into_any_element())
+        grid(THEME_COLUMNS, window, cx)
+            .children(cards)
+            .into_any_element()
     }
 
-    pub(super) fn icons_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// One card per icon pack, its thumbnail drawn with five of the pack's own glyphs.
+    pub(super) fn icon_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let chosen = self.settings.read(cx).icons().to_owned();
         let current = icons::pack(&chosen).unwrap_or_else(icons::active);
+        let packs = icons::packs().collect::<Vec<_>>();
 
-        let picker = Picker::new(PACKS, &self.popovers, current.title())
-            .width(Picker::REGULAR)
-            .items(icons::packs().map(|pack| {
-                MenuItem::new(pack.id, pack.title())
+        grid(packs.len() as u16, window, cx)
+            .children(packs.into_iter().map(|pack| {
+                OptionCard::new(pack.id)
+                    .thumb_height(theme.metrics.list_row * 1.1)
+                    .thumb(centred(samples(pack, theme.foreground)))
+                    .label(pack.title())
                     .selected(pack.id == current.id)
-                    .detail(samples(pack, theme.muted_foreground))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings
                             .update(cx, |settings, cx| settings.set_icons(pack.id, cx));
                         cx.notify();
                     }))
-            }));
+            }))
+            .into_any_element()
+    }
 
-        self.row(t!("settings-icons"), picker.into_any_element())
+    /// One card per corner rounding, its thumbnail the corner of a surface drawn at that radius.
+    pub(super) fn corner_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let look = self.look(cx);
+        let overrides = self.settings.read(cx).theme_overrides();
+
+        grid(Rounding::ALL.len() as u16, window, cx)
+            .children(Rounding::ALL.into_iter().map(|rounding| {
+                let overrides = overrides.clone();
+                OptionCard::new(rounding.id())
+                    .thumb(corner(rounding, cx))
+                    .label(rounding.label())
+                    .selected(look.rounding == rounding)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings.update(cx, |settings, cx| {
+                            settings.set_rounding(rounding.id(), cx);
+                        });
+                        Theme::set(Look { rounding, ..look }, &overrides, cx);
+                        cx.notify();
+                    }))
+            }))
+            .into_any_element()
     }
 
     pub(super) fn opacity_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -533,7 +553,8 @@ impl SettingsView {
     }
 }
 
-pub(super) fn samples(pack: &'static icons::Pack, tint: gpui::Hsla) -> impl IntoElement {
+/// Five glyphs drawn from `pack`, the way its card shows it.
+fn samples(pack: &'static icons::Pack, tint: Hsla) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -541,7 +562,7 @@ pub(super) fn samples(pack: &'static icons::Pack, tint: gpui::Hsla) -> impl Into
         .children(icons::SAMPLES.iter().map(|name| {
             svg()
                 .path(icons::shown(pack, name))
-                .size(px(14.))
+                .size(SAMPLE)
                 .flex_none()
                 .text_color(tint)
         }))
@@ -557,4 +578,84 @@ pub(super) fn usable_fonts(text_system: std::sync::Arc<gpui::TextSystem>) -> Vec
         .filter(|name| !name.starts_with('.'))
         .map(SharedString::from)
         .collect()
+}
+
+/// A miniature of the window in `palette`'s colours: the sidebar, a heading, two cards and the
+/// accent along the bottom, the way a theme card shows its theme.
+fn swatch(palette: &Theme, cx: &App) -> Div {
+    let step = cx.theme().metrics.pad / 2.;
+    let bar = |width: f32, color: Hsla| {
+        div()
+            .flex_none()
+            .h(STROKE)
+            .w(relative(width))
+            .rounded_full()
+            .bg(color)
+    };
+
+    div()
+        .size_full()
+        .flex()
+        .bg(palette.background)
+        .child(
+            div()
+                .h_full()
+                .w(relative(0.3))
+                .flex()
+                .flex_col()
+                .gap(step)
+                .p(step)
+                .bg(palette.sidebar)
+                .border_r_1()
+                .border_color(palette.sidebar_border)
+                .children([0.8, 0.6, 0.7, 0.5].map(|width| bar(width, palette.muted_foreground))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .flex_col()
+                .gap(step)
+                .p(step)
+                .child(bar(0.5, palette.foreground))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .gap(step)
+                        .child(div().flex_1().rounded(step / 2.).bg(palette.secondary))
+                        .child(div().flex_1().rounded(step / 2.).bg(palette.secondary)),
+                )
+                .child(bar(1., palette.primary)),
+        )
+}
+
+/// The top left corner of a surface drawn at `rounding`'s radius, the rest of it cut off by
+/// the thumbnail.
+fn corner(rounding: Rounding, cx: &App) -> Div {
+    let theme = cx.theme();
+
+    div().size_full().relative().child(
+        div()
+            .absolute()
+            .top(relative(0.3))
+            .left(relative(0.25))
+            .w_full()
+            .h_full()
+            .rounded(rounding.radius())
+            .border_2()
+            .border_color(theme.muted_foreground)
+            .bg(theme.secondary),
+    )
+}
+
+/// `content` in the middle of a thumbnail.
+fn centred(content: impl IntoElement) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(content)
 }

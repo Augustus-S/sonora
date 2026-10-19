@@ -1,18 +1,18 @@
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, MouseUpEvent, SharedString, div};
+use gpui::{AnyElement, App, Context, Div, MouseUpEvent, SharedString, Window, div, relative};
 use i18n::t;
 use music::drm::Origin;
 use music::{Codec, Encoding, Offer, Quality, Transcode};
 use state::{CdmState, Sleep};
-use ui::{ActiveTheme as _, Button, MenuItem, Picker, Scrubber, Switch, Text};
+use ui::{ActiveTheme as _, Button, MenuItem, OptionCard, Picker, Scrubber, Switch, Text};
 
+use super::rows::grid;
 use super::{Group, SettingsView, Slot};
 use crate::shared::confirm::{Confirm, Kind};
 
 const SLEEP: &str = "sleep";
-const STREAM_QUALITIES: &str = "stream-qualities";
 const STREAM_FORMATS: &str = "stream-formats";
 const STREAM_BITRATES: &str = "stream-bitrates";
 const SLEEP_MAX_MINUTES: u64 = 120;
@@ -30,8 +30,11 @@ impl SettingsView {
             Slot::Sleep,
             Slot::StayAwake,
         ])];
-        if !capabilities.qualities.is_empty() {
-            groups.push(Group::new("settings-stream-quality").rows([Slot::StreamQuality]));
+        // one level is nothing to choose between, so it is stated in a row rather than offered
+        match capabilities.qualities.len() {
+            0 => {}
+            1 => groups.push(Group::new("settings-stream-quality").rows([Slot::StreamQuality])),
+            _ => groups.push(Group::new("settings-stream-quality").cards(Slot::StreamQuality)),
         }
         if capabilities.transcode {
             groups.push(
@@ -83,47 +86,52 @@ impl SettingsView {
         )
     }
 
-    /// The stream level picker, offering only the levels the signed-in service serves, each with
-    /// what it streams as. A saved level the service lacks shows as the one it plays instead, and
-    /// a service with one level states it without a picker.
+    /// The stream level of a service that streams every track at one level, stated rather than
+    /// offered since there is nothing to choose between.
     pub(super) fn stream_quality_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let offers = self.session.read(cx).capabilities().qualities;
         let current = self.playback.read(cx).quality().within(offers);
+        let encoding = offers
+            .iter()
+            .find(|offer| offer.quality == current)
+            .map(encoding_label)
+            .unwrap_or_default();
 
-        let picker = Picker::new(
-            STREAM_QUALITIES,
-            &self.popovers,
+        self.row(
             i18n::lookup(quality_key(current), None),
-        )
-        .width(Picker::WIDE)
-        .items(offers.iter().map(|offer| {
-            let quality = offer.quality;
-            MenuItem::new(quality.id(), i18n::lookup(quality_key(quality), None))
-                .selected(quality == current)
-                .detail(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .text_size(theme.text(Text::Small))
-                        .child(encoding_label(offer)),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.playback
-                        .update(cx, |playback, cx| playback.set_quality(quality, cx));
-                    cx.notify();
-                }))
-        }));
-
-        // one level is nothing to choose between, so it is stated rather than offered
-        let control = match offers {
-            [only] => div()
+            div()
                 .text_color(theme.muted_foreground)
-                .text_size(theme.text(Text::Small))
-                .child(encoding_label(only))
+                .text_size(theme.text(Text::Label))
+                .child(encoding)
                 .into_any_element(),
-            _ => picker.into_any_element(),
-        };
-        self.row(t!("settings-stream-quality"), control)
+        )
+    }
+
+    /// One card per level the signed-in service streams at, lowest first, each saying what it
+    /// streams as. A saved level the service lacks shows as the one it plays instead.
+    pub(super) fn quality_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let offers = self.session.read(cx).capabilities().qualities;
+        let current = self.playback.read(cx).quality().within(offers);
+        let mut ladder = offers.to_vec();
+        ladder.sort_by_key(|offer| offer.quality);
+        let steps = ladder.len();
+
+        grid(steps as u16, window, cx)
+            .children(ladder.into_iter().enumerate().map(|(rank, offer)| {
+                let quality = offer.quality;
+                OptionCard::new(quality.id())
+                    .thumb(signal(rank, steps, cx))
+                    .label(i18n::lookup(quality_key(quality), None))
+                    .detail(encoding_label(&offer))
+                    .selected(quality == current)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.playback
+                            .update(cx, |playback, cx| playback.set_quality(quality, cx));
+                        cx.notify();
+                    }))
+            }))
+            .into_any_element()
     }
 
     pub(super) fn stream_format_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -538,4 +546,28 @@ pub(super) fn bitrate_detail(bitrate: Option<u32>) -> SharedString {
         ),
         None => t!("settings-stream-bitrate-unlimited-detail"),
     }
+}
+
+/// A rising row of `steps` bars with the first `rank + 1` lit, the way a quality card shows how
+/// far up the ladder its level stands.
+fn signal(rank: usize, steps: usize, cx: &App) -> Div {
+    let theme = cx.theme();
+
+    div()
+        .size_full()
+        .flex()
+        .items_end()
+        .justify_center()
+        .gap(theme.metrics.pad / 2.)
+        .pb(theme.metrics.pad * 1.5)
+        .children((0..steps).map(|step| {
+            div()
+                .w(theme.metrics.pad)
+                .h(relative(0.2 + 0.5 * (step + 1) as f32 / steps as f32))
+                .rounded(theme.metrics.pad / 4.)
+                .bg(match step <= rank {
+                    true => theme.foreground,
+                    false => theme.muted,
+                })
+        }))
 }

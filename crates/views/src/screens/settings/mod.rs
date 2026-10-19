@@ -685,20 +685,18 @@ impl SettingsView {
             Slot::Language => self.language_row(cx),
             Slot::Tray => self.tray_row(cx),
             Slot::TrayIcon => self.tray_icon_row(cx),
-            Slot::Accounts => self.accounts_cards(cx),
+            Slot::Accounts => div().into_any_element(),
             Slot::LocalFolder => self.local_folder_row(cx),
             Slot::Folders => self.folders(cx),
-            Slot::Theme => self.theme_row(cx),
+            Slot::Theme | Slot::Icons | Slot::Corners => div().into_any_element(),
             Slot::Adaptive => self.adaptive_row(cx),
             Slot::Ambient => self.ambient_row(cx),
             Slot::AmbientMotion => self.ambient_motion_row(cx),
-            Slot::Visualizer => self.visualizer_style_row(cx),
+            Slot::Visualizer => div().into_any_element(),
             Slot::VisualizerAbsolute => self.visualizer_absolute_row(cx),
-            Slot::Icons => self.icons_row(cx),
             Slot::Opacity => self.opacity_row(cx),
             Slot::WindowBlur => self.blur_window_row(cx),
             Slot::Blur => self.blur_row(cx),
-            Slot::Corners => self.corners_row(cx),
             Slot::FullscreenControlsAutohide => self.fullscreen_controls_autohide_row(cx),
             Slot::OsFullscreen => self.os_fullscreen_row(cx),
             Slot::PanelLyricsSize => self.panel_lyrics_size_row(cx),
@@ -762,9 +760,23 @@ impl SettingsView {
         }
     }
 
+    /// Builds the option cards a group shows above its rows. A slot with no cards of its own
+    /// draws its row instead.
+    fn cards(&self, slot: Slot, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        match slot {
+            Slot::Accounts => self.accounts_cards(cx),
+            Slot::Theme => self.theme_cards(window, cx),
+            Slot::Icons => self.icon_cards(window, cx),
+            Slot::Corners => self.corner_cards(window, cx),
+            Slot::Visualizer => self.visualizer_cards(window, cx),
+            Slot::StreamQuality => self.quality_cards(window, cx),
+            slot => self.slot_element(slot, cx),
+        }
+    }
+
     /// One group: its heading, its option cards, then its rows on one surface with nothing
     /// between them.
-    fn group(&self, group: Group, cx: &mut Context<Self>) -> AnyElement {
+    fn group(&self, group: Group, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let Group {
             title,
@@ -790,7 +802,7 @@ impl SettingsView {
         });
         let carded = cards.is_some();
         let cards = cards.map(|slot| {
-            let cards = self.slot_element(slot, cx);
+            let cards = self.cards(slot, window, cx);
             self.revealing(slot, cards, cx)
         });
         let rows = rows
@@ -868,7 +880,7 @@ impl SettingsView {
         let groups = self
             .groups(self.page, cx)
             .into_iter()
-            .map(|group| self.group(group, cx))
+            .map(|group| self.group(group, window, cx))
             .collect::<Vec<_>>();
 
         div().child(title).child(

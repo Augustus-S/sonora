@@ -1,13 +1,23 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context};
+use gpui::{AnyElement, App, Context, Pixels, Window, div, px, svg};
 use i18n::t;
 use state::FullscreenControlsAutohide;
-use ui::{MenuItem, Picker, Switch, VisualizerStyle};
+use ui::{
+    ActiveTheme as _, Levels, MenuItem, OptionCard, Picker, Switch, Visualizer, VisualizerStyle,
+};
 
+use super::rows::grid;
 use super::{Group, SettingsView, Slot};
 
 const FULLSCREEN_CONTROLS_AUTOHIDE: &str = "fullscreen-controls-autohide";
-const VISUALIZER_STYLE: &str = "visualizer-style";
+/// How large the cross on the Off card draws.
+const GLYPH: Pixels = px(18.);
+/// How much of a visualizer card's height its spectrum takes.
+const SPECTRUM: f32 = 0.8;
+/// The band levels a visualizer card draws, a spectrum caught at one moment.
+const STILL: [f32; 16] = [
+    0.42, 0.66, 0.84, 0.7, 0.5, 0.58, 0.76, 0.6, 0.44, 0.52, 0.64, 0.46, 0.34, 0.4, 0.28, 0.22,
+];
 
 impl SettingsView {
     pub(super) fn now_playing_groups(&self, cx: &App) -> Vec<Group> {
@@ -18,14 +28,14 @@ impl SettingsView {
                     .into_iter()
                     .chain(settings.ambient().then_some(Slot::AmbientMotion)),
             ),
-            Group::new("settings-visualizer").rows(
-                [Slot::Visualizer].into_iter().chain(
+            Group::new("settings-visualizer")
+                .cards(Slot::Visualizer)
+                .rows(
                     settings
                         .visualizer_style()
                         .shown()
                         .then_some(Slot::VisualizerAbsolute),
                 ),
-            ),
             Group::new("settings-group-controls")
                 .rows([Slot::FullscreenControlsAutohide, Slot::OsFullscreen]),
         ]
@@ -62,22 +72,45 @@ impl SettingsView {
     }
 
     /// How the spectrum is drawn behind the fullscreen artwork, off included.
-    pub(super) fn visualizer_style_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// One card per visualizer style, each drawing a still spectrum the way that style does.
+    pub(super) fn visualizer_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
         let chosen = self.settings.read(cx).visualizer_style();
+        let height = theme.metrics.list_row * 1.5;
 
-        let picker = Picker::new(VISUALIZER_STYLE, &self.popovers, chosen.label())
-            .width(Picker::NARROW)
-            .items(VisualizerStyle::ALL.map(|style| {
-                MenuItem::new(style.id(), style.label())
+        grid(VisualizerStyle::ALL.len() as u16, window, cx)
+            .children(VisualizerStyle::ALL.map(|style| {
+                let thumb = match style.shown() {
+                    false => div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            svg()
+                                .path(icons::path("icons/x.svg"))
+                                .size(GLYPH)
+                                .text_color(theme.muted_foreground),
+                        ),
+                    true => div().size_full().flex().flex_col().justify_end().child(
+                        Visualizer::new(still(), height * SPECTRUM)
+                            .style_kind(style)
+                            .tint(theme.foreground)
+                            .behind(theme.secondary)
+                            .w_full(),
+                    ),
+                };
+                OptionCard::new(style.id())
+                    .thumb(thumb)
+                    .label(style.label())
                     .selected(style == chosen)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings
                             .update(cx, |settings, cx| settings.set_visualizer_style(style, cx));
                         cx.notify();
                     }))
-            }));
-
-        self.row(t!("settings-visualizer"), picker.into_any_element())
+            }))
+            .into_any_element()
     }
 
     pub(super) fn visualizer_absolute_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -133,5 +166,13 @@ impl SettingsView {
                 }))
                 .into_any_element(),
         )
+    }
+}
+
+/// A still frame of a spectrum, the shape the visualizer cards draw.
+fn still() -> Levels {
+    Levels {
+        left: STILL.to_vec(),
+        right: STILL.iter().rev().copied().collect(),
     }
 }
