@@ -701,12 +701,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora vjen pa asnjë g
 theme-system = Sistemi
 theme-dark = E errët
 theme-light = E ndritshme
-theme-midnight = Mesnatë
-theme-forest = Pyll
-theme-ocean = Oqean
-theme-rose = Trëndafil
-theme-lavender = Lavandë
-theme-amber = Qelibar
 
 # corners
 corners-square = Katror

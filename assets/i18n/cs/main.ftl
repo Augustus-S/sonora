@@ -756,12 +756,6 @@ settings-notice = Copyright © 2026 Přispěvatelé projektu Sonora. Sonora je p
 theme-system = Podle systému
 theme-dark = Tmavý
 theme-light = Světlý
-theme-midnight = Půlnoční
-theme-forest = Lesní
-theme-ocean = Oceánský
-theme-rose = Růžový
-theme-lavender = Levandulový
-theme-amber = Jantarový
 theme-unavailable = { $name } (nedostupné)
 
 # corners

@@ -733,12 +733,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora est fourni sans 
 theme-system = Système
 theme-dark = Sombre
 theme-light = Clair
-theme-midnight = Minuit
-theme-forest = Forêt
-theme-ocean = Océan
-theme-rose = Rose
-theme-lavender = Lavande
-theme-amber = Ambre
 theme-unavailable = { $name } (indisponible)
 
 # corners

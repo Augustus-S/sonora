@@ -581,12 +581,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora kesinlikle hiçb
 theme-system = Sistem
 theme-dark = Koyu
 theme-light = Açık
-theme-midnight = Gece yarısı
-theme-forest = Orman
-theme-ocean = Okyanus
-theme-rose = Gül
-theme-lavender = Lavanta
-theme-amber = Kehribar
 
 # corners
 corners-square = Köşeli

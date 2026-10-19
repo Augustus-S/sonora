@@ -598,12 +598,6 @@ settings-notice = Copyright © 2026 Contribuidores do Sonora. O Sonora é distri
 theme-system = Sistema
 theme-dark = Escuro
 theme-light = Claro
-theme-midnight = Meia-noite
-theme-forest = Floresta
-theme-ocean = Oceano
-theme-rose = Rosa
-theme-lavender = Lavanda
-theme-amber = Âmbar
 
 # corners
 corners-square = Quadrado

@@ -619,12 +619,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora kommt ohne jede 
 theme-system = System
 theme-dark = Dunkel
 theme-light = Hell
-theme-midnight = Mitternacht
-theme-forest = Wald
-theme-ocean = Ozean
-theme-rose = Rosé
-theme-lavender = Lavendel
-theme-amber = Bernstein
 theme-unavailable = { $name } (nicht verfügbar)
 
 # corners

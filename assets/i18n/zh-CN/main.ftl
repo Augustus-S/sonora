@@ -598,12 +598,6 @@ settings-notice = 版权所有 © 2026 Sonora 贡献者。Sonora 不提供任何
 theme-system = 系统
 theme-dark = 深色
 theme-light = 浅色
-theme-midnight = 午夜
-theme-forest = 森林
-theme-ocean = 海洋
-theme-rose = 玫瑰
-theme-lavender = 薰衣草
-theme-amber = 琥珀
 
 # corners
 corners-square = 直角

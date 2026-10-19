@@ -731,12 +731,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora постачає
 theme-system = Системна
 theme-dark = Темна
 theme-light = Світла
-theme-midnight = Північ
-theme-forest = Ліс
-theme-ocean = Океан
-theme-rose = Троянда
-theme-lavender = Лаванда
-theme-amber = Бурштин
 
 # corners
 corners-square = Прямі

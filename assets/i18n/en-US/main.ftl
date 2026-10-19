@@ -953,12 +953,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora comes with absol
 theme-system = System
 theme-dark = Dark
 theme-light = Light
-theme-midnight = Midnight
-theme-forest = Forest
-theme-ocean = Ocean
-theme-rose = Rose
-theme-lavender = Lavender
-theme-amber = Amber
 theme-unavailable = { $name } (unavailable)
 
 # corners

@@ -556,12 +556,6 @@ settings-notice = Copyright © 2026 Sonora Contributors. Sonora は完全に無�
 theme-system = システム
 theme-dark = ダーク
 theme-light = ライト
-theme-midnight = ミッドナイト
-theme-forest = フォレスト
-theme-ocean = オーシャン
-theme-rose = ローズ
-theme-lavender = ラベンダー
-theme-amber = アンバー
 
 # corners
 corners-square = 四角
