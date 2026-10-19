@@ -502,6 +502,7 @@ settings-page-discord = Discord
 settings-page-scrobbling = Scrobbling
 settings-page-general = General
 settings-page-about = About
+settings-tab-integrations = Integrations
 settings-about-name = Sonora
 settings-page-lyrics-sources = Lyrics sources
 settings-page-music-folders = Music folders

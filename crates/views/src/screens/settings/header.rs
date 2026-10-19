@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{Context, Entity, Pixels, Render, Window, div, px};
-use router::{Destination, SettingsPage, navigate};
-use ui::{ActiveTheme as _, Button, TabBar, VeilEdge, effects, veil};
+use router::{Destination, SettingsPage, SettingsTab, navigate};
+use ui::{ActiveTheme as _, Button, Room, TabBar, VeilEdge, effects, veil};
 
 use super::{Layout, SettingsView};
 use crate::screens::equalizer::EqualizerView;
@@ -10,16 +10,16 @@ use crate::screens::equalizer::EqualizerView;
 /// strip, so this is also the widest the haze gets.
 const BLUR: Pixels = px(1.);
 
-/// The search field and the pill bar of pages that float over every settings page in the
+/// The search field and the pill bar of tabs that float over every settings page in the
 /// workspace. The workspace lays it over the content outside the page's transition, so a page
 /// change fades the rows and nothing else. It measures itself so the pages start below it.
 pub struct SettingsHeader {
     view: Entity<SettingsView>,
     /// The equalizer page, which starts below the header too and has to hear when it moves.
     equalizer: Entity<EqualizerView>,
-    /// The page clicked last, kept free of the hover shade until the pointer leaves it, so the
+    /// The tab clicked last, kept free of the hover shade until the pointer leaves it, so the
     /// change of selection never flashes.
-    calm: Option<SettingsPage>,
+    calm: Option<SettingsTab>,
 }
 
 impl SettingsHeader {
@@ -45,39 +45,46 @@ impl Render for SettingsHeader {
         let theme = *cx.theme();
         let view = self.view.read(cx);
         let search = view.search();
-        // a search lights no page, since its results come from all of them
+        // a search lights no tab, since its results come from all of them
         let chosen = match view.searching() {
             true => None,
-            false => router::trail(cx).read(cx).current().settings_page(),
+            false => router::trail(cx)
+                .read(cx)
+                .current()
+                .settings_page()
+                .map(SettingsPage::tab),
         };
         let calm = self.calm;
-        let pages = SettingsPage::ALL
-            .into_iter()
-            .filter(|page| page.parent().is_none());
-        let shown = chosen.and_then(|chosen| pages.clone().position(|page| page == chosen));
+        // a narrow column keeps the icons and leaves the names to the tooltips
+        let named = layout.room().fits(Room::Roomy);
+        let shown =
+            chosen.and_then(|chosen| SettingsTab::ALL.iter().position(|tab| *tab == chosen));
 
-        let tabs = TabBar::new("settings-pages")
+        let tabs = TabBar::new("settings-tabs")
             .max_w_full()
             .blurred()
             .reveal(shown)
-            .items(pages.map(|page| {
-                Button::new(page.id())
-                    .label(i18n::lookup(page.key(), None))
-                    .icon(page.icon())
+            .items(SettingsTab::ALL.map(|tab| {
+                Button::new(tab.id())
+                    .icon(tab.icon())
+                    .map(|button| match named {
+                        true => button.label(i18n::lookup(tab.key(), None)),
+                        false => button.tooltip(tab.key()),
+                    })
                     .small()
                     .ghost()
-                    .selected(chosen == Some(page))
-                    .when(calm == Some(page), Button::hoverless)
+                    .selected(chosen == Some(tab))
+                    .when(calm == Some(tab), Button::hoverless)
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if !hovered && this.calm == Some(page) {
+                        if !hovered && this.calm == Some(tab) {
                             this.calm = None;
                             cx.notify();
                         }
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.calm = Some(page);
+                        this.calm = Some(tab);
                         this.view.update(cx, |view, cx| view.clear_search(cx));
-                        navigate(Destination::Settings(page), cx);
+                        navigate(Destination::Settings(tab.lead()), cx);
                     }))
             }));
 

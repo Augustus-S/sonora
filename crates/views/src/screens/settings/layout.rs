@@ -4,7 +4,7 @@
 //! header, the pages and the equalizer all work the places out here from the same numbers.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Div, Entity, Global, Pixels, SharedString, Window, div, px};
+use gpui::{App, Div, Entity, Global, Pixels, SharedString, Window, div, px};
 use router::{Destination, SettingsPage};
 use ui::{ActiveTheme as _, Button, Room, Scrollbar, Scroller, effects, heading};
 
@@ -12,6 +12,9 @@ use crate::chrome::Chrome;
 
 /// How wide the content column grows at most.
 const COLUMN: Pixels = px(640.);
+/// How far up into the header the page runs before it is gone, so rows dissolve under the lower
+/// half of the tabs and never show behind the search field.
+const SINK: Pixels = px(40.);
 /// How far past the header the rows keep dissolving, so the handoff under its blur has no hard
 /// edge where sharp content comes out of the haze.
 const FADE_TAIL: Pixels = px(48.);
@@ -71,29 +74,38 @@ impl Layout {
         true
     }
 
-    /// Fades the scrolling content out across the header and a little past it, so rows rising
-    /// under the header dissolve rather than meet its blur at a line.
+    /// How far the scrolling page reaches up under the header, which is also how far its column
+    /// starts below the page's own top.
+    pub(crate) fn under(&self) -> Pixels {
+        SINK.min(self.top)
+    }
+
+    /// How far below the top of the scrolling page content stands clear of the fade, which is
+    /// where a revealed setting or section is put.
+    pub(crate) fn clear(&self) -> Pixels {
+        self.under() + FADE_TAIL
+    }
+
+    /// Fades the scrolling content out across the part of the header it runs under and a little
+    /// past it, so rows rising under the header dissolve rather than meet its blur at a line.
     pub(crate) fn fade<E: Styled>(&self, element: E) -> E {
         match effects() {
-            true => element.fade_edges(self.top + FADE_TAIL, Pixels::ZERO),
+            true => element.fade_edges(self.clear(), Pixels::ZERO),
             false => element,
         }
     }
 }
 
-/// Whether a page draws its title. About opens on the app's mark and name instead, unless a
-/// search puts its results there.
-fn titled(destination: &Destination, named: bool) -> bool {
-    named || *destination != Destination::Settings(SettingsPage::About)
-}
-
-/// The top of a page: the back link to the page a drill-in opened from, and the page's title or
-/// `named` in its place.
+/// The top of a page: the back link to the tab a drill-in opened from, and the title, which is
+/// `named` when given and otherwise the name of the tab's first page or the drill-in's own.
 fn title(destination: &Destination, named: Option<SharedString>, cx: &App) -> Div {
     let theme = cx.theme();
     let (parent, page) = match destination {
         Destination::Equalizer => (Some(SettingsPage::Sound), "settings-equalizer"),
-        Destination::Settings(page) => (page.parent(), page.key()),
+        Destination::Settings(page) => match page.parent() {
+            Some(parent) => (Some(parent), page.key()),
+            None => (None, page.tab().lead().key()),
+        },
         _ => (None, "nav-settings"),
     };
 
@@ -106,74 +118,77 @@ fn title(destination: &Destination, named: Option<SharedString>, cx: &App) -> Di
                 .ghost()
                 .small()
                 .icon("icons/chevron-left.svg")
-                .label(i18n::lookup(parent.key(), None))
+                .label(i18n::lookup(parent.tab().key(), None))
                 .tint(theme.muted_foreground)
                 .ml(-theme.metrics.pad)
                 .on_click(move |_, _, cx| router::up(Destination::Settings(parent), cx))
         }))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .h(theme.metrics.field)
-                .child(heading(
-                    named.unwrap_or_else(|| i18n::lookup(page, None)),
-                    cx,
-                )),
-        )
+        .child(headline(
+            named.unwrap_or_else(|| i18n::lookup(page, None)),
+            cx,
+        ))
 }
 
-/// Lays a settings page out in its column, centred in the content area: the title, then
-/// `preview` across the column when the page has one, then `body`, all scrolling together under
-/// the floating header. `destination` names the page for its title unless `named` gives one.
-/// The page sits out the frames before the header has measured itself, so it never jumps.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "every page hands its whole frame over at once"
-)]
+/// The title a later page of a tab opens on, as large as the tab's own.
+pub(crate) fn section_title(page: SettingsPage, cx: &App) -> Div {
+    headline(i18n::lookup(page.key(), None), cx)
+}
+
+/// A page's large title, standing as tall as a field.
+fn headline(label: SharedString, cx: &App) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(cx.theme().metrics.field)
+        .child(heading(label, cx))
+}
+
+/// Lays a settings page out in its column, centred in the content area: the title, then `body`,
+/// scrolling together from just under the floating header, into which they dissolve.
+/// `destination` names the page for its title unless `named` gives one. The page sits out the
+/// frames before the header has measured itself, so it never jumps.
 pub(crate) fn frame(
     destination: &Destination,
     named: Option<SharedString>,
     id: &'static str,
     scrollbar: &Entity<Scrollbar>,
     body: impl IntoElement,
-    preview: Option<AnyElement>,
     window: &Window,
     cx: &mut App,
 ) -> Div {
     let layout = Layout::of(window, cx);
     let theme = *cx.theme();
     scrollbar.update(cx, |bar, cx| {
-        bar.set_track_top(layout.top, cx);
+        bar.set_track_top(layout.under(), cx);
     });
     div()
         .relative()
         .size_full()
         .when(!layout.measured, |page| page.invisible())
         .child(
-            div().absolute().inset_0().child(
-                layout
-                    .fade(Scroller::new(id, scrollbar))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_none()
-                            .w(layout.width)
-                            .pt(layout.top)
-                            .pb(theme.metrics.inset * 2.)
-                            .when(titled(destination, named.is_some()), |column| {
-                                column.child(title(destination, named, cx).mb(theme.metrics.inset))
-                            })
-                            .children(
-                                preview
-                                    .map(|preview| div().w_full().mb(super::GROUPS).child(preview)),
-                            )
-                            .child(body),
-                    ),
-            ),
+            div()
+                .absolute()
+                .top(layout.top - layout.under())
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .child(
+                    layout
+                        .fade(Scroller::new(id, scrollbar))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_none()
+                                .w(layout.width)
+                                .pt(layout.under())
+                                .pb(theme.metrics.inset * 2.)
+                                .child(title(destination, named, cx).mb(theme.metrics.inset))
+                                .child(body),
+                        ),
+                ),
         )
 }

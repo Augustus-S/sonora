@@ -141,8 +141,9 @@ impl Screen {
     }
 }
 
-/// One page of settings. The first ten stand in the settings header's tabs, and the last two are
-/// drill-ins that open from a row on their parent page.
+/// One page of settings. The first ten are sections of the six tabs, each tab showing its sections
+/// one after another on one scrolling page, and the last two are drill-ins that open from a row
+/// on their parent page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsPage {
     Providers,
@@ -160,7 +161,7 @@ pub enum SettingsPage {
 }
 
 impl SettingsPage {
-    /// Every page, the tabbed ones first and the drill-ins after them.
+    /// Every page, the sections first and the drill-ins after them.
     pub const ALL: [Self; 12] = [
         Self::Providers,
         Self::General,
@@ -211,24 +212,7 @@ impl SettingsPage {
         }
     }
 
-    /// The icon that stands for the page beside a search result found on it.
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Providers => "icons/user-round.svg",
-            Self::General => "icons/settings.svg",
-            Self::Appearance => "icons/palette.svg",
-            Self::NowPlaying => "icons/maximize.svg",
-            Self::Lyrics | Self::LyricsSources => "icons/mic-vocal.svg",
-            Self::Playback => "icons/play.svg",
-            Self::Sound => "icons/volume-2.svg",
-            Self::Discord => "icons/radio.svg",
-            Self::Scrobbling => "icons/list-music.svg",
-            Self::About => "icons/info.svg",
-            Self::MusicFolders => "icons/file-music.svg",
-        }
-    }
-
-    /// The page a drill-in returns to, or `None` for a page the tabs list.
+    /// The page a drill-in returns to, or `None` for a section of a tab.
     pub fn parent(self) -> Option<Self> {
         match self {
             Self::LyricsSources => Some(Self::Lyrics),
@@ -239,6 +223,94 @@ impl SettingsPage {
 
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|page| page.id() == id)
+    }
+
+    /// The tab the page shows in. A drill-in belongs to its parent's tab.
+    pub fn tab(self) -> SettingsTab {
+        match self {
+            Self::General | Self::About => SettingsTab::General,
+            Self::Providers | Self::MusicFolders => SettingsTab::Providers,
+            Self::Appearance | Self::NowPlaying => SettingsTab::Appearance,
+            Self::Lyrics | Self::LyricsSources => SettingsTab::Lyrics,
+            Self::Playback | Self::Sound => SettingsTab::Playback,
+            Self::Discord | Self::Scrobbling => SettingsTab::Integrations,
+        }
+    }
+}
+
+/// One tab of the settings header. A tab is one scrolling page of its sections, each a former
+/// page under its own title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsTab {
+    General,
+    Providers,
+    Appearance,
+    Lyrics,
+    Playback,
+    Integrations,
+}
+
+impl SettingsTab {
+    /// Every tab, in the order the header shows them.
+    pub const ALL: [Self; 6] = [
+        Self::General,
+        Self::Providers,
+        Self::Appearance,
+        Self::Lyrics,
+        Self::Playback,
+        Self::Integrations,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Providers => "providers",
+            Self::Appearance => "appearance",
+            Self::Lyrics => "lyrics",
+            Self::Playback => "playback",
+            Self::Integrations => "integrations",
+        }
+    }
+
+    /// The Fluent key of the tab's name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::General => "settings-page-general",
+            Self::Providers => "settings-page-providers",
+            Self::Appearance => "settings-page-appearance",
+            Self::Lyrics => "settings-page-lyrics",
+            Self::Playback => "settings-page-playback",
+            Self::Integrations => "settings-tab-integrations",
+        }
+    }
+
+    /// The icon before the tab's name in the header, and beside a search result found in it.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::General => "icons/settings.svg",
+            Self::Providers => "icons/user-round.svg",
+            Self::Appearance => "icons/palette.svg",
+            Self::Lyrics => "icons/mic-vocal.svg",
+            Self::Playback => "icons/play.svg",
+            Self::Integrations => "icons/link.svg",
+        }
+    }
+
+    /// The pages the tab shows, top to bottom. The first is the one the tab opens on.
+    pub fn sections(self) -> &'static [SettingsPage] {
+        match self {
+            Self::General => &[SettingsPage::General, SettingsPage::About],
+            Self::Providers => &[SettingsPage::Providers],
+            Self::Appearance => &[SettingsPage::Appearance, SettingsPage::NowPlaying],
+            Self::Lyrics => &[SettingsPage::Lyrics],
+            Self::Playback => &[SettingsPage::Playback, SettingsPage::Sound],
+            Self::Integrations => &[SettingsPage::Discord, SettingsPage::Scrobbling],
+        }
+    }
+
+    /// The page the tab opens on, at its top.
+    pub fn lead(self) -> SettingsPage {
+        self.sections()[0]
     }
 }
 

@@ -254,15 +254,6 @@ impl EqualizerView {
         }
     }
 
-    /// What stands at the top of the page above its cards, or `None` for nothing.
-    pub(crate) fn preview(
-        &mut self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        None
-    }
-
     /// Closes an open menu on escape. Returns false when none was open.
     pub(crate) fn escape(&mut self) -> bool {
         let open = self.popovers.any();
@@ -710,7 +701,6 @@ impl Render for EqualizerView {
         let sound = self.sound(room, advanced, cx);
 
         let view = cx.entity();
-        let preview = self.preview(window, cx);
         let body = div()
             .flex()
             .flex_col()
@@ -734,7 +724,6 @@ impl Render for EqualizerView {
             "equalizer-page",
             &self.scrollbar,
             body,
-            preview,
             window,
             cx,
         )

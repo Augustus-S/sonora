@@ -1,6 +1,6 @@
-//! The previews at the top of the pages where seeing a setting beats reading it. Each page with
-//! one has a file here holding the preview's own state and the function that draws it, framed by
-//! `framed`. The page lays it across its column, above its first group.
+//! The previews of the pages where seeing a setting beats reading it. Each page with one has a
+//! file here holding the preview's own state and the function that draws it, framed by `framed`.
+//! The tab lays it across its column, under the page's title and above its first group.
 
 use std::cell::{Cell, RefCell};
 use std::hash::{BuildHasher as _, RandomState};
@@ -98,9 +98,9 @@ impl Previews {
         self.sound.hide();
     }
 
-    /// The page on show changed, so the previews of the others stop what they keep running.
-    pub(super) fn shown(&mut self, page: router::SettingsPage) {
-        if page != router::SettingsPage::Sound {
+    /// The tab on show changed, so the previews of the others stop what they keep running.
+    pub(super) fn shown(&mut self, tab: router::SettingsTab) {
+        if tab != router::SettingsTab::Playback {
             self.sound.hide();
         }
     }

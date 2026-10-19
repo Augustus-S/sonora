@@ -8,7 +8,7 @@ use gpui::{
 };
 use i18n::{Language, t};
 use music::SignInPrompt;
-use router::{Destination, SettingsPage, navigate};
+use router::{Destination, SettingsPage, SettingsTab, navigate};
 use state::{
     AppSettings, Drm, Equalizer, Io, Outputs, Playback, Scan, Scrobbling, Session, SessionState,
     Sleep, Sonora,
@@ -39,6 +39,7 @@ mod sound;
 mod themes;
 
 pub use header::SettingsHeader;
+use layout::section_title;
 pub(crate) use layout::{Layout, frame};
 pub(crate) use rows::Row;
 
@@ -132,6 +133,15 @@ enum Slot {
     Source,
 }
 
+/// What a tab scrolls to once it is laid out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reveal {
+    /// A setting a search result opened.
+    Slot(Slot),
+    /// The title of a section further down a tab, which a route to that section names.
+    Section(SettingsPage),
+}
+
 /// One group of a page: an uppercase eyebrow with its icon, an optional block of option cards
 /// under it, and the rows below.
 struct Group {
@@ -187,13 +197,14 @@ pub struct SettingsView {
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
     output_picker: Entity<OutputPicker>,
-    /// The page on show, a rail page or a drill-in.
+    /// The page the route names: a page of the tab on show, or a drill-in.
     page: SettingsPage,
     search: Entity<Input>,
     /// The search field's text, trimmed. Empty means the page shows its own settings.
     query: String,
-    /// The setting a search result opened, which the page scrolls into view once it is laid out.
-    reveal: Option<Slot>,
+    /// What the tab scrolls into view once it is laid out: the setting a search result opened,
+    /// or the section a route named.
+    reveal: Option<Reveal>,
     /// Where a lyrics source dragged over the priority list would land, as a gap between the
     /// enabled sources. `None` while the drop would leave the order as it is.
     lyrics_drop_gap: Option<usize>,
@@ -289,6 +300,9 @@ impl SettingsView {
             if this.query.is_empty() != query.is_empty() {
                 this.scrollbar.update(cx, |bar, _| bar.place(Pixels::ZERO));
             }
+            if !query.is_empty() {
+                this.reveal = None;
+            }
             this.query = query;
             cx.notify();
         })
@@ -342,17 +356,32 @@ impl SettingsView {
         }
     }
 
-    /// Shows one page and ends any search, so a route always lands on a plain page. A new page
-    /// starts at its top.
+    /// Shows the tab a page belongs to and ends any search, so a route always lands on a plain
+    /// tab. A new route starts at the top of its tab, or at its section when that lies further
+    /// down, and a route to the page already on show keeps the tab where it was scrolled.
     pub(crate) fn select(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
         if self.page != page {
             self.scrollbar.update(cx, |bar, _| bar.place(Pixels::ZERO));
+            // a search result names a setting on the page it opens, and any other route to a
+            // later page of a tab reveals that page's title
+            self.reveal = match self.reveal {
+                Some(Reveal::Slot(slot))
+                    if self
+                        .groups(page, cx)
+                        .iter()
+                        .any(|group| group.slots().any(|shown| shown == slot)) =>
+                {
+                    Some(Reveal::Slot(slot))
+                }
+                _ => (page.parent().is_none() && page != page.tab().lead())
+                    .then_some(Reveal::Section(page)),
+            };
         }
         self.page = page;
         self.popovers.close();
-        self.previews.shown(page);
+        self.previews.shown(page.tab());
         // a device plugged in since the list was read is only found by asking again
-        if page == SettingsPage::Sound {
+        if page.tab() == SettingsTab::Playback {
             self.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
         }
         self.clear_search(cx);
@@ -420,8 +449,8 @@ impl SettingsView {
     }
 
     /// What a page shows between its title and its groups, other than a preview.
-    fn header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        match self.page {
+    fn header(&self, page: SettingsPage, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match page {
             SettingsPage::Providers => Some(self.profile(cx).into_any_element()),
             SettingsPage::About => Some(self.mark(cx).into_any_element()),
             _ => None,
@@ -429,8 +458,8 @@ impl SettingsView {
     }
 
     /// What a page shows under its groups.
-    fn footer(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        match self.page {
+    fn footer(&self, page: SettingsPage, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        match page {
             SettingsPage::About => vec![
                 self.team(cx).into_any_element(),
                 self.notice(cx).into_any_element(),
@@ -439,14 +468,15 @@ impl SettingsView {
         }
     }
 
-    /// The live preview at the top of the page on show, for the pages that have one. A search
-    /// shows none, since its results come from every page.
-    fn preview(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.searching() {
-            return None;
-        }
+    /// The live preview above a page's first group, for the pages that have one.
+    fn preview(
+        &self,
+        page: SettingsPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let previews = &self.previews;
-        match self.page {
+        match page {
             SettingsPage::NowPlaying => {
                 preview::now_playing::preview(&previews.now_playing, self, window, cx)
             }
@@ -806,13 +836,13 @@ impl SettingsView {
         let carded = cards.is_some();
         let cards = cards.map(|slot| {
             let cards = self.cards(slot, window, cx);
-            self.revealing(slot, cards, cx)
+            self.revealing(Reveal::Slot(slot), cards, cx)
         });
         let rows = rows
             .into_iter()
             .map(|slot| {
                 let row = self.slot_element(slot, window, cx);
-                self.revealing(slot, row, cx)
+                self.revealing(Reveal::Slot(slot), row, cx)
             })
             .collect::<Vec<_>>();
         let rows = (!rows.is_empty()).then(|| {
@@ -832,10 +862,11 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// Wraps the element of the setting a search result opened so that, once it is laid out,
-    /// the page scrolls to put it at the top of the column.
-    fn revealing(&self, slot: Slot, element: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        if self.reveal != Some(slot) {
+    /// Wraps `element` so that, while it is what the tab waits to reveal, the tab keeps it just
+    /// below the header, clear of the fade. The tab holds it there through content above it arriving late, until
+    /// the user scrolls or leaves.
+    fn revealing(&self, reveal: Reveal, element: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        if self.reveal != Some(reveal) {
             return element;
         }
         let bar = self.scrollbar.clone();
@@ -847,44 +878,64 @@ impl SettingsView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let lead = Layout::of(window, cx).top;
+                        let lead = Layout::of(window, cx).clear();
                         let scroll = bar.read(cx).scroll().clone();
-                        let top = bounds.top() - scroll.bounds().top() - scroll.offset().y;
-                        let to = -(top - lead).max(Pixels::ZERO);
+                        let at = scroll.offset().y;
+                        let top = bounds.top() - scroll.bounds().top() - at;
+                        let to = (-(top - lead).max(Pixels::ZERO)).max(-scroll.max_offset().y);
+                        if (to - at).abs() < px(0.5) {
+                            return;
+                        }
                         window.on_next_frame(move |_, cx| {
                             bar.update(cx, |bar, _| bar.place(to));
-                            view.update(cx, |view, cx| {
-                                view.reveal = None;
-                                cx.notify();
-                            })
-                            .ok();
+                            view.update(cx, |_, cx| cx.notify()).ok();
                         });
                     },
                     |_, _, _, _| {},
                 )
                 .absolute()
-                .size_full(),
+                .inset_0(),
             )
             .into_any_element()
     }
 
-    /// The page on show: what it opens with, the groups, and what it closes with. The frame
-    /// draws the page's title above it.
-    fn page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let header = self.header(cx);
-        let groups = self
-            .groups(self.page, cx)
+    /// The tab on show, or the drill-in on its own: each of its pages in turn. The frame draws
+    /// the first page's title, and every later page opens on its own title, set well apart from
+    /// the page above it.
+    fn tab(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let pages = match self.page.parent() {
+            Some(_) => vec![self.page],
+            None => self.page.tab().sections().to_vec(),
+        };
+        let pages = pages
             .into_iter()
-            .map(|group| self.group(group, window, cx))
+            .enumerate()
+            .map(|(index, page)| {
+                let title = (index > 0).then(|| {
+                    let title = section_title(page, cx).into_any_element();
+                    div()
+                        .mt(GROUPS)
+                        .child(self.revealing(Reveal::Section(page), title, cx))
+                });
+                let groups = self
+                    .groups(page, cx)
+                    .into_iter()
+                    .map(|group| self.group(group, window, cx))
+                    .collect::<Vec<_>>();
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(GROUPS)
+                    .children(title)
+                    .children(self.header(page, cx))
+                    .children(self.preview(page, window, cx))
+                    .children(groups)
+                    .children(self.footer(page, cx))
+            })
             .collect::<Vec<_>>();
 
-        div()
-            .flex()
-            .flex_col()
-            .gap(GROUPS)
-            .children(header)
-            .children(groups)
-            .children(self.footer(cx))
+        div().flex().flex_col().gap(GROUPS).children(pages)
     }
 
     /// What a search shows instead of the page: every setting that answers it, each naming the
@@ -929,17 +980,18 @@ impl SettingsView {
             .slot_meta(slot, cx)
             .map(|(title, _)| title)
             .unwrap_or_default();
+        let tab = page.tab();
         let place = match page.parent() {
-            Some(parent) => t!(
+            Some(_) => t!(
                 "settings-result-place",
-                parent = i18n::lookup(parent.key(), None).to_string(),
+                parent = i18n::lookup(tab.key(), None).to_string(),
                 page = i18n::lookup(page.key(), None).to_string()
             ),
-            None => i18n::lookup(page.key(), None),
+            None => i18n::lookup(tab.key(), None),
         };
 
         Card::new(("settings-result", index), title)
-            .fallback(page.icon())
+            .fallback(tab.icon())
             .meta(place)
             .press(cx.listener(move |this, _, _, cx| this.open_result(page, slot, cx)))
             .into_any_element()
@@ -947,7 +999,7 @@ impl SettingsView {
 
     /// Opens the page a result lives on and scrolls its setting into view.
     fn open_result(&mut self, page: SettingsPage, slot: Slot, cx: &mut Context<Self>) {
-        self.reveal = Some(slot);
+        self.reveal = Some(Reveal::Slot(slot));
         self.clear_search(cx);
         navigate(Destination::Settings(page), cx);
         cx.notify();
@@ -956,7 +1008,7 @@ impl SettingsView {
     /// Starts reading the installed fonts the first time the typeface picker could need them.
     fn load_fonts(&mut self, cx: &mut Context<Self>) {
         let picking = self.popovers.shows(TYPEFACES);
-        let wanted = self.page == SettingsPage::Appearance || picking;
+        let wanted = self.page.tab() == SettingsTab::Appearance || picking;
         if !wanted || self.installed.is_some() || self.loading_fonts {
             return;
         }
@@ -1062,10 +1114,9 @@ impl Render for SettingsView {
             _ => {}
         }
 
-        let preview = self.preview(window, cx);
         let body = match self.searching() {
             true => self.results(window, cx),
-            false => self.page(window, cx),
+            false => self.tab(window, cx),
         };
         let destination = Destination::Settings(self.page);
         let named = self.searching().then(|| t!("settings-search-results"));
@@ -1076,11 +1127,13 @@ impl Render for SettingsView {
             "settings",
             &self.scrollbar,
             body,
-            preview,
             window,
             cx,
         )
         .track_focus(&self.focus)
+        // the user taking the page in hand lets go of whatever it was holding in view
+        .on_scroll_wheel(cx.listener(|this, _, _, _| this.reveal = None))
+        .capture_any_mouse_down(cx.listener(|this, _, _, _| this.reveal = None))
         // an action stops where it is handled unless told to go on, so an escape with nothing
         // to close here goes on to the workspace
         .on_action(cx.listener(|this, _: &Dismiss, _, cx| {

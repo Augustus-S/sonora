@@ -71,10 +71,15 @@ impl Navigation {
     }
 
     /// Returns from a drill-in to `parent`. Stepping back keeps the trail free of a parent,
-    /// drill-in, parent loop when the parent is the page before, and anywhere else the drill-in
-    /// is replaced so Back does not reopen it.
+    /// drill-in, parent loop when the page before shows the parent's settings tab, which also
+    /// puts that tab back where it was scrolled to. Anywhere else the drill-in is replaced so Back
+    /// does not reopen it.
     pub fn up(&mut self, parent: Destination, cx: &mut Context<Self>) {
-        match self.at > 0 && self.trail[self.at - 1] == parent {
+        let tab = |destination: &Destination| destination.settings_page().map(SettingsPage::tab);
+        let before = self.at.checked_sub(1).map(|at| &self.trail[at]);
+        match before.is_some_and(|before| {
+            *before == parent || (tab(before).is_some() && tab(before) == tab(&parent))
+        }) {
             true => self.back(cx),
             false => self.replace(parent, cx),
         }
