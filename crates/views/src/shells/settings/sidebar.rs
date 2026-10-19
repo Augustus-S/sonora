@@ -18,50 +18,39 @@ use crate::screens::settings::{Layout, SIDEBAR};
 pub(super) const GLIDE: SpringConfig = SpringConfig::new(420., 34., 1.);
 /// How long the icon of a newly chosen entry takes to light, and the last one's to go out.
 const LIGHT: Duration = Duration::from_millis(180);
-/// The icon before a page's label, and before the equalizer nested under Sound.
+/// The icon before a page's label.
 const ICON: Pixels = px(16.);
-const NESTED_ICON: Pixels = px(14.);
 
-/// One entry of the sidebar: a page, or the equalizer tucked under Sound.
+/// One entry of the sidebar, standing for a page and the drill-ins under it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Entry {
-    Page(SettingsPage),
-    Equalizer,
-}
+pub(super) struct Entry(SettingsPage);
 
 /// The sidebar's groups, each under its eyebrow, top to bottom.
 const GROUPS: [(&str, &[Entry]); 5] = [
     (
         "settings-group-you",
-        &[
-            Entry::Page(SettingsPage::Providers),
-            Entry::Page(SettingsPage::General),
-        ],
+        &[Entry(SettingsPage::Providers), Entry(SettingsPage::General)],
     ),
     (
         "settings-group-look",
         &[
-            Entry::Page(SettingsPage::Appearance),
-            Entry::Page(SettingsPage::NowPlaying),
-            Entry::Page(SettingsPage::Lyrics),
+            Entry(SettingsPage::Appearance),
+            Entry(SettingsPage::NowPlaying),
+            Entry(SettingsPage::Lyrics),
         ],
     ),
     (
         "settings-group-listen",
-        &[
-            Entry::Page(SettingsPage::Playback),
-            Entry::Page(SettingsPage::Sound),
-            Entry::Equalizer,
-        ],
+        &[Entry(SettingsPage::Playback), Entry(SettingsPage::Sound)],
     ),
     (
         "settings-group-share",
         &[
-            Entry::Page(SettingsPage::Discord),
-            Entry::Page(SettingsPage::Scrobbling),
+            Entry(SettingsPage::Discord),
+            Entry(SettingsPage::Scrobbling),
         ],
     ),
-    ("settings-group-sonora", &[Entry::Page(SettingsPage::About)]),
+    ("settings-group-sonora", &[Entry(SettingsPage::About)]),
 ];
 
 /// Where the pill is drawn: laid out on the entry's whole-pixel place, and shifted from there by
@@ -81,56 +70,37 @@ pub(super) struct Light {
 }
 
 impl Entry {
-    /// The entry that stands for `destination`: the page itself, a drill-in's parent, or the
-    /// equalizer.
+    /// The entry that stands for `destination`: the page itself, or the parent of a drill-in
+    /// such as the equalizer under Sound.
     pub(super) fn of(destination: &Destination) -> Option<Self> {
-        match destination {
-            Destination::Equalizer => Some(Self::Equalizer),
-            destination => destination.settings_page().map(Self::Page),
-        }
+        destination.settings_page().map(Self)
     }
 
     fn destination(self) -> Destination {
-        match self {
-            Self::Page(page) => Destination::Settings(page),
-            Self::Equalizer => Destination::Equalizer,
-        }
+        Destination::Settings(self.0)
     }
 
     fn key(self) -> &'static str {
-        match self {
-            Self::Page(page) => page.key(),
-            Self::Equalizer => "settings-equalizer",
-        }
+        self.0.key()
     }
 
     fn id(self) -> &'static str {
-        match self {
-            Self::Page(page) => page.id(),
-            Self::Equalizer => "equalizer",
-        }
+        self.0.id()
     }
 
     fn icon(self) -> &'static str {
-        match self {
-            Self::Page(SettingsPage::Providers | SettingsPage::MusicFolders) => {
-                "icons/user-round.svg"
-            }
-            Self::Page(SettingsPage::General) => "icons/settings.svg",
-            Self::Page(SettingsPage::Appearance) => "icons/palette.svg",
-            Self::Page(SettingsPage::NowPlaying) => "icons/maximize.svg",
-            Self::Page(SettingsPage::Lyrics | SettingsPage::LyricsSources) => "icons/mic-vocal.svg",
-            Self::Page(SettingsPage::Playback) => "icons/play.svg",
-            Self::Page(SettingsPage::Sound) => "icons/volume-2.svg",
-            Self::Equalizer => "icons/sliders-horizontal.svg",
-            Self::Page(SettingsPage::Discord) => "icons/radio.svg",
-            Self::Page(SettingsPage::Scrobbling) => "icons/list-music.svg",
-            Self::Page(SettingsPage::About) => "icons/info.svg",
+        match self.0 {
+            SettingsPage::Providers | SettingsPage::MusicFolders => "icons/user-round.svg",
+            SettingsPage::General => "icons/settings.svg",
+            SettingsPage::Appearance => "icons/palette.svg",
+            SettingsPage::NowPlaying => "icons/maximize.svg",
+            SettingsPage::Lyrics | SettingsPage::LyricsSources => "icons/mic-vocal.svg",
+            SettingsPage::Playback => "icons/play.svg",
+            SettingsPage::Sound => "icons/volume-2.svg",
+            SettingsPage::Discord => "icons/radio.svg",
+            SettingsPage::Scrobbling => "icons/list-music.svg",
+            SettingsPage::About => "icons/info.svg",
         }
-    }
-
-    fn nested(self) -> bool {
-        self == Self::Equalizer
     }
 
     /// The entry's row, lit by `lit` from 0 to 1 as it becomes the page on show. The pill
@@ -140,11 +110,6 @@ impl Entry {
         let gap = theme.metrics.pad * 1.25;
         let ink = mix(theme.muted_foreground, theme.foreground, lit);
         let hover = (!active).then_some(theme.foreground);
-        let size = match self.nested() {
-            true => NESTED_ICON,
-            false => ICON,
-        };
-
         div()
             .id(self.id())
             .group(self.id())
@@ -155,8 +120,6 @@ impl Entry {
             .ml(-reach)
             .pl(reach)
             .pr(reach)
-            // the nested equalizer starts where its parent's label does
-            .when(self.nested(), |row| row.pl(reach + ICON + gap))
             .rounded(theme.radius)
             .cursor_pointer()
             .text_size(theme.text(Text::Body))
@@ -164,7 +127,7 @@ impl Entry {
             .when(!active, |row| {
                 row.hover(|style| style.text_color(theme.foreground))
             })
-            .child(icon(self, size, ink, hover))
+            .child(icon(self, ink, hover))
             .child(div().truncate().child(i18n::lookup(self.key(), None)))
     }
 }
@@ -337,12 +300,12 @@ impl SettingsShell {
     }
 }
 
-/// The icon of `entry` at `size` in `color`, turning `hover` while the pointer is on its row.
-fn icon(entry: Entry, size: Pixels, color: Hsla, hover: Option<Hsla>) -> Svg {
+/// The icon of `entry` in `color`, turning `hover` while the pointer is on its row.
+fn icon(entry: Entry, color: Hsla, hover: Option<Hsla>) -> Svg {
     svg()
         .path(icons::path(entry.icon()))
         .flex_none()
-        .size(size)
+        .size(ICON)
         .text_color(color)
         .when_some(hover, |icon, hover| {
             icon.group_hover(entry.id(), move |style| style.text_color(hover))
