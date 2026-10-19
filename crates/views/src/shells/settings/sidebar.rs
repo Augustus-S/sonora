@@ -75,6 +75,7 @@ impl Entry {
 
         div()
             .id(self.id())
+            .flex_none()
             .group(self.id())
             .flex()
             .items_center()
