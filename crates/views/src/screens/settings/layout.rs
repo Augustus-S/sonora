@@ -146,17 +146,3 @@ pub(crate) fn frame(
         ),
     )
 }
-
-/// A page's preview in the frame most previews sit in across the top of the column: clipped to
-/// the theme's corners inside a hairline border.
-pub(crate) fn framed(preview: impl IntoElement, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    div()
-        .w_full()
-        .overflow_hidden()
-        .rounded(theme.radius)
-        .border_1()
-        .border_color(theme.border)
-        .child(preview)
-        .into_any_element()
-}
