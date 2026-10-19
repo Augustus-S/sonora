@@ -88,8 +88,8 @@ pub use menu::{MENU_CONTEXT, Menu, MenuItem, MenuSearch, SubmenuState};
 pub use metrics::{LEADING, Metrics, Rounding, Text, snapped, tucked};
 pub use modal::Modal;
 pub use motion::{
-    Entrance, Fading, Motion, Motioned, Pace, Rising, Saver, Springs, Stillness, css_ease,
-    css_ease_out, ease_in_out_cubic, ease_in_out_expo, ease_out_cubic, ease_out_expo,
+    Entrance, Fading, HoverFade, Motion, Motioned, Pace, Rising, Saver, Springs, Stillness,
+    css_ease, css_ease_out, ease_in_out_cubic, ease_in_out_expo, ease_out_cubic, ease_out_expo,
     ease_out_quad, entering, entrance_span, mix, paced, veiled,
 };
 pub use notice::Notice;

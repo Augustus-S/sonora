@@ -4,7 +4,10 @@ use gpui::{
     SharedString, Stateful, StyleRefinement, Window, div, px,
 };
 
+use std::time::Duration;
+
 use crate::metrics::Text;
+use crate::motion::{HoverFade, mix};
 use crate::theme::ActiveTheme as _;
 use crate::tooltip::{Perch, Tipped as _};
 
@@ -14,14 +17,20 @@ const RING: Pixels = px(2.);
 const RING_GAP: Pixels = px(2.);
 /// How far a card that cannot be chosen fades.
 const FADED: f32 = 0.45;
+/// How strongly the page shows through a card's thumbnail at rest.
+const FILL: f32 = 0.45;
+/// How long a card takes to brighten under the pointer, and to settle back once it leaves.
+const LIGHT: Duration = Duration::from_millis(140);
 
 type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// One option of a visual choice: a thumbnail that shows what the option looks like, its name
 /// under it, and a ring around the one that is chosen. Cards stand side by side in a grid, one
-/// per option, and fill the column they are given.
+/// per option, and fill the column they are given. A card that can be chosen brightens its
+/// edge and fill under the pointer with a short ease.
 #[derive(IntoElement)]
 pub struct OptionCard {
+    id: ElementId,
     base: Stateful<Div>,
     thumb: Option<AnyElement>,
     label: Option<SharedString>,
@@ -37,8 +46,10 @@ pub struct OptionCard {
 impl OptionCard {
     #[track_caller]
     pub fn new(id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         Self {
-            base: div().id(id),
+            base: div().id(id.clone()),
+            id,
             thumb: None,
             label: None,
             detail: None,
@@ -122,8 +133,9 @@ impl InteractiveElement for OptionCard {
 impl StatefulInteractiveElement for OptionCard {}
 
 impl RenderOnce for OptionCard {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self {
+            id,
             mut base,
             thumb,
             label,
@@ -141,6 +153,12 @@ impl RenderOnce for OptionCard {
         let interactive = !disabled && on_click.is_some();
         let reach = RING + RING_GAP;
         let overrides = std::mem::take(base.style());
+        let fade = window.use_keyed_state((id, "hover"), cx, |_, _| HoverFade::new(LIGHT));
+        let lit = match interactive && !selected {
+            true => fade.update(cx, |fade, cx| fade.level(window, cx)),
+            false => 0.,
+        };
+        let rest = theme.secondary.opacity(FILL);
 
         let frame = div()
             .relative()
@@ -153,11 +171,8 @@ impl RenderOnce for OptionCard {
                     .rounded(theme.radius)
                     .border_1()
                     .when(dashed, |this| this.border_dashed())
-                    .border_color(theme.border)
-                    .bg(theme.secondary.opacity(0.45))
-                    .when(interactive && !selected, |this| {
-                        this.hover(|style| style.border_color(theme.muted_foreground))
-                    })
+                    .border_color(mix(theme.border, theme.muted_foreground, lit))
+                    .bg(mix(rest, theme.secondary_hover, lit))
                     .children(thumb),
             )
             .when(selected, |this| {
@@ -182,6 +197,10 @@ impl RenderOnce for OptionCard {
             .min_w_0()
             .when(disabled, |this| this.opacity(FADED))
             .when(interactive, |this| this.cursor_pointer())
+            .on_hover(move |hovered, window, cx| {
+                fade.update(cx, |fade, _| fade.set(*hovered));
+                window.refresh();
+            })
             .when_some(tooltip, |this, key| this.tip(key, Perch::Pointer))
             .child(frame)
             .child(
@@ -199,7 +218,7 @@ impl RenderOnce for OptionCard {
                                 .text_size(theme.text(Text::Label))
                                 .text_color(match selected {
                                     true => theme.foreground,
-                                    false => theme.muted_foreground,
+                                    false => mix(theme.muted_foreground, theme.foreground, lit),
                                 })
                                 .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
                                 .child(label),

@@ -414,6 +414,71 @@ pub fn animates(cx: &App) -> bool {
     !cx.reduce_motion()
 }
 
+/// How lit an element is under the pointer, eased in over `span` as the pointer arrives and out
+/// as it leaves. A change halfway turns back from where the fade stands, so nothing jumps. Keep
+/// one per element in `window.use_keyed_state`, tell it from `on_hover`, and read `level` while
+/// drawing.
+pub struct HoverFade {
+    hovered: bool,
+    /// Where the fade stood, unbent by easing, when the pointer last came or went.
+    from: f32,
+    since: Option<Instant>,
+    span: Duration,
+}
+
+impl HoverFade {
+    pub fn new(span: Duration) -> Self {
+        Self {
+            hovered: false,
+            from: 0.,
+            since: None,
+            span,
+        }
+    }
+
+    /// Turns the fade towards `hovered`, starting from wherever it stands now.
+    pub fn set(&mut self, hovered: bool) {
+        if hovered == self.hovered {
+            return;
+        }
+        self.from = self.linear();
+        self.hovered = hovered;
+        self.since = Some(Instant::now());
+    }
+
+    /// How lit the element is, from 0 at rest to 1 hovered, eased. It asks for the next frame
+    /// while the fade runs and lands at once under reduced motion.
+    pub fn level(&mut self, window: &mut gpui::Window, cx: &App) -> f32 {
+        let target = f32::from(u8::from(self.hovered));
+        if cx.reduce_motion() {
+            self.since = None;
+            self.from = target;
+        }
+        let at = self.linear();
+        if at == target {
+            self.since = None;
+            self.from = target;
+        } else {
+            window.request_animation_frame();
+        }
+        css_ease(at)
+    }
+
+    /// Where the fade stands before easing, moving from `from` towards the target at one span
+    /// for the whole way.
+    fn linear(&self) -> f32 {
+        let target = f32::from(u8::from(self.hovered));
+        let Some(since) = self.since else {
+            return self.from;
+        };
+        let travelled = since.elapsed().as_secs_f32() / self.span.as_secs_f32().max(f32::EPSILON);
+        match self.hovered {
+            true => (self.from + travelled).min(target),
+            false => (self.from - travelled).max(target),
+        }
+    }
+}
+
 pub(crate) struct Movement {
     drawn: bool,
     turned: Option<Instant>,
