@@ -1,13 +1,15 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Interactivity, MouseButton, Pixels,
-    SharedString, Stateful, StyleRefinement, Window, div, px,
+    SharedString, Stateful, StyleRefinement, Window, div, px, relative, svg,
 };
 
 use std::time::Duration;
 
+use crate::menu::Menu;
 use crate::metrics::Text;
 use crate::motion::{HoverFade, mix};
+use crate::popover::{Popover, Popovers};
 use crate::theme::ActiveTheme as _;
 use crate::tooltip::{Perch, Tipped as _};
 
@@ -22,7 +24,24 @@ const FILL: f32 = 0.45;
 /// How long a card takes to brighten under the pointer, and to settle back once it leaves.
 const LIGHT: Duration = Duration::from_millis(140);
 
+/// The chevron after the name of an option that comes in variants, and the gap the menu it
+/// opens leaves under the name.
+const CHEVRON: Pixels = px(12.);
+const MENU_GAP: Pixels = px(4.);
+
 type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// What the name of an option that comes in variants does when it is clicked.
+enum Variants {
+    /// Opens `menu` under the name, as the popover `key` of `group`.
+    Menu {
+        key: &'static str,
+        group: Popovers,
+        menu: Box<Menu>,
+    },
+    /// Runs the handler, for a card whose menu another card holds for now.
+    Ask(Click),
+}
 
 /// One option of a visual choice: a thumbnail that shows what the option looks like, its name
 /// under it, and a ring around the one that is chosen. Cards stand side by side in a grid, one
@@ -35,7 +54,7 @@ pub struct OptionCard {
     thumb: Option<AnyElement>,
     label: Option<SharedString>,
     detail: Option<SharedString>,
-    accessory: Option<AnyElement>,
+    variants: Option<Variants>,
     height: Option<Pixels>,
     selected: bool,
     disabled: bool,
@@ -54,7 +73,7 @@ impl OptionCard {
             thumb: None,
             label: None,
             detail: None,
-            accessory: None,
+            variants: None,
             height: None,
             selected: false,
             disabled: false,
@@ -81,10 +100,25 @@ impl OptionCard {
         self
     }
 
-    /// A control under the label, such as a button that opens a menu of the option's variants.
-    /// It handles its own clicks, so pressing it does not choose the card.
-    pub fn accessory(mut self, accessory: impl IntoElement) -> Self {
-        self.accessory = Some(accessory.into_any_element());
+    /// Puts a chevron after the name and makes the name open `menu` under it as the popover
+    /// `key` of `group`, for an option that comes in variants. The name keeps its look and its
+    /// line, and a click on it does not choose the card.
+    pub fn variant_menu(mut self, key: &'static str, group: &Popovers, menu: Menu) -> Self {
+        self.variants = Some(Variants::Menu {
+            key,
+            group: group.clone(),
+            menu: Box::new(menu),
+        });
+        self
+    }
+
+    /// Puts the same chevron after the name and runs `handler` on a click on it, for a card
+    /// whose variant menu another card holds while it is drawn.
+    pub fn on_variants(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.variants = Some(Variants::Ask(Box::new(handler)));
         self
     }
 
@@ -149,7 +183,7 @@ impl RenderOnce for OptionCard {
             thumb,
             label,
             detail,
-            accessory,
+            variants,
             height,
             selected,
             disabled,
@@ -163,7 +197,7 @@ impl RenderOnce for OptionCard {
         let interactive = !disabled && on_click.is_some();
         let reach = RING + RING_GAP;
         let overrides = std::mem::take(base.style());
-        let fade = window.use_keyed_state((id, "hover"), cx, |_, _| HoverFade::new(LIGHT));
+        let fade = window.use_keyed_state((id.clone(), "hover"), cx, |_, _| HoverFade::new(LIGHT));
         let lit = match interactive && !selected {
             true => fade.update(cx, |fade, cx| fade.level(window, cx)),
             false => 0.,
@@ -221,18 +255,45 @@ impl RenderOnce for OptionCard {
                     .gap_0p5()
                     .max_w_full()
                     .when_some(label, |this, label| {
-                        this.child(
-                            div()
+                        let color = match selected {
+                            true => theme.foreground,
+                            false => mix(theme.muted_foreground, theme.foreground, lit),
+                        };
+                        let line = div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .max_w_full()
+                            .text_size(theme.text(Text::Label))
+                            .text_color(color)
+                            .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
+                            .child(div().min_w_0().truncate().child(label))
+                            .when(variants.is_some(), |this| {
+                                this.child(
+                                    svg()
+                                        .path(icons::path("icons/chevron-down.svg"))
+                                        .size(CHEVRON)
+                                        .flex_none()
+                                        .text_color(color),
+                                )
+                            });
+                        this.child(match variants {
+                            None => line.into_any_element(),
+                            Some(Variants::Menu { key, group, menu }) => Popover::new(key, group)
                                 .max_w_full()
-                                .truncate()
-                                .text_size(theme.text(Text::Label))
-                                .text_color(match selected {
-                                    true => theme.foreground,
-                                    false => mix(theme.muted_foreground, theme.foreground, lit),
-                                })
-                                .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
-                                .child(label),
-                        )
+                                .face(line)
+                                .menu((*menu).top(relative(1.)).mt(MENU_GAP).left_0())
+                                .commands()
+                                .into_any_element(),
+                            Some(Variants::Ask(handler)) => div()
+                                .id((id.clone(), "variants"))
+                                .max_w_full()
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(move |event, window, cx| handler(event, window, cx))
+                                .child(line)
+                                .into_any_element(),
+                        })
                     })
                     .when_some(detail, |this, detail| {
                         this.child(
@@ -243,8 +304,7 @@ impl RenderOnce for OptionCard {
                                 .text_color(theme.muted_foreground)
                                 .child(detail),
                         )
-                    })
-                    .children(accessory),
+                    }),
             )
             .when(interactive, |this| {
                 this.when_some(on_click, |this, handler| {
