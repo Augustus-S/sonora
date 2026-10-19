@@ -28,11 +28,6 @@ const ERROR_ICON: Pixels = px(14.);
 /// the pointer.
 const MARK: Pixels = px(22.);
 const MARK_FADE: Duration = Duration::from_millis(160);
-/// How far the brand-coloured glow behind the mark in use spreads past it, how soft it is and
-/// how strong.
-const GLOW_SPREAD: Pixels = px(4.);
-const GLOW_BLUR: Pixels = px(12.);
-const GLOW_ALPHA: f32 = 0.6;
 /// How many buttons tall the sign-in choice stands, however few it lists.
 const CHOICES: f32 = 3.;
 /// What the guest row answers to, where a provider row answers to its slug.
@@ -870,7 +865,7 @@ pub(super) enum Offer {
 
 /// One provider as a soft borderless row: its mark, the name over a muted status, and the
 /// `offer` at the end. Only the provider in use (`active`) sits on a fill and shows its `brand`
-/// colour, with a faint glow behind a coloured mark. The others are muted and warm to their
+/// colour. The others are muted and warm to their
 /// colour and a lighter fill under the pointer. The sign out button keeps a slot of its own on
 /// every row, shown on hover and always on the active row, so nothing moves as it comes and
 /// goes. A sign-in error wraps under the name on a line of its own.
@@ -914,18 +909,6 @@ impl RenderOnce for ProviderRow {
             (false, true) => theme.secondary_hover.opacity(hover),
             (false, false) => theme.secondary_hover.opacity(0.),
         };
-        // a mark in the plain foreground colour glows as a grey smudge, so only a real brand
-        // colour gets one
-        let glow = (active && brand != theme.foreground && ui::effects()).then(|| {
-            svg()
-                .path(icons::path(logo))
-                .absolute()
-                .top(-GLOW_SPREAD)
-                .left(-GLOW_SPREAD)
-                .size(MARK + GLOW_SPREAD * 2.)
-                .text_color(brand.opacity(GLOW_ALPHA))
-                .blur(GLOW_BLUR)
-        });
         let trailing = match offer {
             Offer::Choice { leave } => {
                 let shown = active || hover > 0.;
@@ -981,19 +964,14 @@ impl RenderOnce for ProviderRow {
                     .gap_3()
                     .h(theme.metrics.list_row)
                     .child(
-                        div()
-                            .relative()
-                            .flex_none()
-                            .size(MARK)
-                            .children(glow)
-                            .child(
-                                svg()
-                                    .path(icons::path(logo))
-                                    .absolute()
-                                    .inset_0()
-                                    .size(MARK)
-                                    .text_color(mark),
-                            ),
+                        div().relative().flex_none().size(MARK).child(
+                            svg()
+                                .path(icons::path(logo))
+                                .absolute()
+                                .inset_0()
+                                .size(MARK)
+                                .text_color(mark),
+                        ),
                     )
                     .child(
                         div()

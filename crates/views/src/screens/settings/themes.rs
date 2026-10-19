@@ -306,22 +306,19 @@ fn sliced(palettes: &[Theme], radius: Pixels) -> Div {
     // the card does not clip to its corners, so the miniature rounds its own inside the border
     let outer = (radius - EDGE).max(Pixels::ZERO).min(px(SIDEBAR / 2.));
 
-    div()
-        .relative()
-        .size_full()
-        .children(
-            palettes
-                .iter()
-                .zip(edges.windows(2))
-                // each slice runs on to the right edge under the ones after it, so a cut that
-                // lands between pixels while the rail scrolls never opens a seam
-                .map(|(palette, edge)| {
-                    let left = edge[0];
-                    rect([left, 0., WIDTH - left, HEIGHT])
-                        .overflow_hidden()
-                        .child(miniature(palette, outer, mark).left(px(-left)))
-                }),
-        )
+    div().relative().size_full().children(
+        palettes
+            .iter()
+            .zip(edges.windows(2))
+            // each slice runs on to the right edge under the ones after it, so a cut that
+            // lands between pixels while the rail scrolls never opens a seam
+            .map(|(palette, edge)| {
+                let left = edge[0];
+                rect([left, 0., WIDTH - left, HEIGHT])
+                    .overflow_hidden()
+                    .child(miniature(palette, outer, mark).left(px(-left)))
+            }),
+    )
 }
 
 /// The Sonora window in `palette`'s colours as a few soft, flat shapes, `WIDTH` by `HEIGHT`
