@@ -349,12 +349,22 @@ impl SettingsView {
         }
         self.page = page;
         self.popovers.close();
+        self.previews.shown(page);
         // a device plugged in since the list was read is only found by asking again
         if page == SettingsPage::Sound {
             self.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
         }
         self.clear_search(cx);
         cx.notify();
+    }
+
+    /// Tells the previews whether settings are open, so a new opening picks a new track and a
+    /// closing stops what they keep running.
+    pub(crate) fn set_open(&mut self, open: bool) {
+        match open {
+            true => self.previews.opened(),
+            false => self.previews.closed(),
+        }
     }
 
     pub(crate) fn searching(&self) -> bool {

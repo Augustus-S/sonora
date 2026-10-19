@@ -28,6 +28,9 @@ pub(crate) struct SettingsShell {
     shown: Destination,
     /// The entrance the page plays as another page replaces it.
     transition: Option<Entrance>,
+    /// Whether a settings destination was on show after the last move, so the view hears when
+    /// settings open and close.
+    open: bool,
     focus: FocusHandle,
 }
 
@@ -47,6 +50,7 @@ impl SettingsShell {
             toasts: cx.new(ToastStack::new),
             shown: Destination::Settings(SettingsPage::Providers),
             transition: None,
+            open: false,
             focus: cx.focus_handle(),
         }
     }
@@ -61,7 +65,12 @@ impl SettingsShell {
         let equalizer = matches!(destination, Destination::Equalizer);
         self.equalizer
             .update(cx, |view, cx| view.set_visible(equalizer, cx));
-        if !destination.in_settings() {
+        let open = destination.in_settings();
+        if open != self.open {
+            self.open = open;
+            self.view.update(cx, |view, _| view.set_open(open));
+        }
+        if !open {
             return;
         }
         if let Destination::Settings(page) = destination {

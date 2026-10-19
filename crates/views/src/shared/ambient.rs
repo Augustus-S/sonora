@@ -22,9 +22,11 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::prelude::*;
-use gpui::{App, Bounds, Context, Hsla, Render, Rgba, Window, canvas, div, point, px};
+use gpui::{
+    App, Bounds, Context, Hsla, Pixels, Render, Rgba, Task, Window, canvas, div, point, px,
+};
 use state::Sonora;
-use ui::{ActiveTheme as _, Theme};
+use ui::{ActiveTheme as _, CoverPalette, Theme};
 
 /// How many blobs make up the field.
 pub(crate) const BLOBS: usize = 5;
@@ -76,11 +78,23 @@ const DISC_STRONG: f32 = 0.079;
 /// field lands within a few percent of the target after about three of these.
 const WASH: f32 = 0.8;
 
+/// The flowing colour field. One sits behind the whole window in fullscreen, and a preview can
+/// hold another of its own made with `Ambient::framed`.
 pub(crate) struct Ambient {
     started: Instant,
     stepped: Instant,
-    bounds: Rc<Cell<Bounds<gpui::Pixels>>>,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
     painted: Option<[Hsla; BLOBS]>,
+    /// The palette of the cover a framed field follows, `None` for the one behind the window.
+    framed: Option<Sampled>,
+}
+
+/// The palette of the cover a framed field follows, sampled by the field itself.
+#[derive(Default)]
+struct Sampled {
+    cover: Option<String>,
+    palette: CoverPalette,
+    _task: Option<Task<()>>,
 }
 
 impl Ambient {
@@ -96,6 +110,64 @@ impl Ambient {
             stepped: now,
             bounds: Rc::new(Cell::new(Bounds::default())),
             painted: None,
+            framed: None,
+        }
+    }
+
+    /// A field for a preview that fills a rounded frame rather than the window. It takes its
+    /// colours from the cover `follow` hands it whatever the adaptive theme says, and rounds
+    /// to the theme's radius.
+    pub(crate) fn framed(cx: &mut Context<Self>) -> Self {
+        Self {
+            framed: Some(Sampled::default()),
+            ..Self::new(cx)
+        }
+    }
+
+    /// Samples `cover` for a framed field once it differs from the one sampled last. A field
+    /// behind the window takes its colours from the theme and ignores this.
+    pub(crate) fn follow(&mut self, cover: Option<String>, cx: &mut Context<Self>) {
+        let Some(sampled) = self.framed.as_mut() else {
+            return;
+        };
+        if sampled.cover == cover {
+            return;
+        }
+        sampled.cover = cover.clone();
+        let Some(cover) = cover else {
+            sampled._task = None;
+            sampled.palette = CoverPalette::default();
+            cx.notify();
+            return;
+        };
+        let palette = ui::palette(cover, cx);
+        sampled._task = Some(cx.spawn(async move |this, cx| {
+            let palette = palette.await;
+            this.update(cx, |this, cx| {
+                if let Some(sampled) = this.framed.as_mut() {
+                    sampled.palette = palette;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// The leading colour of the cover a framed field follows, once sampled.
+    pub(crate) fn tint(&self) -> Option<Hsla> {
+        self.framed.as_ref()?.palette.primary
+    }
+
+    /// The theme with the tint this field is painted from: the theme itself behind the window,
+    /// and the sampled cover in a frame.
+    fn tinted(&self, theme: Theme) -> Theme {
+        match &self.framed {
+            None => theme,
+            Some(sampled) => Theme {
+                tint: sampled.palette.primary,
+                tint_secondary: sampled.palette.secondary,
+                ..theme
+            },
         }
     }
 
@@ -203,7 +275,7 @@ impl Render for Ambient {
             }
             false => 0.,
         };
-        let colors = self.wash(Self::colors(&theme), animates);
+        let colors = self.wash(Self::colors(&self.tinted(theme)), animates);
         // The field stands in for the page rather than sitting on it, so it carries the
         // window's own opacity and `Root` paints no background beneath it. One opacity thins
         // every layer at once; a quad still adds to what it covers, which is why the blobs
@@ -219,12 +291,12 @@ impl Render for Ambient {
         let bounds = self.bounds.get();
         let wide = bounds.size.width.as_f32().max(1.) / DOWNSCALE;
         let high = bounds.size.height.as_f32().max(1.) / DOWNSCALE;
-        // The field reaches into the corners the chrome rounds, and GPUI clips only to a
-        // rectangle, so the sheet takes the window's radius itself.
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let radius = crate::chrome::window_radius(Sonora::global(cx).settings.read(cx), cx, window);
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-        let radius: Option<gpui::Pixels> = None;
+        // The field reaches into the corners the chrome or its frame rounds, and GPUI clips
+        // only to a rectangle, so the sheet takes that radius itself.
+        let radius = match self.framed {
+            Some(_) => Some(theme.radius),
+            None => window_radius(window, cx),
+        };
 
         div()
             .id("ambient")
@@ -319,6 +391,17 @@ impl Render for Ambient {
 /// glass on its controls as well, which only has the field to blur.
 pub(crate) fn shown(cx: &App) -> bool {
     Sonora::global(cx).settings.read(cx).ambient()
+}
+
+/// The radius of the window's own corners, where the chrome rounds them.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn window_radius(window: &Window, cx: &App) -> Option<Pixels> {
+    crate::chrome::window_radius(Sonora::global(cx).settings.read(cx), cx, window)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn window_radius(_window: &Window, _cx: &App) -> Option<Pixels> {
+    None
 }
 
 /// A colour as the dark overlay leaves it. Black at `SHADE` over an opaque colour is that
