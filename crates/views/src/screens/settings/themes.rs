@@ -313,9 +313,11 @@ fn sliced(palettes: &[Theme], radius: Pixels) -> Div {
             palettes
                 .iter()
                 .zip(edges.windows(2))
+                // each slice runs on to the right edge under the ones after it, so a cut that
+                // lands between pixels while the rail scrolls never opens a seam
                 .map(|(palette, edge)| {
-                    let (left, right) = (edge[0], edge[1]);
-                    rect([left, 0., right - left, HEIGHT])
+                    let left = edge[0];
+                    rect([left, 0., WIDTH - left, HEIGHT])
                         .overflow_hidden()
                         .child(miniature(palette, outer, mark).left(px(-left)))
                 }),
