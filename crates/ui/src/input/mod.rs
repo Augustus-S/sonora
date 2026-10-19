@@ -189,6 +189,8 @@ pub struct Input {
     blurred: bool,
     clearable: bool,
     masked: bool,
+    /// The Fluent key of the shortcut that focuses the field, shown at its end while it is empty.
+    shortcut: Option<SharedString>,
     content: SharedString,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -211,6 +213,7 @@ impl Input {
             blurred: false,
             clearable: false,
             masked: false,
+            shortcut: None,
             content: SharedString::default(),
             selected_range: 0..0,
             selection_reversed: false,
@@ -254,6 +257,13 @@ impl Input {
 
     pub fn masked(mut self) -> Self {
         self.masked = true;
+        self
+    }
+
+    /// Shows the shortcut that focuses the field as a muted key chip at its end while the field
+    /// is empty. `key` is the Fluent key of the shortcut as the platform spells it.
+    pub fn shortcut(mut self, key: impl Into<SharedString>) -> Self {
+        self.shortcut = Some(key.into());
         self
     }
 

@@ -383,6 +383,22 @@ impl Render for Input {
                         .on_click(cx.listener(|this, _, window, cx| this.clear(window, cx))),
                 )
             })
+            .when_some(
+                self.shortcut.clone().filter(|_| self.content.is_empty()),
+                |this, key| {
+                    this.child(
+                        div()
+                            .flex_none()
+                            .px_1p5()
+                            .rounded(crate::tucked(radius, window))
+                            .border_1()
+                            .border_color(theme.border)
+                            .text_size(theme.text(crate::Text::Tiny))
+                            .text_color(theme.muted_foreground)
+                            .child(i18n::lookup(&key, None)),
+                    )
+                },
+            )
             .when_some(context_menu, |this, menu| this.child(menu))
     }
 }

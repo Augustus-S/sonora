@@ -1,4 +1,5 @@
 mod artwork;
+mod breadcrumbs;
 mod button;
 mod card;
 mod checkbox;
@@ -37,8 +38,10 @@ mod scroller;
 mod scrubber;
 mod separator;
 mod shield;
+mod showcase;
 mod skeleton;
 mod spinner;
+mod spring;
 mod switch;
 mod table;
 mod tabs;
@@ -48,12 +51,14 @@ mod toast;
 mod tooltip;
 mod traffic_light_controls;
 mod vacancy;
+mod veil;
 mod view;
 mod visualizer;
 
 pub use artwork::{
     Artwork, Avatar, PREFETCH_REACH, Prefetch, artwork_usage, cover_palette, prefetch,
 };
+pub use breadcrumbs::Breadcrumbs;
 pub use button::{Button, SMALL_INSET};
 pub use card::CARD_GROUP;
 pub use card::Card;
@@ -111,8 +116,10 @@ pub use scroller::{Scroller, middle_scroll, perch_room, perched, return_to, retu
 pub use scrubber::{Scrubber, ScrubberState};
 pub use separator::Separator;
 pub use shield::Shield;
+pub use showcase::{Hover, Showcase};
 pub use skeleton::{Initials, Skeleton};
 pub use spinner::Spinner;
+pub use spring::{Beat, Spring};
 pub use switch::Switch;
 pub use table::{
     Activate, Cell, ColumnSpec, Deselect, Layout, Listing, Pending, ROW_GROUP, Remove, SelectNext,
@@ -130,5 +137,6 @@ pub use toast::Toast;
 pub use tooltip::{Perch, Tipped, Tooltip};
 pub use traffic_light_controls::TrafficLightControls;
 pub use vacancy::Vacancy;
+pub use veil::{VeilEdge, effects, veil};
 pub use view::Mode;
 pub use visualizer::{Levels, Visualizer, VisualizerStyle};
