@@ -42,6 +42,8 @@ const SIDEBAR: f32 = 38.;
 /// The columns a cut between two palettes may run down: the sidebar's edge and the middle of
 /// each gap between two tiles, so a cut never splits a tile or the play button.
 const SEAMS: [f32; 3] = [SIDEBAR, 76., 110.];
+/// How far a slice runs on under the slice after it.
+const SEAM_OVERLAP: f32 = 1.;
 /// The sidebar's entries and the content's heading, as left, top, width and height.
 const ENTRIES: [[f32; 4]; 3] = [[8., 14., 22., 5.], [8., 25., 16., 5.], [8., 36., 19., 5.]];
 const HEADING: [f32; 4] = [45., 14., 34., 5.];
@@ -310,11 +312,16 @@ fn sliced(palettes: &[Theme], radius: Pixels) -> Div {
         palettes
             .iter()
             .zip(edges.windows(2))
-            // each slice runs on to the right edge under the ones after it, so a cut that
-            // lands between pixels while the rail scrolls never opens a seam
+            // each slice runs one pixel on under the next, so a cut that lands between pixels
+            // while the rail scrolls never opens a seam, but stops short of the far corners,
+            // whose soft edges only the last slice draws
             .map(|(palette, edge)| {
                 let left = edge[0];
-                rect([left, 0., WIDTH - left, HEIGHT])
+                let right = match edge[1] < WIDTH {
+                    true => edge[1] + SEAM_OVERLAP,
+                    false => WIDTH,
+                };
+                rect([left, 0., right - left, HEIGHT])
                     .overflow_hidden()
                     .child(miniature(palette, outer, mark).left(px(-left)))
             }),
