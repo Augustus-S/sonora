@@ -14,8 +14,8 @@ use state::{
     Sleep, Sonora,
 };
 use ui::{
-    ActiveTheme as _, Card, Deck, Dismiss, Input, Popovers, Scrollbar, ScrubberState, Vacancy,
-    faint, snapped,
+    ActiveTheme as _, Card, Deck, Dismiss, Input, LEADING, Popovers, Scrollbar, ScrubberState,
+    Vacancy, faint, snapped,
 };
 
 use crate::chrome::OutputPicker;
@@ -878,9 +878,18 @@ impl SettingsView {
     /// The page on show: what it opens with, the groups, and what it closes with. The trail in
     /// the header names the page, so the page carries no title of its own.
     fn page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let theme = *cx.theme();
         let header = self.header(cx);
-        let groups = self
-            .groups(self.page, cx)
+        let groups = self.groups(self.page, cx);
+        // A page that opens straight on a row lifts it so the label sits on the line where a
+        // heading would, level with the sidebar's first eyebrow.
+        let bare = header.is_none()
+            && groups
+                .first()
+                .is_some_and(|group| group.title.is_none() && group.cards.is_none());
+        let line = snapped(theme.text(ui::Text::Small) * LEADING, window);
+        let lift = ((theme.metrics.list_row - line) / 2.).round();
+        let groups = groups
             .into_iter()
             .map(|group| self.group(group, window, cx))
             .collect::<Vec<_>>();
@@ -889,6 +898,7 @@ impl SettingsView {
             .flex()
             .flex_col()
             .gap(GROUPS)
+            .when(bare, |page| page.mt(-lift))
             .children(header)
             .children(groups)
             .children(self.footer(cx))
