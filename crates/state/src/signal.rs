@@ -30,9 +30,15 @@ pub struct Signal {
     /// The latest levels, `None` while nothing is loaded or before a window has filled.
     levels: Option<Vec<Level>>,
     path: Option<SignalPath>,
-    /// Alive while a watch task is held, so the path is read only then.
+    /// Alive while a watch task or a `Following` is held, so the path is read only then. Every
+    /// holder shares the one `Arc`, so the path stops being read only once the last lets go.
     watched: Weak<()>,
     _subscriptions: [Subscription; 3],
+}
+
+/// Keeps the signal path read for as long as it is held, without the spectrum or the meter.
+pub struct Following {
+    _held: Arc<()>,
 }
 
 /// What happens to the sound on its way out, in order.
@@ -194,8 +200,7 @@ impl Signal {
     /// and everything stops with the task.
     pub fn watch(&mut self, cx: &mut Context<Self>) -> Task<()> {
         let watch = Arc::new(self.playback.read(cx).analyzer().watch());
-        let held = Arc::new(());
-        self.watched = Arc::downgrade(&held);
+        let held = self.hold();
         self.levels = None;
         self.equalizer
             .update(cx, |equalizer, cx| equalizer.reset_meter(cx));
@@ -218,6 +223,23 @@ impl Signal {
                     break;
                 }
             }
+        })
+    }
+
+    /// Follows the signal path alone for as long as the returned guard is held, for a screen that
+    /// shows where the sound goes but not how loud it is.
+    pub fn follow(&mut self, cx: &mut Context<Self>) -> Following {
+        let held = self.hold();
+        self.read_path(cx);
+        Following { _held: held }
+    }
+
+    /// The one `Arc` every watch and follower holds, made afresh when none is held.
+    fn hold(&mut self) -> Arc<()> {
+        self.watched.upgrade().unwrap_or_else(|| {
+            let held = Arc::new(());
+            self.watched = Arc::downgrade(&held);
+            held
         })
     }
 
