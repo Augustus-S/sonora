@@ -319,6 +319,89 @@ impl Detail {
         }
     }
 
+    /// Fetches the page again from the provider, past the catalog cache, keeping the header and
+    /// rows on screen until the new ones land. A page that failed or never loaded retries
+    /// instead, and one still on its first load is left to finish.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let (Some(kind), Some(id)) = (self.kind, self.id.clone()) else {
+            return;
+        };
+        if self.error.is_some() || !(self.loaded || self.loading) {
+            return self.reload(cx);
+        }
+        if !self.loaded {
+            return;
+        }
+        let Some(catalog) = self.session.read(cx).catalog(&id) else {
+            return;
+        };
+
+        // The old requests go first, so none of them can hand the cache back what it held.
+        if let Some(request) = self.request.take() {
+            request.abort();
+        }
+        if let Some(request) = self.filling_request.take() {
+            request.abort();
+        }
+        self.task = None;
+        self.fill = None;
+        self.loading_more = false;
+        self.filling = false;
+        self.loading = true;
+
+        let request = self.io.spawn({
+            let id = id.clone();
+            async move {
+                match kind {
+                    Collection::Album => {
+                        catalog.invalidate_album(&id).await;
+                        catalog.invalidate_album_catalogue(&id).await;
+                        catalog.album(&id).await.map(Loaded::Album)
+                    }
+                    Collection::Playlist => {
+                        catalog.invalidate_playlist(&id).await;
+                        let first = catalog.playlist(&id).await?;
+                        let mut detail = (*first).clone();
+                        while let Some(next) = detail.continuation.take() {
+                            let (tracks, more) = catalog.playlist_continuation(&next).await?;
+                            let offset = detail.tracks.len() as u32;
+                            detail.tracks.extend(tracks.into_iter().enumerate().map(
+                                |(index, mut track)| {
+                                    track.track_number = offset + index as u32 + 1;
+                                    track
+                                },
+                            ));
+                            detail.continuation = more;
+                        }
+                        if detail.playlist.track_count < detail.tracks.len() as u32 {
+                            detail.playlist.track_count = detail.tracks.len() as u32;
+                        }
+                        Ok(Loaded::Playlist(Arc::new(detail)))
+                    }
+                }
+            }
+        });
+        self.request = Some(request.abort_handle());
+
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let loaded = join(request).await;
+
+            this.update(cx, |this, cx| {
+                if this.id.as_deref() != Some(id.as_str()) {
+                    return;
+                }
+                this.loading = false;
+                this.request = None;
+                match crate::settled(loaded, cx) {
+                    Ok(detail) => this.adopt(detail, cx),
+                    Err(reason) => log::warn!("detail: cannot refresh the page: {reason}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
     pub fn open_album(&mut self, id: &str, cx: &mut Context<Self>) {
         let library = self.library.read(cx);
         let known = library.album(id).cloned();

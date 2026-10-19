@@ -216,6 +216,10 @@ impl CatalogSource {
         self.albums.load(id, self.backend.album(id)).await
     }
 
+    pub(crate) async fn invalidate_album(&self, id: &str) {
+        self.albums.invalidate(id).await;
+    }
+
     pub(crate) fn peek_album_catalogue(&self, id: &str) -> Option<Arc<AlbumCatalogue>> {
         self.album_catalogues.peek(id)
     }
@@ -235,6 +239,10 @@ impl CatalogSource {
                 self.backend.album_catalogue(album_id, artist_id.as_deref()),
             )
             .await
+    }
+
+    pub(crate) async fn invalidate_album_catalogue(&self, id: &str) {
+        self.album_catalogues.invalidate(id).await;
     }
 
     pub(crate) fn peek_playlist(&self, id: &str) -> Option<Arc<PlaylistDetail>> {
