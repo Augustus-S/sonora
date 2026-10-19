@@ -197,7 +197,6 @@ impl SettingsView {
                 .flex()
                 .items_center()
                 .h(theme.metrics.list_row)
-                .px_5()
                 .text_color(theme.muted_foreground)
                 .child(t!("settings-local-folder-none"))
         });
@@ -213,7 +212,6 @@ impl SettingsView {
                     .items_center()
                     .gap_2()
                     .h(theme.metrics.list_row)
-                    .px_5()
                     .child(add)
                     .children(rescan)
                     .child(div().flex_1())
@@ -239,7 +237,6 @@ impl SettingsView {
             .justify_between()
             .gap_3()
             .h(theme.metrics.list_row)
-            .px_5()
             .child(
                 div()
                     .flex_1()

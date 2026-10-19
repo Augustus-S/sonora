@@ -15,7 +15,7 @@ use state::{
 };
 use ui::{
     ActiveTheme as _, Card, Deck, Dismiss, Input, Popovers, Scrollbar, ScrubberState, Vacancy,
-    faint, heading, snapped,
+    faint, snapped,
 };
 
 use crate::chrome::OutputPicker;
@@ -854,7 +854,7 @@ impl SettingsView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let lead = Layout::of(false, window, cx).header;
+                        let lead = Layout::of(false, window, cx).lead();
                         let scroll = bar.read(cx).scroll().clone();
                         let top = bounds.top() - scroll.bounds().top() - scroll.offset().y;
                         let to = -(top - lead).max(Pixels::ZERO);
@@ -899,7 +899,9 @@ impl SettingsView {
     pub(crate) fn results(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let theme = *cx.theme();
         let hits = self.found(cx);
-        let title = heading(t!("settings-search-results"), cx).mb(theme.metrics.inset);
+        let title = faint(cx)
+            .mb(theme.metrics.pad)
+            .child(t!("settings-search-results"));
         if hits.is_empty() {
             return div().child(title).child(
                 Vacancy::new(t!("search-no-matches"))
@@ -909,15 +911,19 @@ impl SettingsView {
         }
         let row = snapped(theme.metrics.list_row, window);
 
+        // the cards pad their art in from their own edge, so the list reaches out by as much to
+        // put the art in line with the column
         div().child(title).child(
-            Deck::new("settings-results")
-                .rows(hits.iter().map(|_| row))
-                .draw(cx.processor(
-                    move |this: &mut Self, index: usize, _, cx| match hits.get(index) {
-                        Some((page, slot)) => this.result(index, *page, *slot, cx),
-                        None => div().into_any_element(),
-                    },
-                )),
+            div().mx(-theme.metrics.pad).child(
+                Deck::new("settings-results")
+                    .rows(hits.iter().map(|_| row))
+                    .draw(cx.processor(move |this: &mut Self, index: usize, _, cx| {
+                        match hits.get(index) {
+                            Some((page, slot)) => this.result(index, *page, *slot, cx),
+                            None => div().into_any_element(),
+                        }
+                    })),
+            ),
         )
     }
 

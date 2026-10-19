@@ -216,7 +216,6 @@ impl SettingsView {
             .items_center()
             .gap_3()
             .h(theme.metrics.list_row)
-            .px_5()
             .child(
                 div()
                     .flex_1()
@@ -286,7 +285,6 @@ impl SettingsView {
             .id(("lyrics-source", index))
             .relative()
             .h(theme.metrics.list_row)
-            .px_5()
             .flex()
             .items_center()
             .gap_3()

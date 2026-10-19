@@ -19,9 +19,6 @@ const PREVIEW: Pixels = px(380.);
 const NARROWEST: Pixels = px(440.);
 /// How far the rows are blurred where they pass under the header.
 const HEADER_BLUR: Pixels = px(1.);
-/// How far past the header the rows keep dissolving, so the handoff under the blur has no hard
-/// edge where sharp content comes out of the haze.
-const FADE_TAIL: Pixels = px(48.);
 
 /// The places of the takeover's columns in a window, as distances from its left edge.
 #[derive(Clone, Copy, Debug)]
@@ -35,8 +32,12 @@ pub(crate) struct Layout {
     pub(crate) preview: Option<Pixels>,
     /// How far down the sidebar's search field and the header's trail start.
     pub(crate) top: Pixels,
-    /// How tall the band the header floats in is. The content starts below it.
+    /// How tall the band the header floats in is. The content rests below it.
     pub(crate) header: Pixels,
+    /// Where the scrolling content is cut off, through the middle of the trail. Rows rising past
+    /// the header dissolve on the way up and are gone by this line, so none ever sits behind
+    /// the trail's text.
+    pub(crate) cut: Pixels,
 }
 
 impl Layout {
@@ -68,6 +69,7 @@ impl Layout {
             }
         };
         let top = metrics.pad * 2.;
+        let header = top + metrics.field + metrics.inset * 1.5;
 
         Self {
             sidebar,
@@ -75,7 +77,8 @@ impl Layout {
             width,
             preview,
             top,
-            header: top + metrics.field + metrics.inset,
+            header,
+            cut: top + (metrics.field / 2.).round(),
         }
     }
 
@@ -84,11 +87,18 @@ impl Layout {
         PREVIEW
     }
 
-    /// Fades the scrolling content out across the header and a little past it, so the rows
-    /// dissolve as they pass beneath rather than meeting the blur at a line.
+    /// How far below the cut the content rests, which is how far it dissolves across as it
+    /// rises past the header.
+    pub(crate) fn lead(&self) -> Pixels {
+        self.header - self.cut
+    }
+
+    /// Fades the scrolling content out from the header's bottom up to the cut, so the rows
+    /// dissolve as they pass beneath the trail rather than meeting the blur at a line. At rest
+    /// the first row sits just below the fade, whole.
     pub(crate) fn fade<E: Styled>(&self, element: E) -> E {
         match effects() {
-            true => element.fade_edges(self.header + FADE_TAIL, Pixels::ZERO),
+            true => element.fade_edges(self.lead(), Pixels::ZERO),
             false => element,
         }
     }
@@ -175,7 +185,7 @@ pub(crate) fn frame(
     let layout = Layout::of(preview.is_some(), window, cx);
     let theme = *cx.theme();
     scrollbar.update(cx, |bar, cx| {
-        bar.set_track_top(layout.header, cx);
+        bar.set_track_top(layout.lead(), cx);
     });
     let (beside, above) = match layout.preview {
         Some(left) => (preview.map(|preview| (left, preview)), None),
@@ -187,18 +197,26 @@ pub(crate) fn frame(
         .relative()
         .size_full()
         .child(
-            layout.fade(Scroller::new(id, scrollbar)).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(super::GROUPS)
-                    .ml(layout.column)
-                    .w(layout.width)
-                    .pt(layout.header)
-                    .pb(theme.metrics.inset * 2.)
-                    .children(above)
-                    .child(body),
-            ),
+            div()
+                .absolute()
+                .top(layout.cut)
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .child(
+                    layout.fade(Scroller::new(id, scrollbar)).child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(super::GROUPS)
+                            .ml(layout.column)
+                            .w(layout.width)
+                            .pt(layout.lead())
+                            .pb(theme.metrics.inset * 2.)
+                            .children(above)
+                            .child(body),
+                    ),
+                ),
         )
         .children(beside.map(|(left, preview)| {
             div()

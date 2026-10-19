@@ -369,7 +369,6 @@ impl SettingsView {
             .child(self.row(t!("settings-widevine"), action.into_any_element()))
             .child(
                 div()
-                    .px_5()
                     .pb_5()
                     .text_color(theme.muted_foreground)
                     .text_size(theme.text(Text::Label))

@@ -237,6 +237,9 @@ impl SettingsShell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.theme();
+        // the pill reaches out past the text on the left only, so its right edge lines up with
+        // the search field above
+        let reach = theme.metrics.pad * 1.5;
         let view = self.view.read(cx);
         let search = view.search();
         // a search lights no page, since its results come from all of them
@@ -265,9 +268,10 @@ impl SettingsShell {
                         .flex()
                         .items_center()
                         .h(theme.metrics.control)
-                        .mx_neg_3()
-                        .px_3()
-                        .when(entry == Entry::Equalizer, |row| row.pl_6())
+                        .ml(-reach)
+                        .pl(reach)
+                        .pr(reach)
+                        .when(entry == Entry::Equalizer, |row| row.pl(reach * 2.))
                         .rounded(theme.radius)
                         .cursor_pointer()
                         .text_size(theme.text(Text::Body))
@@ -331,8 +335,8 @@ impl SettingsShell {
                             .absolute()
                             .top(pill.top)
                             .h(pill.height)
-                            .left(-theme.metrics.pad * 1.5)
-                            .right(-theme.metrics.pad * 1.5)
+                            .left(-reach)
+                            .right_0()
                             .rounded(theme.radius)
                             .bg(theme.secondary)
                             .when(pill.offset != Pixels::ZERO, |pill_box| {
