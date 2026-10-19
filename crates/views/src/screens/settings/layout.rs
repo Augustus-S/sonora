@@ -41,41 +41,35 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    /// The places for a page that has a preview to show, or none.
-    pub(crate) fn of(preview: bool, window: &Window, cx: &App) -> Self {
+    /// The places for `destination`. The sidebar, the content column and, on a page with one,
+    /// the preview column stand side by side as one group, centred in the window.
+    pub(crate) fn of(destination: &Destination, window: &Window, cx: &App) -> Self {
         let metrics = cx.theme().metrics;
         let gap = metrics.inset * 2.;
         let margin = metrics.inset;
         let viewport = window.viewport_size().width;
         let room = (viewport - margin * 2.).max(Pixels::ZERO);
-        let full = SIDEBAR + gap + COLUMN + gap + PREVIEW;
-        let container = room.min(full);
-        let start = ((viewport - container) / 2.).round();
-        let sided = container - SIDEBAR - gap >= NARROWEST;
-        let (sidebar, region) = match sided {
-            true => (Some(start), start + SIDEBAR + gap),
-            false => (None, start),
+        let sided = room - SIDEBAR - gap >= NARROWEST;
+        let side = match sided {
+            true => SIDEBAR + gap,
+            false => Pixels::ZERO,
         };
-        let space = start + container - region;
-        let beside = preview && space - gap - PREVIEW >= NARROWEST;
-        let (column, width, preview) = match beside {
-            true => {
-                let width = (space - gap - PREVIEW).min(COLUMN);
-                (region, width, Some(region + width + gap))
-            }
-            false => {
-                let width = space.min(COLUMN);
-                (region + ((space - width) / 2.).round(), width, None)
-            }
+        let beside = previewed(destination) && room - side - gap - PREVIEW >= NARROWEST;
+        let aside = match beside {
+            true => gap + PREVIEW,
+            false => Pixels::ZERO,
         };
+        let width = (room - side - aside).min(COLUMN);
+        let start = ((viewport - side - width - aside) / 2.).round();
+        let column = start + side;
         let top = metrics.pad * 2.;
         let header = top + metrics.field + metrics.inset * 1.5;
 
         Self {
-            sidebar,
+            sidebar: sided.then_some(start),
             column,
             width,
-            preview,
+            preview: beside.then(|| column + width + gap),
             top,
             header,
             cut: top + (metrics.field / 2.).round(),
@@ -182,7 +176,7 @@ pub(crate) fn frame(
     window: &Window,
     cx: &mut App,
 ) -> Div {
-    let layout = Layout::of(preview.is_some(), window, cx);
+    let layout = Layout::of(destination, window, cx);
     let theme = *cx.theme();
     scrollbar.update(cx, |bar, cx| {
         bar.set_track_top(layout.lead(), cx);
@@ -227,4 +221,21 @@ pub(crate) fn frame(
                 .child(preview)
         }))
         .child(header)
+}
+
+/// Whether `destination` keeps a preview column beside its content. The sidebar stands where the
+/// group with that column centres it, so the page and the shell both ask here rather than wait
+/// to see whether a preview was drawn. A page listed here returns its preview whenever it is on
+/// show.
+pub(crate) fn previewed(destination: &Destination) -> bool {
+    matches!(
+        destination,
+        Destination::Equalizer
+            | Destination::Settings(
+                SettingsPage::NowPlaying
+                    | SettingsPage::Lyrics
+                    | SettingsPage::Sound
+                    | SettingsPage::Discord
+            )
+    )
 }

@@ -847,6 +847,7 @@ impl SettingsView {
         }
         let bar = self.scrollbar.clone();
         let view = cx.entity().downgrade();
+        let destination = Destination::Settings(self.page);
 
         div()
             .relative()
@@ -854,7 +855,7 @@ impl SettingsView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let lead = Layout::of(false, window, cx).lead();
+                        let lead = Layout::of(&destination, window, cx).lead();
                         let scroll = bar.read(cx).scroll().clone();
                         let top = bounds.top() - scroll.bounds().top() - scroll.offset().y;
                         let to = -(top - lead).max(Pixels::ZERO);

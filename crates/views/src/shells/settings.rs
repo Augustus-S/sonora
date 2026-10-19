@@ -373,7 +373,7 @@ impl Shell for SettingsShell {
 
 impl Render for SettingsShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let layout = Layout::of(false, window, cx);
+        let layout = Layout::of(&self.shown, window, cx);
         // the pages lay their rows and cards out for the width of the content column
         let viewport = window.viewport_size().width;
         Chrome::publish(viewport - layout.width, Pixels::ZERO, Pixels::ZERO, cx);
