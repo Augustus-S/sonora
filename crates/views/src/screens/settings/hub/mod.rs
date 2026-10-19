@@ -42,8 +42,11 @@ pub struct HubView {
 }
 
 impl HubView {
+    /// The hub redraws as the search is typed and as settings change. It does not follow the
+    /// pages' view as a whole, which redraws on every tick of playback.
     pub fn new(view: Entity<SettingsView>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        let search = view.read(cx).search();
+        cx.observe(&search, |_, _, cx| cx.notify()).detach();
         let settings = Sonora::global(cx).settings.clone();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         let me = cx.entity_id();
