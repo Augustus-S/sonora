@@ -67,9 +67,8 @@ fn offered(method: &SignIn, stored: bool) -> bool {
 impl SettingsView {
     pub(super) fn accounts_groups(&self) -> Vec<Group> {
         vec![
-            Group::new("settings-group-services").cards(Slot::Accounts),
-            Group::new("settings-group-local-files")
-                .icon("icons/file-music.svg")
+            Group::new("settings-group-services", "icons/music.svg").cards(Slot::Accounts),
+            Group::new("settings-group-local-files", "icons/file-music.svg")
                 .rows([Slot::LocalFolder]),
         ]
     }

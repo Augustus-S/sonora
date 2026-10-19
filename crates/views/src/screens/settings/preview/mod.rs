@@ -1,7 +1,6 @@
-//! The previews in the sticky column beside the pages where seeing a setting beats reading it.
-//! Each page with one has a file here holding the preview's own state and the function that
-//! draws it. The page puts whatever that function returns in the preview column, which stands
-//! beside the content on a wide window and moves above it on a narrow one.
+//! The previews at the top of the pages where seeing a setting beats reading it. Each page with
+//! one has a file here holding the preview's own state and the function that draws it. The page
+//! frames whatever that function returns across its column, above its first group.
 
 use super::SettingsView;
 

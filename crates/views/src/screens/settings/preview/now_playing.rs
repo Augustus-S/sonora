@@ -12,8 +12,7 @@ impl NowPlayingPreview {
 }
 
 /// The Now playing page's preview, a miniature of the Now playing view.
-/// `state` is this preview's own, kept on the view, and `None` leaves the page without a
-/// preview column.
+/// `state` is this preview's own, kept on the view, and `None` leaves the page without one.
 pub(in crate::screens::settings) fn preview(
     _state: &NowPlayingPreview,
     _view: &SettingsView,

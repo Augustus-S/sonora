@@ -23,16 +23,20 @@ const WINDOW_ROUNDING: &str = "window-rounding";
 impl SettingsView {
     pub(super) fn general_groups(&self, cx: &App) -> Vec<Group> {
         vec![
-            Group::new("settings-group-startup").rows([
+            Group::new("settings-group-startup", "icons/house.svg").rows([
                 Slot::Startup,
                 Slot::Entries,
                 Slot::Language,
             ]),
-            Group::new("settings-group-window")
+            Group::new("settings-group-window", "icons/panel-left-open.svg")
                 .rows([Slot::Tray, Slot::TrayIcon])
                 .rows(self.decoration_slots(cx)),
-            Group::new("settings-group-motion").rows([Slot::Motion, Slot::Pace, Slot::Saver]),
-            Group::new("settings-group-context-menus").rows([Slot::AdaptiveMenu]),
+            Group::new("settings-group-motion", "icons/loader-circle.svg").rows([
+                Slot::Motion,
+                Slot::Pace,
+                Slot::Saver,
+            ]),
+            Group::new("settings-group-context-menus", "icons/list.svg").rows([Slot::AdaptiveMenu]),
         ]
     }
 

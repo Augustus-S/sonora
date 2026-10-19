@@ -26,29 +26,35 @@ const SLEEP_LAST: usize =
 impl SettingsView {
     pub(super) fn playback_groups(&self, cx: &App) -> Vec<Group> {
         let capabilities = self.session.read(cx).capabilities();
-        let mut groups = vec![Group::new("settings-group-playing").rows([
-            Slot::Normalisation,
-            Slot::Gapless,
-            Slot::Sleep,
-            Slot::StayAwake,
-        ])];
+        let mut groups = vec![
+            Group::new("settings-group-playing", "icons/play.svg").rows([
+                Slot::Normalisation,
+                Slot::Gapless,
+                Slot::Sleep,
+                Slot::StayAwake,
+            ]),
+        ];
         // one level is nothing to choose between, so it is stated in a row rather than offered
         match capabilities.qualities.len() {
             0 => {}
-            1 => groups.push(Group::new("settings-stream-quality").rows([Slot::StreamQuality])),
-            _ => groups.push(Group::new("settings-stream-quality").cards(Slot::StreamQuality)),
+            1 => groups.push(
+                Group::new("settings-stream-quality", "icons/disc-3.svg")
+                    .rows([Slot::StreamQuality]),
+            ),
+            _ => groups.push(
+                Group::new("settings-stream-quality", "icons/disc-3.svg")
+                    .cards(Slot::StreamQuality),
+            ),
         }
         if capabilities.transcode {
             groups.push(
-                Group::new("settings-group-streaming")
+                Group::new("settings-group-streaming", "icons/refresh-cw.svg")
                     .rows([Slot::StreamFormat, Slot::StreamBitrate]),
             );
         }
         if self.drm.read(cx).shown(cx) {
             groups.push(
-                Group::new("settings-group-protected")
-                    .icon("icons/lock.svg")
-                    .rows([Slot::Widevine]),
+                Group::new("settings-group-protected", "icons/lock.svg").rows([Slot::Widevine]),
             );
         }
         groups

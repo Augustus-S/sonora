@@ -15,15 +15,23 @@ impl SettingsView {
     pub(super) fn discord_groups(&self, cx: &App) -> Vec<Group> {
         let mut groups = vec![Group::untitled().rows([Slot::Discord])];
         if self.settings.read(cx).discord_presence() {
-            groups.push(Group::new("settings-group-status").rows([
-                Slot::DiscordName,
-                Slot::DiscordShowPaused,
-                Slot::DiscordBadge,
-                Slot::DiscordAnonymous,
-            ]));
-            groups.push(Group::new("settings-discord-buttons").rows([Slot::DiscordButtons]));
+            groups.push(
+                Group::new("settings-group-status", "icons/radio.svg").rows([
+                    Slot::DiscordName,
+                    Slot::DiscordShowPaused,
+                    Slot::DiscordBadge,
+                    Slot::DiscordAnonymous,
+                ]),
+            );
+            groups.push(
+                Group::new("settings-discord-buttons", "icons/link.svg")
+                    .rows([Slot::DiscordButtons]),
+            );
         }
-        groups.push(Group::new("settings-group-local-files").rows([Slot::ArtworkForLocal]));
+        groups.push(
+            Group::new("settings-group-local-files", "icons/file-music.svg")
+                .rows([Slot::ArtworkForLocal]),
+        );
         groups
     }
 

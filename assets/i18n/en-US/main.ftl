@@ -489,7 +489,10 @@ month-12 = Dec
 
 # settings
 settings-search = Search settings
-settings-search-results = Results
+settings-search-results = Search results
+settings-close = Close settings
+# the key that closes settings, written small under the close button
+settings-close-key = ESC
 # where a search result lives: a drill-in page under the page it opens from
 settings-result-place = { $parent } › { $page }
 settings-page-providers = Providers
@@ -505,12 +508,6 @@ settings-page-about = About
 settings-about-name = Sonora
 settings-page-lyrics-sources = Lyrics sources
 settings-page-music-folders = Music folders
-# three lines the Lyrics tile of the settings hub sings when the playing track has no lyrics
-settings-hub-lyrics-first = Turn the volume up a little
-settings-hub-lyrics-second = and let the words come in on time
-settings-hub-lyrics-third = every line a little brighter
-# the header of the Discord status drawn on the Discord tile of the settings hub, as Discord words it
-settings-hub-discord-listening = Listening to { $name }
 settings-group-services = Streaming services
 settings-group-local-files = Local files
 settings-group-background = Background

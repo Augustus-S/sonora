@@ -20,9 +20,8 @@ impl SettingsView {
             false => vec![Slot::OutputDevice, Slot::SampleRate, Slot::Buffer],
         };
         vec![
-            Group::new("settings-group-output").rows(output),
-            Group::new("settings-equalizer")
-                .icon("icons/sliders-horizontal.svg")
+            Group::new("settings-group-output", "icons/volume-2.svg").rows(output),
+            Group::new("settings-equalizer", "icons/sliders-horizontal.svg")
                 .rows([Slot::Equalizer]),
         ]
     }

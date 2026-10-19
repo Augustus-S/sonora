@@ -25,19 +25,23 @@ pub(super) struct DraggedSource {
 impl SettingsView {
     pub(super) fn lyrics_groups(&self) -> Vec<Group> {
         vec![
-            Group::new("settings-group-display").rows([
+            Group::new("settings-group-display", "icons/mic-vocal.svg").rows([
                 Slot::Karaoke,
                 Slot::BlurLyrics,
                 Slot::Romanized,
                 Slot::PanelLyricsSize,
                 Slot::FullscreenLyricsSize,
             ]),
-            Group::new("settings-group-sources").rows([Slot::LyricsSources, Slot::LyricsForLocal]),
+            Group::new("settings-group-sources", "icons/list-music.svg")
+                .rows([Slot::LyricsSources, Slot::LyricsForLocal]),
         ]
     }
 
     pub(super) fn lyrics_sources_groups(&self) -> Vec<Group> {
-        vec![Group::new("settings-group-lyrics-order").rows([Slot::LyricsPriority])]
+        vec![
+            Group::new("settings-group-lyrics-order", "icons/arrow-up-down.svg")
+                .rows([Slot::LyricsPriority]),
+        ]
     }
 
     pub(super) fn panel_lyrics_size_row(&self, cx: &mut Context<Self>) -> AnyElement {

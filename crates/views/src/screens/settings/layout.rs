@@ -1,174 +1,112 @@
-//! Where the settings takeover puts its columns. One container sits centred in the window and
-//! holds the sidebar, the content column and, on the pages that have one, the preview column.
-//! The shell draws the sidebar and the page draws the rest, so both work the places out here
-//! from the same window and land on the same pixels.
+//! Where the settings takeover puts things. The sidebar stands against the window's left edge,
+//! one content column is centred in the room right of it, and the close button waits beside the
+//! column's top right corner. The shell draws the sidebar and the close button and the page draws
+//! the column, so both work the places out here from the same window and land on the same pixels.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Div, Entity, Pixels, Window, div, px};
+use gpui::{AnyElement, App, Div, Entity, Pixels, SharedString, Window, div, px};
 use router::{Destination, SettingsPage};
-use ui::{ActiveTheme as _, Breadcrumbs, Scrollbar, Scroller, VeilEdge, effects, veil};
+use ui::{ActiveTheme as _, Button, Scrollbar, Scroller, effects, heading};
 
-/// How wide the sidebar stands.
-pub(crate) const SIDEBAR: Pixels = px(220.);
+/// How wide the sidebar stands, its padding included.
+pub(crate) const SIDEBAR: Pixels = px(248.);
 /// How wide the content column grows at most.
 const COLUMN: Pixels = px(640.);
-/// How wide the preview column stands beside the content.
-const PREVIEW: Pixels = px(380.);
-/// The narrowest the content column may get with a preview beside it. Narrower than this and
-/// the preview moves into the column, above the settings.
-const NARROWEST: Pixels = px(440.);
-/// How far the rows are blurred where they pass under the header.
-const HEADER_BLUR: Pixels = px(1.);
 
-/// The places of the takeover's columns in a window, as distances from its left edge.
+/// The places of the takeover's parts in a window, as distances from its left and top edges.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Layout {
-    /// Where the sidebar starts, or `None` when the window is too narrow to keep one.
-    pub(crate) sidebar: Option<Pixels>,
     /// Where the content column starts and how wide it is.
     pub(crate) column: Pixels,
     pub(crate) width: Pixels,
-    /// Where the preview column starts, when it stands beside the content.
-    pub(crate) preview: Option<Pixels>,
-    /// How far down the sidebar's search field and the header's trail start.
+    /// Where the close button starts.
+    pub(crate) close: Pixels,
+    /// How far down the sidebar's search field, the page title and the close button start.
     pub(crate) top: Pixels,
-    /// How tall the band the header floats in is. The content rests below it.
-    pub(crate) header: Pixels,
-    /// Where the scrolling content is cut off, through the middle of the trail. Rows rising past
-    /// the header dissolve on the way up and are gone by this line, so none ever sits behind
-    /// the trail's text.
-    pub(crate) cut: Pixels,
 }
 
 impl Layout {
-    /// The places for `destination`. The sidebar, the content column and, on a page with one,
-    /// the preview column stand side by side as one group, centred in the window.
-    pub(crate) fn of(destination: &Destination, window: &Window, cx: &App) -> Self {
+    /// The places for the window. The column is centred in the room right of the sidebar
+    /// unless that would push the close button off the window, and then it moves left as far
+    /// as the sidebar's margin allows before it narrows.
+    pub(crate) fn of(window: &Window, cx: &App) -> Self {
         let metrics = cx.theme().metrics;
-        let gap = metrics.inset * 2.;
         let margin = metrics.inset;
+        let gap = metrics.inset;
         let viewport = window.viewport_size().width;
-        let room = (viewport - margin * 2.).max(Pixels::ZERO);
-        let sided = room - SIDEBAR - gap >= NARROWEST;
-        let side = match sided {
-            true => SIDEBAR + gap,
-            false => Pixels::ZERO,
-        };
-        let beside = previewed(destination) && room - side - gap - PREVIEW >= NARROWEST;
-        let aside = match beside {
-            true => gap + PREVIEW,
-            false => Pixels::ZERO,
-        };
-        let width = (room - side - aside).min(COLUMN);
-        let start = ((viewport - side - width - aside) / 2.).round();
-        let column = start + side;
-        let top = metrics.pad * 2.;
-        let header = top + metrics.field + metrics.inset * 1.5;
+        // the room the close button keeps on the right of the column
+        let tools = gap + metrics.control + margin;
+        let room = (viewport - SIDEBAR - margin - tools).max(Pixels::ZERO);
+        let width = room.min(COLUMN);
+        let centred = SIDEBAR + ((viewport - SIDEBAR - width) / 2.).round();
+        let column = centred.min(viewport - tools - width).max(SIDEBAR + margin);
 
         Self {
-            sidebar: sided.then_some(start),
             column,
             width,
-            preview: beside.then(|| column + width + gap),
-            top,
-            header,
-            cut: top + (metrics.field / 2.).round(),
+            close: column + width + gap,
+            top: metrics.inset * 1.5,
         }
     }
 
-    /// How wide the preview column stands.
-    pub(crate) fn preview_width(&self) -> Pixels {
-        PREVIEW
-    }
-
-    /// How far below the cut the content rests, which is how far it dissolves across as it
-    /// rises past the header.
-    pub(crate) fn lead(&self) -> Pixels {
-        self.header - self.cut
-    }
-
-    /// Fades the scrolling content out from the header's bottom up to the cut, so the rows
-    /// dissolve as they pass beneath the trail rather than meeting the blur at a line. At rest
-    /// the first row sits just below the fade, whole.
+    /// Fades the scrolling content out across the band above the title, so rows rising past it
+    /// dissolve rather than meet the window's edge at a line.
     pub(crate) fn fade<E: Styled>(&self, element: E) -> E {
         match effects() {
-            true => element.fade_edges(self.lead(), Pixels::ZERO),
+            true => element.fade_edges(self.top, Pixels::ZERO),
             false => element,
         }
     }
 }
 
-/// The header floating over the content column: the trail to the page on show over a band that
-/// blurs and fades the rows passing under it. It fills the top of the page and paints over it.
-pub(crate) fn header(
-    destination: &Destination,
-    layout: Layout,
-    window: &Window,
-    cx: &App,
-) -> AnyElement {
+/// The top of a page: the back link to the page a drill-in opened from, and the page's title or
+/// `named` in its place, standing as tall as the sidebar's search field so the two share a
+/// centre line.
+fn title(destination: &Destination, named: Option<SharedString>, cx: &App) -> Div {
     let theme = cx.theme();
-
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .h(layout.header)
-        // The haze follows the window: a see-through page has content of its own passing under
-        // the header and reads worse without it. Only the flat fallback is dropped there, since
-        // a solid band over a see-through page is a slab.
-        .when(effects() || !theme.transparent, |band| {
-            band.child(veil(
-                VeilEdge::Top,
-                layout.header,
-                HEADER_BLUR,
-                theme.background,
-                None,
-                window,
-            ))
-        })
-        .child(
-            div()
-                .absolute()
-                .top(layout.top)
-                .left(layout.column)
-                .w(layout.width)
-                .h(theme.metrics.field)
-                .flex()
-                .items_center()
-                .child(trail(destination)),
-        )
-        .into_any_element()
-}
-
-/// The trail to `destination`: Settings, which leaves for the hub, then the page a drill-in
-/// opened from, then the page itself.
-fn trail(destination: &Destination) -> Breadcrumbs {
-    let settings = Breadcrumbs::new("settings-trail")
-        .link(i18n::lookup("nav-settings", None), |_, _, cx| {
-            router::close_settings(cx)
-        });
     let (parent, page) = match destination {
         Destination::Equalizer => (Some(SettingsPage::Sound), "settings-equalizer"),
         Destination::Settings(page) => (page.parent(), page.key()),
         _ => (None, "nav-settings"),
     };
 
-    settings
-        .when_some(parent, |trail, parent| {
-            trail.link(i18n::lookup(parent.key(), None), move |_, _, cx| {
-                router::up(Destination::Settings(parent), cx)
-            })
-        })
-        .item(i18n::lookup(page, None))
+    div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .children(parent.map(|parent| {
+            Button::new("settings-back")
+                .ghost()
+                .small()
+                .icon("icons/chevron-left.svg")
+                .label(i18n::lookup(parent.key(), None))
+                .tint(theme.muted_foreground)
+                .ml(-theme.metrics.pad)
+                .on_click(move |_, _, cx| router::up(Destination::Settings(parent), cx))
+        }))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .h(theme.metrics.field)
+                .child(heading(
+                    named.unwrap_or_else(|| i18n::lookup(page, None)),
+                    cx,
+                )),
+        )
 }
 
-/// Lays a takeover page out in the window: `body` scrolling in the content column beneath the
-/// floating header, and `preview` standing still beside it, or at the top of the column when the
-/// window is too narrow to keep it beside. `destination` names the page for the header's trail.
-/// The page fills the shell, which draws the sidebar over it.
+/// Lays a takeover page out in its column: the title, then `preview` framed across the column
+/// when the page has one, then `body`, all scrolling together. `destination` names the page for
+/// its title unless `named` gives one. The page fills the shell, which draws the sidebar and the
+/// close button over it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every page hands its whole frame over at once"
+)]
 pub(crate) fn frame(
     destination: &Destination,
+    named: Option<SharedString>,
     id: &'static str,
     scrollbar: &Entity<Scrollbar>,
     body: impl IntoElement,
@@ -176,66 +114,35 @@ pub(crate) fn frame(
     window: &Window,
     cx: &mut App,
 ) -> Div {
-    let layout = Layout::of(destination, window, cx);
+    let layout = Layout::of(window, cx);
     let theme = *cx.theme();
     scrollbar.update(cx, |bar, cx| {
-        bar.set_track_top(layout.lead(), cx);
+        bar.set_track_top(layout.top, cx);
     });
-    let (beside, above) = match layout.preview {
-        Some(left) => (preview.map(|preview| (left, preview)), None),
-        None => (None, preview),
-    };
-    let header = header(destination, layout, window, cx);
+    let preview = preview.map(|preview| {
+        div()
+            .w_full()
+            .overflow_hidden()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .child(preview)
+    });
 
-    div()
-        .relative()
-        .size_full()
-        .child(
-            div()
-                .absolute()
-                .top(layout.cut)
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .child(
-                    layout.fade(Scroller::new(id, scrollbar)).child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(super::GROUPS)
-                            .ml(layout.column)
-                            .w(layout.width)
-                            .pt(layout.lead())
-                            .pb(theme.metrics.inset * 2.)
-                            .children(above)
-                            .child(body),
-                    ),
-                ),
-        )
-        .children(beside.map(|(left, preview)| {
-            div()
-                .absolute()
-                .top(layout.header)
-                .left(left)
-                .w(layout.preview_width())
-                .child(preview)
-        }))
-        .child(header)
-}
-
-/// Whether `destination` keeps a preview column beside its content. The sidebar stands where the
-/// group with that column centres it, so the page and the shell both ask here rather than wait
-/// to see whether a preview was drawn. A page listed here returns its preview whenever it is on
-/// show.
-pub(crate) fn previewed(destination: &Destination) -> bool {
-    matches!(
-        destination,
-        Destination::Equalizer
-            | Destination::Settings(
-                SettingsPage::NowPlaying
-                    | SettingsPage::Lyrics
-                    | SettingsPage::Sound
-                    | SettingsPage::Discord
-            )
+    div().relative().size_full().child(
+        div().absolute().inset_0().child(
+            layout.fade(Scroller::new(id, scrollbar)).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .ml(layout.column)
+                    .w(layout.width)
+                    .pt(layout.top)
+                    .pb(theme.metrics.inset * 2.)
+                    .child(title(destination, named, cx).mb(theme.metrics.inset))
+                    .children(preview.map(|preview| preview.mb(super::GROUPS)))
+                    .child(body),
+            ),
+        ),
     )
 }

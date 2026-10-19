@@ -210,7 +210,7 @@ impl EqualizerView {
         }
     }
 
-    /// What stands in the preview column beside the page, or `None` for no column.
+    /// What stands at the top of the page above its cards, or `None` for nothing.
     pub(crate) fn preview(
         &mut self,
         _window: &mut Window,
@@ -626,6 +626,7 @@ impl Render for EqualizerView {
 
         settings::frame(
             &Destination::Equalizer,
+            None,
             "equalizer-page",
             &self.scrollbar,
             body,

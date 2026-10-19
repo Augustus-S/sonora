@@ -14,8 +14,8 @@ use state::{
     Sleep, Sonora,
 };
 use ui::{
-    ActiveTheme as _, Card, Deck, Dismiss, Input, LEADING, Popovers, Scrollbar, ScrubberState,
-    Vacancy, faint, snapped,
+    ActiveTheme as _, Card, Deck, Dismiss, Input, Popovers, Scrollbar, ScrubberState, Vacancy,
+    faint, snapped, upper,
 };
 
 use crate::chrome::OutputPicker;
@@ -27,7 +27,6 @@ mod accounts;
 mod appearance;
 mod discord;
 mod general;
-mod hub;
 mod layout;
 mod lyrics;
 mod now_playing;
@@ -37,7 +36,6 @@ mod rows;
 mod scrobbling;
 mod sound;
 
-pub use hub::HubView;
 pub(crate) use layout::{Layout, SIDEBAR, frame};
 
 /// The space between two groups of a page.
@@ -130,8 +128,8 @@ enum Slot {
     Source,
 }
 
-/// One group of a page: a sentence-case heading, an optional block of option cards under it,
-/// and the rows that share one surface below.
+/// One group of a page: an uppercase eyebrow with its icon, an optional block of option cards
+/// under it, and the rows below.
 struct Group {
     title: Option<&'static str>,
     icon: Option<&'static str>,
@@ -140,11 +138,11 @@ struct Group {
 }
 
 impl Group {
-    /// A group under the heading the Fluent key `title` names.
-    fn new(title: &'static str) -> Self {
+    /// A group under the heading the Fluent key `title` names, with `icon` before it.
+    fn new(title: &'static str, icon: &'static str) -> Self {
         Self {
             title: Some(title),
-            icon: None,
+            icon: Some(icon),
             cards: None,
             rows: Vec::new(),
         }
@@ -158,12 +156,6 @@ impl Group {
             cards: None,
             rows: Vec::new(),
         }
-    }
-
-    /// An icon before the heading, for the few groups whose subject it names.
-    fn icon(mut self, icon: &'static str) -> Self {
-        self.icon = Some(icon);
-        self
     }
 
     /// The setting drawn as option cards between the heading and the rows.
@@ -431,8 +423,8 @@ impl SettingsView {
         }
     }
 
-    /// The live preview of the page on show, for the pages that have one. A search shows none,
-    /// since its results come from every page.
+    /// The live preview at the top of the page on show, for the pages that have one. A search
+    /// shows none, since its results come from every page.
     fn preview(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.searching() {
             return None;
@@ -785,31 +777,16 @@ impl SettingsView {
         }
     }
 
-    /// One group: a faint heading, its option cards, then its rows, all on the page itself with
-    /// no surface around them and nothing between the rows.
+    /// One group: the eyebrow with its icon, its option cards, then its rows, all on the page
+    /// itself with no surface around them and nothing between the rows.
     fn group(&self, group: Group, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = *cx.theme();
         let Group {
             title,
             icon,
             cards,
             rows,
         } = group;
-        let heading = title.map(|key| {
-            faint(cx)
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .mb(theme.metrics.pad)
-                .children(icon.map(|icon| {
-                    svg()
-                        .path(icons::path(icon))
-                        .size(theme.text(ui::Text::Small))
-                        .flex_none()
-                        .text_color(theme.muted_foreground)
-                }))
-                .child(i18n::lookup(key, None))
-        });
+        let heading = title.map(|key| group_heading(i18n::lookup(key, None), icon, cx));
         let carded = cards.is_some();
         let cards = cards.map(|slot| {
             let cards = self.cards(slot, window, cx);
@@ -840,14 +817,13 @@ impl SettingsView {
     }
 
     /// Wraps the element of the setting a search result opened so that, once it is laid out,
-    /// the page scrolls to put it just below the header.
+    /// the page scrolls to put it at the top of the column.
     fn revealing(&self, slot: Slot, element: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         if self.reveal != Some(slot) {
             return element;
         }
         let bar = self.scrollbar.clone();
         let view = cx.entity().downgrade();
-        let destination = Destination::Settings(self.page);
 
         div()
             .relative()
@@ -855,7 +831,7 @@ impl SettingsView {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        let lead = Layout::of(&destination, window, cx).lead();
+                        let lead = Layout::of(window, cx).top;
                         let scroll = bar.read(cx).scroll().clone();
                         let top = bounds.top() - scroll.bounds().top() - scroll.offset().y;
                         let to = -(top - lead).max(Pixels::ZERO);
@@ -876,21 +852,12 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// The page on show: what it opens with, the groups, and what it closes with. The trail in
-    /// the header names the page, so the page carries no title of its own.
+    /// The page on show: what it opens with, the groups, and what it closes with. The frame
+    /// draws the page's title above it.
     fn page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let theme = *cx.theme();
         let header = self.header(cx);
-        let groups = self.groups(self.page, cx);
-        // A page that opens straight on a row lifts it so the label sits on the line where a
-        // heading would, level with the sidebar's first eyebrow.
-        let bare = header.is_none()
-            && groups
-                .first()
-                .is_some_and(|group| group.title.is_none() && group.cards.is_none());
-        let line = snapped(theme.text(ui::Text::Small) * LEADING, window);
-        let lift = ((theme.metrics.list_row - line) / 2.).round();
-        let groups = groups
+        let groups = self
+            .groups(self.page, cx)
             .into_iter()
             .map(|group| self.group(group, window, cx))
             .collect::<Vec<_>>();
@@ -899,7 +866,6 @@ impl SettingsView {
             .flex()
             .flex_col()
             .gap(GROUPS)
-            .when(bare, |page| page.mt(-lift))
             .children(header)
             .children(groups)
             .children(self.footer(cx))
@@ -910,11 +876,8 @@ impl SettingsView {
     pub(crate) fn results(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let theme = *cx.theme();
         let hits = self.found(cx);
-        let title = faint(cx)
-            .mb(theme.metrics.pad)
-            .child(t!("settings-search-results"));
         if hits.is_empty() {
-            return div().child(title).child(
+            return div().child(
                 Vacancy::new(t!("search-no-matches"))
                     .icon("icons/search.svg")
                     .py_6(),
@@ -924,7 +887,7 @@ impl SettingsView {
 
         // the cards pad their art in from their own edge, so the list reaches out by as much to
         // put the art in line with the column
-        div().child(title).child(
+        div().child(
             div().mx(-theme.metrics.pad).child(
                 Deck::new("settings-results")
                     .rows(hits.iter().map(|_| row))
@@ -1089,9 +1052,11 @@ impl Render for SettingsView {
             false => self.page(window, cx),
         };
         let destination = Destination::Settings(self.page);
+        let named = self.searching().then(|| t!("settings-search-results"));
 
         layout::frame(
             &destination,
+            named,
             "settings",
             &self.scrollbar,
             body,
@@ -1124,4 +1089,23 @@ impl Render for SettingsView {
             this.child(self.sign_in_prompt(slug, provider, cx).into_any_element())
         })
     }
+}
+
+/// A group's heading: its icon, when it has one, before its name as an uppercase eyebrow.
+pub(super) fn group_heading(label: SharedString, icon: Option<&'static str>, cx: &App) -> Div {
+    let theme = cx.theme();
+
+    faint(cx)
+        .flex()
+        .items_center()
+        .gap_2()
+        .mb(theme.metrics.pad)
+        .children(icon.map(|icon| {
+            svg()
+                .path(icons::path(icon))
+                .size(theme.text(ui::Text::Small))
+                .flex_none()
+                .text_color(theme.muted_foreground)
+        }))
+        .child(upper(label))
 }

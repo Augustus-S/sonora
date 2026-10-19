@@ -30,13 +30,14 @@ const TYPEFACE_BATCH: usize = 3;
 impl SettingsView {
     pub(super) fn appearance_groups(&self) -> Vec<Group> {
         vec![
-            Group::new("settings-theme")
+            Group::new("settings-theme", "icons/palette.svg")
                 .cards(Slot::Theme)
                 .rows([Slot::Adaptive]),
-            Group::new("settings-icons").cards(Slot::Icons),
-            Group::new("settings-corners").cards(Slot::Corners),
-            Group::new("settings-group-text").rows([Slot::Typeface, Slot::Font]),
-            Group::new("settings-group-window").rows(
+            Group::new("settings-icons", "icons/layout-grid.svg").cards(Slot::Icons),
+            Group::new("settings-corners", "icons/maximize.svg").cards(Slot::Corners),
+            Group::new("settings-group-text", "icons/text-select.svg")
+                .rows([Slot::Typeface, Slot::Font]),
+            Group::new("settings-group-window", "icons/panel-left-open.svg").rows(
                 [Slot::Opacity]
                     .into_iter()
                     .chain(ui::WINDOW_BLUR.then_some(Slot::WindowBlur))

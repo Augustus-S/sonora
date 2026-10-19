@@ -12,8 +12,7 @@ impl LyricsPreview {
 }
 
 /// The Lyrics page's preview, the lyrics drawn the way the panel and Now playing draw them.
-/// `state` is this preview's own, kept on the view, and `None` leaves the page without a
-/// preview column.
+/// `state` is this preview's own, kept on the view, and `None` leaves the page without one.
 pub(in crate::screens::settings) fn preview(
     _state: &LyricsPreview,
     _view: &SettingsView,

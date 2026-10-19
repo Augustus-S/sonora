@@ -23,12 +23,12 @@ impl SettingsView {
     pub(super) fn now_playing_groups(&self, cx: &App) -> Vec<Group> {
         let settings = self.settings.read(cx);
         vec![
-            Group::new("settings-group-background").rows(
+            Group::new("settings-group-background", "icons/moon.svg").rows(
                 [Slot::Ambient]
                     .into_iter()
                     .chain(settings.ambient().then_some(Slot::AmbientMotion)),
             ),
-            Group::new("settings-visualizer")
+            Group::new("settings-visualizer", "icons/music-2.svg")
                 .cards(Slot::Visualizer)
                 .rows(
                     settings
@@ -36,7 +36,7 @@ impl SettingsView {
                         .shown()
                         .then_some(Slot::VisualizerAbsolute),
                 ),
-            Group::new("settings-group-controls")
+            Group::new("settings-group-controls", "icons/sliders-horizontal.svg")
                 .rows([Slot::FullscreenControlsAutohide, Slot::OsFullscreen]),
         ]
     }

@@ -12,8 +12,7 @@ impl DiscordPreview {
 }
 
 /// The Discord page's preview, the card Discord shows for the playing track.
-/// `state` is this preview's own, kept on the view, and `None` leaves the page without a
-/// preview column.
+/// `state` is this preview's own, kept on the view, and `None` leaves the page without one.
 pub(in crate::screens::settings) fn preview(
     _state: &DiscordPreview,
     _view: &SettingsView,

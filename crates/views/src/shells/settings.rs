@@ -1,13 +1,10 @@
 mod sidebar;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use gpui::prelude::*;
 use gpui::{AnyView, App, Context, Entity, FocusHandle, Pixels, Render, Window, div};
-use input::WORKSPACE_CONTEXT;
+use input::{SETTINGS_CONTEXT, WORKSPACE_CONTEXT};
 use router::{Destination, SettingsPage};
-use ui::{ActiveTheme as _, Beat, Dismiss, Entrance, Spring, entering};
+use ui::{ActiveTheme as _, Button, Dismiss, Entrance, Text, entering};
 
 use crate::chrome::{Chrome, TitleBarOptions, ToastStack};
 use crate::screens::equalizer::EqualizerView;
@@ -15,13 +12,12 @@ use crate::screens::settings::{Layout, SettingsView};
 use crate::shared::confirm::Confirm;
 use crate::shared::widevine::WidevinePrompt;
 use crate::shells::Shell;
-use sidebar::{Entry, GLIDE, Light};
 
 /// The settings takeover. It fills the window while a settings page is open, with no app
-/// sidebar, player bar or history, and lays out like a documentation site: one container centred
-/// in the window holding the sidebar of pages, and the page beside it with its own header and
-/// preview. The shell draws the sidebar over the page, which fills the shell and leaves the
-/// sidebar's place free. Closing returns to the hub.
+/// sidebar, player bar or history, and lays out like Discord's settings: a still sidebar of
+/// pages against the window's left edge, the page in one column centred in the room beside it,
+/// and a close button by the column's top right corner. The page fills the shell and the shell
+/// draws the sidebar and the close button over it. Closing returns to where settings opened from.
 pub(crate) struct SettingsShell {
     view: Entity<SettingsView>,
     equalizer: Entity<EqualizerView>,
@@ -32,16 +28,6 @@ pub(crate) struct SettingsShell {
     shown: Destination,
     /// The entrance the page plays as another page replaces it.
     transition: Option<Entrance>,
-    /// Where the active entry's pill is, as a distance from the top of the sidebar's list.
-    pill: Spring,
-    beat: Beat,
-    /// Whether the pill has landed anywhere yet. The first place it learns it jumps to.
-    placed: bool,
-    /// Where each entry stands in the sidebar's list, its top and height, as the last layout put
-    /// it. The pill reads its target from here.
-    places: Rc<RefCell<Vec<(Entry, Pixels, Pixels)>>>,
-    /// The fade between the icon of the entry last on show and the one on show now.
-    light: Light,
     focus: FocusHandle,
 }
 
@@ -61,11 +47,6 @@ impl SettingsShell {
             toasts: cx.new(ToastStack::new),
             shown: Destination::Settings(SettingsPage::Providers),
             transition: None,
-            pill: Spring::new(GLIDE),
-            beat: Beat::default(),
-            placed: false,
-            places: Rc::default(),
-            light: Light::default(),
             focus: cx.focus_handle(),
         }
     }
@@ -91,8 +72,8 @@ impl SettingsShell {
         cx.notify();
     }
 
-    /// Plays the page entrance over the content and preview as one page replaces another. The
-    /// sidebar stays still, and only its pill moves.
+    /// Plays the page entrance over the content as one page replaces another. The sidebar and
+    /// the close button stay still.
     pub fn reveal_page(&mut self, cx: &mut Context<Self>) {
         self.transition = match cx.reduce_motion() {
             true => None,
@@ -115,8 +96,7 @@ impl SettingsShell {
     }
 
     /// Answers escape inside settings: an open menu or dialog closes first, then the search
-    /// clears. Returns false when there was nothing left to close, and the root returns to the
-    /// hub.
+    /// clears. Returns false when there was nothing left to close, and the root closes settings.
     fn escape(&mut self, cx: &mut Context<Self>) -> bool {
         match self.shown {
             Destination::Equalizer => self.equalizer.update(cx, |view, _| view.escape()),
@@ -141,7 +121,7 @@ impl Shell for SettingsShell {
 
 impl Render for SettingsShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let layout = Layout::of(&self.shown, window, cx);
+        let layout = Layout::of(window, cx);
         // the pages lay their rows and cards out for the width of the content column
         let viewport = window.viewport_size().width;
         Chrome::publish(viewport - layout.width, Pixels::ZERO, Pixels::ZERO, cx);
@@ -150,9 +130,7 @@ impl Render for SettingsShell {
             Destination::Equalizer => self.equalizer.clone().into_any_element(),
             _ => self.view.clone().into_any_element(),
         };
-        let sidebar = layout
-            .sidebar
-            .map(|left| self.sidebar(layout, left, window, cx));
+        let sidebar = self.sidebar(layout, cx);
 
         div()
             .relative()
@@ -162,7 +140,7 @@ impl Render for SettingsShell {
             .flex_1()
             .min_h_0()
             .bg(cx.theme().background)
-            .key_context(super::shell_context(WORKSPACE_CONTEXT))
+            .key_context(super::shell_context(&[WORKSPACE_CONTEXT, SETTINGS_CONTEXT]))
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
                 if this.escape(cx) {
@@ -180,10 +158,43 @@ impl Render for SettingsShell {
                     .map(|this| entering(this, hidden))
                     .child(page),
             )
-            .children(sidebar)
+            .child(sidebar)
+            .child(close(layout, cx))
             // the toasts hang from the bottom edge, where the player bar would be
             .child(div().relative().w_full().child(self.toasts.clone()))
             .child(self.confirm.clone())
             .child(self.widevine.clone())
     }
+}
+
+/// The close button by the column's top right corner, an outlined cross with the key that
+/// does the same written small under it.
+fn close(layout: Layout, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+
+    div()
+        .absolute()
+        .top(layout.top)
+        .left(layout.close)
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_1()
+        .child(
+            Button::new("settings-close")
+                .outline()
+                .icon("icons/x.svg")
+                .size(theme.metrics.control)
+                .px_0()
+                .rounded(theme.radius)
+                .tooltip("settings-close")
+                .on_click(|_, _, cx| router::close_settings(cx)),
+        )
+        .child(
+            div()
+                .text_size(theme.text(Text::Tiny))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.muted_foreground)
+                .child(i18n::lookup("settings-close-key", None)),
+        )
 }
