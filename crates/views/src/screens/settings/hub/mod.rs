@@ -268,19 +268,6 @@ fn cover_tint(cx: &App) -> Hsla {
         .unwrap_or_else(|| tint(cx))
 }
 
-/// A stand-in for art still to be drawn: a wash from `from` to `to` across the tile, turning
-/// slowly with the hover clock so the tile's motion can be judged.
-fn placeholder(from: Hsla, to: Hsla, angle: f32, hover: Hover) -> AnyElement {
-    div()
-        .size_full()
-        .bg(linear_gradient(
-            (angle + hover.clock * 24.) % 360.,
-            linear_color_stop(from, 0.),
-            linear_color_stop(to, 1.),
-        ))
-        .into_any_element()
-}
-
 /// The theme's tint, the cover colour the adaptive theme took, or its primary without one.
 fn tint(cx: &App) -> Hsla {
     let theme = cx.theme();
