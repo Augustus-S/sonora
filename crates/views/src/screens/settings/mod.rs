@@ -767,7 +767,7 @@ impl SettingsView {
     /// draws its row instead.
     fn cards(&self, slot: Slot, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         match slot {
-            Slot::Accounts => self.accounts_cards(cx),
+            Slot::Accounts => self.accounts_rows(cx),
             Slot::Theme => self.theme_cards(window, cx),
             Slot::Icons => self.icon_cards(window, cx),
             Slot::Corners => self.corner_cards(window, cx),

@@ -29,6 +29,13 @@ pub(crate) mod widevine;
 
 pub(crate) use ui::effects;
 
+/// The brand colours of the providers' marks.
+const SPOTIFY: u32 = 0x1ed760;
+const YOUTUBE: u32 = 0xff0033;
+const DEEZER: u32 = 0xa238ff;
+const APPLE: u32 = 0xfa2d48;
+const SUBSONIC: u32 = 0xffa31a;
+
 pub(crate) fn provider_logo(slug: &str) -> &'static str {
     match slug {
         "spotify" => "icons/spotify.svg",
@@ -38,5 +45,18 @@ pub(crate) fn provider_logo(slug: &str) -> &'static str {
         "apple" => "icons/applemusic.svg",
         "tidal" => "icons/tidal.svg",
         _ => "icons/music.svg",
+    }
+}
+
+/// The brand colour of the provider `slug`'s mark. Tidal's mark is plain black or white, so it
+/// takes the foreground, as does any provider without a colour of its own.
+pub(crate) fn provider_brand(slug: &str, cx: &gpui::App) -> gpui::Hsla {
+    match slug {
+        "spotify" => gpui::rgb(SPOTIFY).into(),
+        "youtube" => gpui::rgb(YOUTUBE).into(),
+        "deezer" => gpui::rgb(DEEZER).into(),
+        "apple" => gpui::rgb(APPLE).into(),
+        "subsonic" => gpui::rgb(SUBSONIC).into(),
+        _ => ui::ActiveTheme::theme(cx).foreground,
     }
 }
