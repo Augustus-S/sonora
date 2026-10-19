@@ -20,7 +20,9 @@ use crate::shared::nav::nav_row;
 /// The one drag list the pinned section keeps, so a pin dropped anywhere in it lands in order.
 const PINS: &str = "sidebar-pins";
 
-const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
+/// The sidebar's navigation rows in order: the entry that can hide each, its icon and where it goes.
+/// Settings has no entry, so it is always shown.
+pub(crate) const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
     (Some(NavEntry::Home), "icons/house.svg", Destination::Home),
     (
         Some(NavEntry::Search),
