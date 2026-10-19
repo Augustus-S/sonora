@@ -275,10 +275,7 @@ impl SettingsView {
         let search = cx.new(|cx| {
             Input::new("settings-search", cx)
                 .icon("icons/search.svg")
-                .shortcut(match cfg!(target_os = "macos") {
-                    true => "shortcut-filter-mac",
-                    false => "shortcut-filter",
-                })
+                .shortcut("secondary-f")
                 .clearable()
         });
         cx.observe(&search, |this, input, cx| {

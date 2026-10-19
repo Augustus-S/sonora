@@ -193,7 +193,7 @@ pub struct Input {
     end: bool,
     /// The Fluent key of the muted unit drawn after the text inside the field.
     suffix: Option<SharedString>,
-    /// The Fluent key of the shortcut that focuses the field, shown at its end while it is empty.
+    /// The keystroke that focuses the field, drawn as keys at its end while it is empty.
     shortcut: Option<SharedString>,
     content: SharedString,
     selected_range: Range<usize>,
@@ -287,10 +287,10 @@ impl Input {
         }
     }
 
-    /// Shows the shortcut that focuses the field as a muted key chip at its end while the field
-    /// is empty. `key` is the Fluent key of the shortcut as the platform spells it.
-    pub fn shortcut(mut self, key: impl Into<SharedString>) -> Self {
-        self.shortcut = Some(key.into());
+    /// Shows `keystroke`, the shortcut that focuses the field, as a row of keys at its end while
+    /// the field is empty. It is spelled as key bindings are, such as `"secondary-f"`.
+    pub fn shortcut(mut self, keystroke: impl Into<SharedString>) -> Self {
+        self.shortcut = Some(keystroke.into());
         self
     }
 
