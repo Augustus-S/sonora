@@ -65,6 +65,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Active shuffle and repeat show a dot beneath their icons in the player bar and fullscreen,
+  so their state is visible without relying on color alone.
 - With YouTube Music Premium, songs stream at 256 kbps instead of 128 kbps.
 - An equalizer preset that boosts no longer distorts loud passages. Sonora lowers the level by
   the curve's highest boost, so the balance you chose is what you hear.
