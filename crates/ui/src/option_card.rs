@@ -145,8 +145,8 @@ impl OptionCard {
         self
     }
 
-    /// The Fluent string `key`, shown when the card is hovered. A disabled card keeps it, so
-    /// it can say why it cannot be chosen.
+    /// The Fluent string `key`, shown the moment the card is hovered and following the pointer.
+    /// A disabled card keeps it, so it can say why it cannot be chosen.
     pub fn tooltip(mut self, key: impl Into<SharedString>) -> Self {
         self.tooltip = Some(key.into());
         self
@@ -245,7 +245,7 @@ impl RenderOnce for OptionCard {
                 fade.update(cx, |fade, _| fade.set(*hovered));
                 window.refresh();
             })
-            .when_some(tooltip, |this, key| this.tip(key, Perch::Pointer))
+            .when_some(tooltip, |this, key| this.tip(key, Perch::Follow))
             .child(frame)
             .child(
                 div()
