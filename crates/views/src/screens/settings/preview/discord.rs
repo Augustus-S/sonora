@@ -25,7 +25,7 @@ const SURFACE: u32 = 0x232428;
 /// The activity card's own fill.
 const CARD: u32 = 0x2b2d31;
 /// The card's header line, "Listening to …".
-const HEADER: u32 = 0xb5bac1;
+const HEADER: u32 = 0xdbdee1;
 /// The track's title.
 const TITLE: u32 = 0xf2f3f5;
 /// The artist line.
@@ -43,8 +43,8 @@ const BUTTON_TEXT: u32 = 0xffffff;
 /// mark in black on white.
 const APP_ICON: u32 = 0xffffff;
 const APP_MARK: u32 = 0x000000;
-/// The badge's disc behind a provider's mark.
-const BADGE: u32 = 0x000000;
+/// The badge's disc is the provider's own colour with its mark in white on it.
+const BADGE_MARK: u32 = 0xffffff;
 /// How wide the card stands and how far its content sits from its edge.
 const CARD_WIDTH: Pixels = px(372.);
 const CARD_PAD: Pixels = px(12.);
@@ -52,26 +52,29 @@ const CARD_RADIUS: Pixels = px(8.);
 /// How much room the popout leaves around the card.
 const SURFACE_PAD: Pixels = px(20.);
 /// The large image, its corners and the gap to the text beside it.
-const ART: Pixels = px(108.);
+const ART: Pixels = px(120.);
 const ART_RADIUS: Pixels = px(8.);
 const ART_GAP: Pixels = px(12.);
 /// The provider badge, the ring of card colour around it, and how far it hangs past the art.
 const BADGE_SIZE: Pixels = px(32.);
 const BADGE_RING: Pixels = px(4.);
-const BADGE_OVERHANG: Pixels = px(6.);
+const BADGE_OVERHANG: Pixels = px(4.);
 /// Sonora's mark on the application icon, as a share of the icon.
 const APP_MARK_SHARE: f32 = 0.56;
 /// A provider's mark on the badge, as a share of the badge.
-const BADGE_MARK_SHARE: f32 = 0.6;
-/// Discord's type sizes: the header, the title, the artist line, the times and the buttons.
-const HEADER_SIZE: Pixels = px(12.);
+const BADGE_MARK_SHARE: f32 = 0.5;
+/// Discord's type sizes: the header, the title, the artist and album lines, the times and the
+/// buttons.
+const HEADER_SIZE: Pixels = px(14.);
 const TITLE_SIZE: Pixels = px(16.);
 const TEXT_SIZE: Pixels = px(14.);
-const TIME_SIZE: Pixels = px(12.);
+const TIME_SIZE: Pixels = px(14.);
 const BUTTON_SIZE: Pixels = px(14.);
 /// The progress bar's height, and the room between it and the times either side.
 const BAR_HEIGHT: Pixels = px(4.);
-const BAR_GAP: Pixels = px(8.);
+const BAR_GAP: Pixels = px(12.);
+/// The room between the album line and the times under it.
+const TIME_GAP: Pixels = px(8.);
 /// A button's height and corners, and the gap between two.
 const BUTTON_HEIGHT: Pixels = px(32.);
 const BUTTON_RADIUS: Pixels = px(8.);
@@ -192,9 +195,13 @@ pub(in crate::screens::settings) fn preview(
         buttons.push(t!("get-sonora"));
     }
 
-    let (title, artist) = match hidden {
-        true => (t!("discord-listening"), None),
-        false => (sample.title.clone(), Some(sample.artist.clone())),
+    let (title, artist, album) = match hidden {
+        true => (t!("discord-listening"), None, None),
+        false => (
+            sample.title.clone(),
+            Some(sample.artist.clone()),
+            (!sample.album.is_empty()).then(|| sample.album.clone()),
+        ),
     };
     let card = div()
         .w(CARD_WIDTH)
@@ -208,7 +215,6 @@ pub(in crate::screens::settings) fn preview(
         .child(
             div()
                 .text_size(HEADER_SIZE)
-                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(HEADER))
                 .truncate()
                 .child(t!("settings-discord-preview-listening", name = &listening)),
@@ -219,7 +225,7 @@ pub(in crate::screens::settings) fn preview(
                 .items_center()
                 .gap(ART_GAP)
                 .child(image(art, badge, cx))
-                .child(details(title, artist, timing)),
+                .child(details(title, artist, album, timing)),
         )
         .when(!buttons.is_empty(), |card| {
             card.child(div().flex().flex_col().gap(BUTTON_GAP).children(
@@ -305,27 +311,32 @@ fn image(art: Option<String>, badge: Option<&'static str>, cx: &gpui::App) -> Di
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .bg(rgb(BADGE))
+                            .bg(brand)
                             .child(
                                 svg()
                                     .path(icons::path(provider_logo(slug)))
                                     .size(BADGE_SIZE * BADGE_MARK_SHARE)
-                                    .text_color(brand),
+                                    .text_color(rgb(BADGE_MARK)),
                             ),
                     ),
             )
         })
 }
 
-/// The text beside the image: the title in bold, the artist, and the time the status shows.
-fn details(title: SharedString, artist: Option<SharedString>, timing: Timing) -> Div {
+/// The text beside the image: the title, the artist, the album, and the time the status shows.
+fn details(
+    title: SharedString,
+    artist: Option<SharedString>,
+    album: Option<SharedString>,
+    timing: Timing,
+) -> Div {
     let time = |value: Duration| {
         div()
             .flex_none()
             .text_size(TIME_SIZE)
             .text_color(rgb(MUTED))
             .font_features(tabular())
-            .child(ui::clock(value))
+            .child(elapsed_clock(value))
     };
 
     div()
@@ -336,7 +347,7 @@ fn details(title: SharedString, artist: Option<SharedString>, timing: Timing) ->
         .child(
             div()
                 .text_size(TITLE_SIZE)
-                .font_weight(FontWeight::BOLD)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TITLE))
                 .truncate()
                 .child(title),
@@ -348,10 +359,17 @@ fn details(title: SharedString, artist: Option<SharedString>, timing: Timing) ->
                 .truncate()
                 .child(artist)
         }))
+        .children(album.map(|album| {
+            div()
+                .text_size(TEXT_SIZE)
+                .text_color(rgb(TEXT))
+                .truncate()
+                .child(album)
+        }))
         .map(|this| match timing {
             Timing::Bar { elapsed, total } => this.child(
                 div()
-                    .mt(ART_GAP)
+                    .mt(TIME_GAP)
                     .flex()
                     .items_center()
                     .gap(BAR_GAP)

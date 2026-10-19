@@ -566,6 +566,7 @@ settings-visualizer-absolute = Ignore volume
 settings-visualizer-absolute-detail = Draw the spectrum at the track's own level, however loud Sonora plays it
 settings-preview-title = Song title
 settings-preview-artist = Artist
+settings-preview-album = Album
 settings-fullscreen-controls-autohide = Hide controls
 settings-fullscreen-controls-autohide-detail = Fade out the playback controls in Now playing while the pointer rests
 settings-os-fullscreen = Use OS fullscreen
