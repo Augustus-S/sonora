@@ -193,6 +193,13 @@ impl ResponseGraphState {
     pub fn dragging(&self) -> bool {
         self.grabbed.get().is_some()
     }
+
+    /// Lights node `id` as if the pointer were over it, for a caller whose own list points at a
+    /// node from outside the graph. Returns whether that changed anything, so the caller knows
+    /// to redraw. The wheel still edits only a node under the pointer.
+    pub fn light(&self, id: Option<u64>) -> bool {
+        self.hovered.replace(id) != id
+    }
 }
 
 /// A pointer grab retains its initial offset even when the caller changes the node's data.
