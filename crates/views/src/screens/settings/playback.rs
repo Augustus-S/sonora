@@ -16,10 +16,10 @@ use crate::shared::confirm::{Confirm, Kind};
 const QUALITY_COLUMNS: usize = 4;
 const STREAM_BITRATES: &str = "stream-bitrates";
 /// How wide the sleep slider and the time beside it stand, in covers.
-const SLEEP_WIDTH: f32 = 1.5;
+const SLEEP_WIDTH: f32 = 1.;
 const SLEEP_LABEL: f32 = 0.7;
 /// The shortest and longest timer the slider sets, in minutes.
-const SLEEP_MIN_MINUTES: u64 = 15;
+const SLEEP_MIN_MINUTES: u64 = 1;
 const SLEEP_MAX_MINUTES: u64 = 120;
 const SLEEP_MAGNETS: [u64; 4] = [15, 30, 45, 60];
 const SLEEP_MAGNET_WEIGHT: usize = 4;
