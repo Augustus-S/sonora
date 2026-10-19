@@ -3,13 +3,15 @@ use gpui::{AnyElement, App, Context, MouseButton, Pixels, SharedString, div, px,
 use i18n::t;
 use router::{Destination, navigate};
 use state::Outputs;
-use ui::{ActiveTheme as _, Button, Switch, Text};
+use ui::{ActiveTheme as _, Button, Picker, Switch, Text};
 
 use super::{Group, SettingsView, Slot};
-use crate::shared::equalizer::sound_name;
+use crate::shared::equalizer::sound_picker;
 
 /// The chevron at the end of the equalizer row, as large as a button's icon.
 const CHEVRON: Pixels = px(16.);
+/// The key of the equalizer row's sound picker.
+const SOUND: &str = "settings-equalizer-sound";
 
 impl SettingsView {
     pub(super) fn sound_groups(&self, cx: &App) -> Vec<Group> {
@@ -153,12 +155,13 @@ impl SettingsView {
         )
     }
 
-    /// The way into the equalizer: its name, the sound it plays, its switch and a chevron. The
-    /// whole row opens the equalizer page, and the switch turns it on or off without leaving.
+    /// The way into the equalizer: its name, a picker of every sound it can play, its switch and
+    /// a chevron. The row opens the equalizer page, while the picker and the switch work in place.
     pub(super) fn equalizer_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let on = self.equalizer.read(cx).enabled();
-        let sound = sound_name(self.settings.read(cx));
+        let sound = sound_picker(SOUND, &self.popovers, &self.equalizer, &self.settings, cx)
+            .width(Picker::REGULAR);
 
         div()
             .id("open-equalizer")
@@ -182,8 +185,7 @@ impl SettingsView {
             .child(
                 div()
                     .flex_none()
-                    .text_size(theme.text(Text::Label))
-                    .text_color(theme.muted_foreground)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(sound),
             )
             .child(
