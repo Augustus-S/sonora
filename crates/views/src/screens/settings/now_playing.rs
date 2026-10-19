@@ -20,7 +20,7 @@ impl SettingsView {
     pub(super) fn now_playing_groups(&self, cx: &App) -> Vec<Group> {
         let settings = self.settings.read(cx);
         vec![
-            Group::new("settings-group-background", "icons/moon.svg").rows(
+            Group::new("settings-group-background", "icons/blend.svg").rows(
                 [Slot::Ambient]
                     .into_iter()
                     .chain(settings.ambient().then_some(Slot::AmbientMotion)),
