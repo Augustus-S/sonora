@@ -6,7 +6,7 @@ use router::{Destination, SettingsPage, navigate};
 use state::{AppSettings, LYRICS_SOURCES};
 use ui::{
     ActiveTheme as _, Button, Ghost, MAX_LYRICS_SCALE, MIN_LYRICS_SCALE, MenuItem, Picker, Switch,
-    drop_gap, drop_marker, tabular,
+    drop_gap, drop_marker, grip, tabular,
 };
 
 use super::rows::drill;
@@ -232,8 +232,8 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// One source that is on: its muted place in the order, its name, the arrows that step it,
-    /// and its switch.
+    /// One source that is on: the grip it is dragged by, its muted place in the order, its name
+    /// and its switch. The whole row drags, the grip only shows that it does.
     pub(super) fn lyrics_source_entry(
         &self,
         index: usize,
@@ -248,34 +248,6 @@ impl SettingsView {
             Some(gap) if gap == count && index + 1 == count => Some(ui::Edge::Below),
             _ => None,
         };
-        let arrows = [true, false].map(|up| {
-            let moved = provider.clone();
-            let (id, icon, tooltip, blocked) = match up {
-                true => (
-                    "lyrics-priority-up",
-                    "icons/chevron-up.svg",
-                    "settings-lyrics-priority-up",
-                    index == 0,
-                ),
-                false => (
-                    "lyrics-priority-down",
-                    "icons/chevron-down.svg",
-                    "settings-lyrics-priority-down",
-                    index + 1 == count,
-                ),
-            };
-            Button::new((id, index))
-                .icon(icons::path(icon))
-                .small()
-                .ghost()
-                .tooltip(tooltip)
-                .disabled(blocked)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings.update(cx, |settings, cx| {
-                        settings.move_lyrics_provider(&moved, up, cx)
-                    });
-                }))
-        });
         let switch = LYRICS_SOURCES
             .into_iter()
             .find(|source| *source == provider)
@@ -292,6 +264,8 @@ impl SettingsView {
             .flex()
             .items_center()
             .gap_3()
+            .cursor_grab()
+            .child(grip(cx))
             .child(
                 div()
                     .flex_none()
@@ -300,14 +274,6 @@ impl SettingsView {
                     .child(SharedString::from((index + 1).to_string())),
             )
             .child(div().flex_1().min_w_0().truncate().child(name))
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .children(arrows),
-            )
             .children(switch)
             .on_drag(dragged, |dragged, position, _, cx| {
                 cx.new(|_| DraggedSource {
