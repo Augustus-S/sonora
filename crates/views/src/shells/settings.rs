@@ -112,7 +112,7 @@ impl Shell for SettingsShell {
             sidebar_open: false,
             sidebar_right: None,
             offset: Pixels::ZERO,
-            border: false,
+            border: true,
             content: None,
             transparent: false,
         }

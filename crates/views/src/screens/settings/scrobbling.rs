@@ -77,7 +77,7 @@ impl SettingsView {
                     Button::new(SharedString::from(format!("scrobble-unlink-{service}")))
                         .label(t!("settings-scrobble-disconnect"))
                         .small()
-                        .ghost()
+                        .outline()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.scrobbling
                                 .update(cx, |scrobbling, cx| scrobbling.disconnect(service, cx));

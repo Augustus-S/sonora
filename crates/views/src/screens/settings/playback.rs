@@ -225,7 +225,7 @@ impl SettingsView {
         )
     }
 
-    /// The sleep timer as a slider in its row with the time it is set to beside it: off at the
+    /// The sleep timer as a slider in its row with the time it is set to before it: off at the
     /// left, end of track at the right, minutes in between with the quarter hours widened. The
     /// label follows a drag at once, and the timer is armed when the drag lets go.
     pub(super) fn sleep_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -239,9 +239,25 @@ impl SettingsView {
             .items_center()
             .gap_3()
             .child(
+                div()
+                    .flex_none()
+                    .w(theme.metrics.cover * SLEEP_LABEL)
+                    .whitespace_nowrap()
+                    .text_right()
+                    .text_color(match current {
+                        Some(_) => theme.foreground,
+                        None => theme.muted_foreground,
+                    })
+                    .child(sleep_label(current)),
+            )
+            .child(
                 div().w(theme.metrics.cover * SLEEP_WIDTH).child(
                     Scrubber::new(&self.sleep, sleep_slot(current) as f32 / SLEEP_LAST as f32)
-                        .colors(theme.progress_bar, theme.muted, theme.foreground)
+                        .colors(
+                            theme.progress_bar,
+                            theme.muted_foreground.opacity(0.3),
+                            theme.foreground,
+                        )
                         .on_move(cx.listener(|this, fraction: &f32, _, cx| {
                             this.pending_sleep = Some(sleep_at_fraction(*fraction));
                             cx.notify();
@@ -254,14 +270,6 @@ impl SettingsView {
                                 .update(cx, |playback, cx| playback.set_sleep(sleep, cx));
                         })),
                 ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(theme.metrics.cover * SLEEP_LABEL)
-                    .whitespace_nowrap()
-                    .text_right()
-                    .child(sleep_label(current)),
             );
 
         self.row(t!("settings-sleep"), control.into_any_element())
