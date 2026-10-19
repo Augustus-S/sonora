@@ -387,7 +387,7 @@ impl SettingsView {
     /// The groups a page shows, in order.
     fn groups(&self, page: SettingsPage, cx: &App) -> Vec<Group> {
         match page {
-            SettingsPage::Accounts => self.accounts_groups(cx),
+            SettingsPage::Accounts => self.accounts_groups(),
             SettingsPage::Appearance => self.appearance_groups(),
             SettingsPage::NowPlaying => self.now_playing_groups(cx),
             SettingsPage::Lyrics => self.lyrics_groups(),
@@ -944,6 +944,7 @@ impl SettingsView {
         };
 
         Card::new(("settings-result", index), title)
+            .fallback(page.icon())
             .meta(place)
             .press(cx.listener(move |this, _, _, cx| this.open_result(page, slot, cx)))
             .into_any_element()
@@ -1001,6 +1002,7 @@ pub(crate) fn back(parent: SettingsPage) -> Button {
         .icon("icons/chevron-left.svg")
         .label(i18n::lookup(parent.key(), None))
         .ml(-SMALL_INSET)
+        .self_start()
         .on_click(move |_, _, cx| router::up(Destination::Settings(parent), cx))
 }
 

@@ -13,6 +13,8 @@ use super::{Group, SettingsView, Slot};
 use crate::shared::confirm::{Confirm, Kind};
 
 const SLEEP: &str = "sleep";
+/// How many quality cards a row is laid out for, however few levels a service has.
+const QUALITY_COLUMNS: usize = 4;
 const STREAM_FORMATS: &str = "stream-formats";
 const STREAM_BITRATES: &str = "stream-bitrates";
 const SLEEP_MAX_MINUTES: u64 = 120;
@@ -117,7 +119,8 @@ impl SettingsView {
         ladder.sort_by_key(|offer| offer.quality);
         let steps = ladder.len();
 
-        grid(steps as u16, window, cx)
+        // a short ladder keeps the width of a longer one rather than stretching across
+        grid(steps.max(QUALITY_COLUMNS) as u16, window, cx)
             .children(ladder.into_iter().enumerate().map(|(rank, offer)| {
                 let quality = offer.quality;
                 OptionCard::new(quality.id())

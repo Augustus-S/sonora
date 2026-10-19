@@ -184,30 +184,38 @@ impl RenderOnce for OptionCard {
             .when(interactive, |this| this.cursor_pointer())
             .when_some(tooltip, |this, key| this.tip(key, Perch::Pointer))
             .child(frame)
-            .when_some(label, |this, label| {
-                this.child(
-                    div()
-                        .max_w_full()
-                        .truncate()
-                        .text_size(theme.text(Text::Label))
-                        .text_color(match selected {
-                            true => theme.foreground,
-                            false => theme.muted_foreground,
-                        })
-                        .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
-                        .child(label),
-                )
-            })
-            .when_some(detail, |this, detail| {
-                this.child(
-                    div()
-                        .max_w_full()
-                        .truncate()
-                        .text_size(theme.text(Text::Small))
-                        .text_color(theme.muted_foreground)
-                        .child(detail),
-                )
-            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_0p5()
+                    .max_w_full()
+                    .when_some(label, |this, label| {
+                        this.child(
+                            div()
+                                .max_w_full()
+                                .truncate()
+                                .text_size(theme.text(Text::Label))
+                                .text_color(match selected {
+                                    true => theme.foreground,
+                                    false => theme.muted_foreground,
+                                })
+                                .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
+                                .child(label),
+                        )
+                    })
+                    .when_some(detail, |this, detail| {
+                        this.child(
+                            div()
+                                .max_w_full()
+                                .truncate()
+                                .text_size(theme.text(Text::Small))
+                                .text_color(theme.muted_foreground)
+                                .child(detail),
+                        )
+                    }),
+            )
             .when(interactive, |this| {
                 this.when_some(on_click, |this, handler| {
                     this.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
