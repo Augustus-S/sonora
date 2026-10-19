@@ -1,11 +1,8 @@
 //! The Theme section of Appearance: one card per theme on a rail that scrolls sideways, each
-//! card a miniature of the Sonora window painted in that theme.
+//! card a flat miniature of the Sonora window painted in that theme.
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, Context, Div, Hsla, Pixels, SharedString, div, linear_color_stop, linear_gradient,
-    px, svg,
-};
+use gpui::{AnyElement, Context, Div, Hsla, Pixels, SharedString, div, px, svg};
 use i18n::t;
 use state::ThemeFamily;
 use ui::{
@@ -19,60 +16,52 @@ use super::SettingsView;
 const CARD: Pixels = px(150.);
 /// How tall a theme card's picture stands, its border included.
 const THUMB: Pixels = px(96.);
-/// The miniature window inside the card's 1px border, in whole pixels.
+/// How thick the card's border is, which the miniature sits inside.
+const EDGE: Pixels = px(1.);
+/// The miniature window inside the card's border, in whole pixels.
 const WIDTH: f32 = 148.;
 const HEIGHT: f32 = 94.;
 /// How many variants of a family its card shows side by side at most.
 const SLICES: usize = 4;
 /// The popover key of the variant menu, which one card at a time owns.
 const VARIANTS: &str = "theme-variants";
-/// The side of the button that opens a family's variants.
-const DOTS: Pixels = px(20.);
-/// How far that button sits from the picture's top right corner.
-const DOTS_INSET: Pixels = px(4.);
 /// The side of a variant's swatch in the menu, and of the dot of its accent inside it.
 const SWATCH: Pixels = px(16.);
 const SWATCH_DOT: Pixels = px(6.);
-/// How large the open folder glyph draws on its card.
-const GLYPH: Pixels = px(18.);
-/// How much of the theme's corner radius the miniature keeps.
-const RADIUS_SCALE: f32 = 0.25;
-
-/// The miniature's window, in pixels from its top left corner. The title bar runs across the
-/// top above its border line, the sidebar down the left beside its own, and the player bar
-/// along the bottom below a third.
-const TITLE: f32 = 7.;
-const SIDEBAR: f32 = 36.;
-const PLAYER: f32 = 80.;
-/// Where the sidebar's rows start and how far apart they stand.
-const NAV_TOP: f32 = 11.;
-const NAV_PITCH: f32 = 8.;
-/// How long each sidebar entry's label runs, the first one active.
-const NAV: [f32; 5] = [13., 12., 16., 14., 11.];
-/// Where the pinned list starts under its eyebrow.
-const PINNED: f32 = 56.;
-/// The left edge of the content and the side of an album and the gap between two.
-const CONTENT: f32 = 45.;
-const ALBUM: f32 = 20.;
-const ALBUM_GAP: f32 = 5.;
-/// The top of each shelf of albums.
-const SHELVES: [f32; 2] = [22., 63.];
-/// How long the heading over each shelf runs.
-const HEADINGS: [f32; 2] = [28., 22.];
-/// How strongly each album's art takes the theme's accent, shelf by shelf.
-const ART: [[f32; 4]; 2] = [[0.95, 0.5, 0.75, 0.32], [0.42, 0.85, 0.28, 0.62]];
-/// How much of its strength an album's accent keeps at the far corner.
-const FADED_ART: f32 = 0.35;
-/// The angles the accent fades across the albums at, one after another along a shelf.
-const ANGLES: [f32; 4] = [135., 160., 115., 150.];
-/// How round the miniature's lines and marks are, and how round at most its pill, its albums
-/// and its covers grow with the theme's radius.
-const NIB: Pixels = px(1.);
-const PILL_ROUND: Pixels = px(4.);
-const ALBUM_ROUND: Pixels = px(3.);
-const COVER_ROUND: Pixels = px(2.);
 /// How round a variant's swatch in the menu is.
 const SWATCH_ROUND: Pixels = px(4.);
+/// How large the open folder glyph draws on its card.
+const GLYPH: Pixels = px(18.);
+/// How round the player bar's cover grows at most, so it stays a square of art.
+const COVER_ROUND: Pixels = px(2.);
+/// How much of the theme's corner radius the miniature's marks keep.
+const RADIUS_SCALE: f32 = 0.25;
+
+/// The miniature's frame, in pixels from its top left corner: the sidebar's width, the row of
+/// the line under the title bar, and the row of the line over the player bar. The sidebar runs
+/// the full height above the player bar, so it alone carries the top left corner.
+const SIDEBAR: f32 = 38.;
+const TITLE: f32 = 9.;
+const PLAYER: f32 = 76.;
+/// The columns a cut between two palettes may run down: the sidebar's edge and the middle of
+/// each gap between two tiles, so a cut never splits a mark.
+const SEAMS: [f32; 3] = [SIDEBAR, 75., 110.];
+/// The active entry's pill in the sidebar and the label on it, then the other entries' labels,
+/// as left, top, width and height.
+const PILL: [f32; 4] = [4., 13., 30., 9.];
+const PILL_LABEL: [f32; 4] = [8., 16., 16., 3.];
+const ENTRIES: [[f32; 4]; 3] = [[8., 28., 20., 3.], [8., 36., 14., 3.], [8., 44., 18., 3.]];
+/// The content's heading, and the row of tiles under it by their left edges, the first one in
+/// the accent.
+const HEADING: [f32; 4] = [44., 16., 28., 5.];
+const TILES: [f32; 3] = [44., 79., 114.];
+const TILE_TOP: f32 = 28.;
+const TILE: f32 = 28.;
+/// The player bar's cover, its play button, and its progress line with the part played.
+const COVER: [f32; 4] = [8., 81., 9., 9.];
+const PLAY: [f32; 4] = [82., 82., 6., 6.];
+const TRACK: [f32; 4] = [94., 84., 42., 2.];
+const PLAYED: f32 = 16.;
 
 /// One card of the rail: a built-in theme or a family of theme files.
 enum Entry {
@@ -164,8 +153,8 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// One card: its miniature, its name, and for a family of several variants the name of the
-    /// one a click picks and the button that lists them all.
+    /// One card: its miniature and its name, and for a family of several variants a button
+    /// under the name that says which variant a click picks and lists them all.
     fn theme_card(
         &self,
         entry: Entry,
@@ -214,23 +203,17 @@ impl SettingsView {
                     false => settings.family_variant(&family.id, cx),
                 }
                 .map(|variant| (variant.id.clone(), variant.name.clone()));
-                let dots = several
-                    .then(|| self.variant_menu(&family, picked.as_ref().map(|(id, _)| id), cx))
-                    .filter(|_| !adaptive);
+                let menu = picked
+                    .filter(|_| several && !adaptive)
+                    .map(|(id, name)| self.variant_menu(&family, &id, name, cx));
                 let id = family.id.clone();
 
                 OptionCard::new(SharedString::from(format!("theme-family:{}", family.id)))
                     .w(CARD)
                     .thumb_height(THUMB)
-                    .thumb(
-                        sliced(&palettes, divider, radius)
-                            .children(dots)
-                            .into_any_element(),
-                    )
+                    .thumb(sliced(&palettes, divider, radius))
                     .label(family.name.clone())
-                    .when_some(picked.filter(|_| several), |card, (_, name)| {
-                        card.detail(name)
-                    })
+                    .when_some(menu, |card, menu| card.accessory(menu))
                     .selected(chosen)
                     .disabled(adaptive)
                     .when(adaptive, |card| card.tooltip("settings-theme-unavailable"))
@@ -254,34 +237,33 @@ impl SettingsView {
         }
     }
 
-    /// The three dots at the top right of a family's picture and the menu of its variants they
-    /// open, with `picked` checked. Only the family whose menu opened last owns the popover, so
-    /// the other cards draw a plain button that hands it to theirs.
+    /// The button under a family's name that shows `name`, the variant `picked`, with a chevron,
+    /// and the menu of every variant it opens with that one checked. Only the family whose menu
+    /// opened last owns the popover, so the other cards draw a plain button that hands it to
+    /// theirs.
     fn variant_menu(
         &self,
         family: &ThemeFamily,
-        picked: Option<&String>,
+        picked: &str,
+        name: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.theme();
         let button = Button::new(SharedString::from(format!("theme-variants:{}", family.id)))
-            .icon("icons/ellipsis.svg")
             .small()
-            .secondary()
-            .tooltip("settings-theme-variants")
-            .size(DOTS)
-            .px_0()
-            .shadow_sm();
-        let place = |this: Div| this.absolute().top(DOTS_INSET).right(DOTS_INSET);
+            .label(name)
+            .trailing("icons/chevron-down.svg")
+            .tint(theme.muted_foreground)
+            .tooltip("settings-theme-variants");
 
         if self.theme_variants.as_deref() != Some(family.id.as_str()) {
             let id = family.id.clone();
-            return place(div())
-                .child(button.on_click(cx.listener(move |this, _, _, cx| {
+            return button
+                .on_click(cx.listener(move |this, _, _, cx| {
                     this.theme_variants = Some(id.clone());
                     this.popovers.open(VARIANTS);
                     cx.notify();
-                })))
+                }))
                 .into_any_element();
         }
 
@@ -293,7 +275,7 @@ impl SettingsView {
                 variant.name.clone(),
             )
             .leading(swatch(&variant.palette(), theme.border))
-            .checked(picked == Some(&variant.id))
+            .checked(picked == variant.id)
             .on_click(cx.listener(move |this, _, _, cx| {
                 let overrides = this.settings.update(cx, |settings, cx| {
                     settings.set_theme(id.clone(), cx);
@@ -314,162 +296,127 @@ impl SettingsView {
         let menu = Menu::new("theme-variants-menu")
             .w(Picker::NARROW)
             .items(items)
-            .top(DOTS + theme.metrics.pad / 2.)
-            .right_0();
+            .top(theme.metrics.control_small + theme.metrics.pad / 2.)
+            .left_0();
 
-        place(div())
-            .child(
-                Popover::new(VARIANTS, self.popovers.clone())
-                    .button(button)
-                    .menu(menu)
-                    .commands(),
-            )
+        Popover::new(VARIANTS, self.popovers.clone())
+            .button(button)
+            .menu(menu)
+            .commands()
             .into_any_element()
     }
 }
 
 /// The miniature cut into one vertical slice per palette, left to right, each slice the same
-/// window painted in its own palette so the layout runs on across the cuts. A `divider` line
-/// marks each cut.
+/// window painted in its own palette so the layout runs on across the cuts. The cuts run down
+/// `SEAMS`, and a `divider` line marks each. `radius` is the card's, whose inside the
+/// miniature's outer corners follow.
 fn sliced(palettes: &[Theme], divider: Hsla, radius: Pixels) -> Div {
     let count = palettes.len().max(1);
-    let edge = |index: usize| (WIDTH * index as f32 / count as f32).round();
-    let corner = (radius * RADIUS_SCALE).floor();
+    let cuts = (1..count).map(|index| {
+        let even = WIDTH * index as f32 / count as f32;
+        SEAMS
+            .into_iter()
+            .min_by(|a, b| (a - even).abs().total_cmp(&(b - even).abs()))
+            .unwrap_or(even)
+    });
+    let edges: Vec<f32> = std::iter::once(0.)
+        .chain(cuts)
+        .chain(std::iter::once(WIDTH))
+        .collect();
+    let mark = (radius * RADIUS_SCALE).floor();
+    // the card does not clip to its corners, so the miniature rounds its own inside the border
+    let outer = f32::from((radius - EDGE).max(Pixels::ZERO)).min(SIDEBAR / 2.);
 
     div()
         .relative()
         .size_full()
-        .children(palettes.iter().enumerate().map(|(index, palette)| {
-            let (left, right) = (edge(index), edge(index + 1));
-            rect(left, 0., right - left, HEIGHT)
-                .overflow_hidden()
-                .child(miniature(palette, corner).left(px(-left)))
-        }))
-        .children((1..count).map(|index| rect(edge(index), 0., 1., HEIGHT).bg(divider)))
+        .children(
+            palettes
+                .iter()
+                .zip(edges.windows(2))
+                .map(|(palette, edge)| {
+                    let (left, right) = (edge[0], edge[1]);
+                    rect([left, 0., right - left, HEIGHT])
+                        .overflow_hidden()
+                        .child(miniature(palette, outer, mark).left(px(-left)))
+                }),
+        )
+        .children(
+            edges[1..edges.len() - 1]
+                .iter()
+                .map(|cut| rect([*cut, 0., 1., HEIGHT]).bg(divider)),
+        )
 }
 
-/// The Sonora window in `palette`'s colours, `WIDTH` by `HEIGHT` pixels: the title bar with its
-/// window controls, the sidebar with its entries and the active one on a pill, two shelves of
-/// albums under their headings, and the player bar with a cover, the play button and the
-/// progress line. Every part sits on whole pixels so its edges stay sharp. `corner` is the
-/// theme's radius scaled to the miniature.
-fn miniature(palette: &Theme, corner: Pixels) -> Div {
-    let player_top = PLAYER + 1.;
-    let body = PLAYER - TITLE - 1.;
+/// The Sonora window in `palette`'s colours as flat shapes, `WIDTH` by `HEIGHT` pixels: the
+/// sidebar with its active pill and three entries, the title bar's line over the content, a
+/// heading over a row of tiles, and the player bar with a cover, the play button and the
+/// progress line. Every shape sits on whole pixels so its edges stay sharp. The shapes that
+/// meet the outer corners round them by `outer`, and `mark` rounds the small ones.
+fn miniature(palette: &Theme, outer: f32, mark: Pixels) -> Div {
+    let outer_px = px(outer);
+    let title_end = WIDTH - inset(TITLE, outer);
+    let player_inset = inset(PLAYER, outer);
 
     div()
         .absolute()
         .top_0()
         .w(px(WIDTH))
         .h(px(HEIGHT))
-        .bg(palette.background)
         .child(
-            rect(0., TITLE + 1., SIDEBAR, body)
-                .bg(palette.sidebar)
-                .child(
-                    rect(3., NAV_TOP - TITLE - 1., SIDEBAR - 6., NAV_PITCH)
-                        .rounded(corner.min(PILL_ROUND))
-                        .bg(palette.sidebar_accent),
-                ),
+            rect([0., HEIGHT / 2., WIDTH, HEIGHT / 2.])
+                .rounded_b(outer_px)
+                .bg(palette.secondary),
         )
-        .children(NAV.iter().enumerate().flat_map(|(index, width)| {
-            let top = NAV_TOP + NAV_PITCH * index as f32;
-            let color = match index {
-                0 => palette.foreground,
-                _ => palette.muted_foreground,
+        .child(
+            rect([0., 0., SIDEBAR, PLAYER])
+                .rounded_tl(outer_px)
+                .bg(palette.sidebar),
+        )
+        .child(
+            rect([SIDEBAR + 1., 0., WIDTH - SIDEBAR - 1., PLAYER])
+                .rounded_tr(outer_px)
+                .bg(palette.background),
+        )
+        .child(rect([SIDEBAR, 0., 1., PLAYER]).bg(palette.sidebar_border))
+        .child(
+            rect([SIDEBAR + 1., TITLE, title_end - SIDEBAR - 1., 1.]).bg(palette.title_bar_border),
+        )
+        .child(
+            rect([player_inset, PLAYER, WIDTH - 2. * player_inset, 1.]).bg(palette.sidebar_border),
+        )
+        .child(rect(PILL).rounded(mark).bg(palette.sidebar_accent))
+        .child(rect(PILL_LABEL).rounded(mark).bg(palette.foreground))
+        .children(ENTRIES.map(|entry| rect(entry).rounded(mark).bg(palette.muted_foreground)))
+        .child(rect(HEADING).rounded(mark).bg(palette.foreground))
+        .children(TILES.into_iter().enumerate().map(|(index, left)| {
+            let fill = match index {
+                0 => palette.primary,
+                _ => palette.muted,
             };
-            [
-                rect(6., top + 2., 4., 4.).rounded(NIB).bg(color),
-                line(12., top + 3., *width, color),
-            ]
+            rect([left, TILE_TOP, TILE, TILE]).rounded(mark).bg(fill)
         }))
-        .child(rect(6., PINNED, 10., 1.).bg(palette.muted_foreground))
-        .children(
-            [0.8, 0.45]
-                .into_iter()
-                .enumerate()
-                .flat_map(|(index, strength)| {
-                    let top = PINNED + 4. + NAV_PITCH * index as f32;
-                    [
-                        art(palette, 6., top, 6., strength, index).rounded(corner.min(COVER_ROUND)),
-                        line(14., top + 2., 14. - 4. * index as f32, palette.foreground),
-                    ]
-                }),
-        )
-        .child(rect(SIDEBAR, TITLE + 1., 1., body).bg(palette.sidebar_border))
-        .children(SHELVES.into_iter().zip(HEADINGS).zip(ART).flat_map(
-            |((top, heading), strengths)| shelf(palette, top, heading, strengths, corner),
-        ))
+        .child(rect(COVER).rounded(mark.min(COVER_ROUND)).bg(palette.muted))
+        .child(rect(PLAY).rounded_full().bg(palette.primary))
+        .child(rect(TRACK).rounded_full().bg(palette.muted))
         .child(
-            rect(5., 2., 3., 3.)
-                .rounded(NIB)
-                .border_1()
-                .border_color(palette.muted_foreground),
+            rect([TRACK[0], TRACK[1], PLAYED, TRACK[3]])
+                .rounded_full()
+                .bg(palette.progress_bar),
         )
-        .children([130., 135., 140.].map(|x| {
-            rect(x, 2., 3., 3.)
-                .rounded_full()
-                .bg(palette.muted_foreground)
-        }))
-        .child(rect(0., TITLE, WIDTH, 1.).bg(palette.title_bar_border))
-        .child(rect(0., PLAYER, WIDTH, 1.).bg(palette.sidebar_border))
-        .child(rect(0., player_top, WIDTH, HEIGHT - player_top).bg(palette.background))
-        .child(art(palette, 5., 84., 7., 0.9, 0).rounded(corner.min(COVER_ROUND)))
-        .child(line(15., 85., 16., palette.foreground))
-        .child(line(15., 88., 10., palette.muted_foreground))
-        .children([62., 84.].map(|x| {
-            rect(x, 84., 2., 2.)
-                .rounded_full()
-                .bg(palette.muted_foreground)
-        }))
-        .child(rect(71., 82., 6., 6.).rounded_full().bg(palette.primary))
-        .child(line(50., 90., 48., palette.muted))
-        .child(line(50., 90., 20., palette.progress_bar))
-        .child(line(118., 86., 20., palette.muted))
-        .child(line(118., 86., 13., palette.foreground))
 }
 
-/// One shelf of the miniature's content: its heading, then four albums from `top` down, each
-/// with its title and artist under it. A shelf running past the player bar is covered by it.
-fn shelf(
-    palette: &Theme,
-    top: f32,
-    heading: f32,
-    strengths: [f32; 4],
-    corner: Pixels,
-) -> impl Iterator<Item = Div> {
-    let heading = rect(CONTENT, top - 8., heading, 4.)
-        .rounded(NIB)
-        .bg(palette.foreground);
-    let title = palette.foreground.opacity(0.85);
-    let artist = palette.muted_foreground;
-    let albums = strengths
-        .into_iter()
-        .enumerate()
-        .flat_map(move |(index, strength)| {
-            let left = CONTENT + (ALBUM + ALBUM_GAP) * index as f32;
-            [
-                art(palette, left, top, ALBUM, strength, index).rounded(corner.min(ALBUM_ROUND)),
-                line(left, top + ALBUM + 3., 14., title),
-                line(left, top + ALBUM + 7., 10., artist),
-            ]
-        });
-    std::iter::once(heading).chain(albums)
-}
-
-/// A square of cover art `size` pixels wide at `x`, `y`, the theme's accent at `strength`
-/// fading across it at the angle the `place`th cover of a row takes.
-fn art(palette: &Theme, x: f32, y: f32, size: f32, strength: f32, place: usize) -> Div {
-    rect(x, y, size, size).bg(linear_gradient(
-        ANGLES[place % ANGLES.len()],
-        linear_color_stop(palette.primary.opacity(strength), 0.),
-        linear_color_stop(palette.primary.opacity(strength * FADED_ART), 1.),
-    ))
-}
-
-/// A line of text in the miniature, two pixels tall.
-fn line(x: f32, y: f32, width: f32, color: Hsla) -> Div {
-    rect(x, y, width, 2.).rounded(NIB).bg(color)
+/// How far in from either side the outline of a window rounded by `outer` runs on the pixel row
+/// at `y`, rounded up to a whole pixel, so a line drawn there stays inside the corners.
+fn inset(y: f32, outer: f32) -> f32 {
+    let middle = y + 0.5;
+    let reach = match middle {
+        middle if middle < outer => outer - middle,
+        middle if middle > HEIGHT - outer => middle - (HEIGHT - outer),
+        _ => return 0.,
+    };
+    (outer - (outer * outer - reach * reach).max(0.).sqrt()).ceil()
 }
 
 /// A variant's swatch in the menu: a square of its page colour around a dot of its accent.
@@ -486,8 +433,8 @@ fn swatch(palette: &Theme, edge: Hsla) -> Div {
         .child(div().size(SWATCH_DOT).rounded_full().bg(palette.primary))
 }
 
-/// A box at `x`, `y` in the miniature, `width` by `height` pixels.
-fn rect(x: f32, y: f32, width: f32, height: f32) -> Div {
+/// A box in the miniature from its left, top, width and height in pixels.
+fn rect([x, y, width, height]: [f32; 4]) -> Div {
     div()
         .absolute()
         .left(px(x))
