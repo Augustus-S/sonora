@@ -1,20 +1,15 @@
-//! A miniature of the Now playing view for the track on show: the ambient field from its cover,
-//! the cover, title and artist, the visualizer along the bottom and the controls over it, each
-//! following the page's settings as the real view does.
+//! A still miniature of the Now playing view for the track on show: the ambient field from its
+//! cover, the cover, title and artist, and the visualizer along the bottom, each following the
+//! page's settings as the real view does. It takes no pointer input, so it has no controls.
 
-use std::cell::Cell;
 use std::f32::consts::TAU;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, Context, Div, FontWeight, Hsla, Pixels, Window, div, linear_color_stop,
-    linear_gradient, px, relative, svg,
-};
-use state::{FullscreenControlsAutohide, PlaybackState};
-use ui::{ActiveTheme as _, Artwork, Levels, Motion, Text, Visualizer, ease_in_out_cubic, tabular};
+use gpui::{AnyElement, Context, FontWeight, Pixels, Window, div, px};
+use state::PlaybackState;
+use ui::{ActiveTheme as _, Artwork, Levels, Text, Visualizer};
 
-use super::Tick;
 use crate::screens::settings::{Layout, SettingsView};
 use crate::shared::visualizer::VisualizerDrive;
 
@@ -34,27 +29,13 @@ const SWAY: [f32; 2] = [0.28, 0.12];
 /// The synthetic level at the lowest band and at the highest.
 const BASS: f32 = 0.42;
 const TREBLE: f32 = 0.1;
-/// The progress bar's height and the thumb on it.
-const BAR: Pixels = px(3.);
-const THUMB: Pixels = px(8.);
-/// How far into the track the progress shows for a track that is not playing.
-const PLAYED: f32 = 0.38;
 /// How far the cover and its lines sit above the middle, as a share of the visualizer's reach.
 const LIFT: f32 = 0.5;
 /// How much of the miniature's width the title and artist may take.
 const META: f32 = 0.6;
-/// How much wider than the cover the progress row is.
-const SEEK: f32 = 1.3;
-/// How strong the progress bar's track is against the foreground.
-const TRACK: f32 = 0.15;
 /// How far the bands fall off toward the treble, and how far apart in phase the two channels sway.
 const FALL: f32 = 0.8;
 const STEREO: f32 = 1.3;
-/// How much of the miniature's height the band that holds the controls clear of the visualizer
-/// takes, and how much of the page colour it lays down at the bottom edge. The full view blurs
-/// this band, which a settings page cannot, since its scroller fades its own edges.
-const VEIL: f32 = 0.34;
-const VEIL_STRENGTH: f32 = 0.8;
 
 /// What the Now playing page's preview keeps between frames.
 pub(in crate::screens::settings) struct NowPlayingPreview {
@@ -62,12 +43,6 @@ pub(in crate::screens::settings) struct NowPlayingPreview {
     drive: VisualizerDrive,
     /// When the synthetic spectrum started swaying.
     started: Instant,
-    /// Whether the pointer is over the miniature, and since when, which shows the controls
-    /// while they hide on their own.
-    hovered: Cell<bool>,
-    hovered_at: Cell<Option<Instant>>,
-    /// Moves the progress on while the track plays and the controls show.
-    tick: Tick,
 }
 
 impl NowPlayingPreview {
@@ -75,40 +50,6 @@ impl NowPlayingPreview {
         Self {
             drive: VisualizerDrive::leased(),
             started: Instant::now(),
-            hovered: Cell::new(false),
-            hovered_at: Cell::new(None),
-            tick: Tick::default(),
-        }
-    }
-
-    /// How far the controls have faded in, from 0 hidden to 1 shown.
-    fn controls(
-        &self,
-        autohide: FullscreenControlsAutohide,
-        window: &mut Window,
-        animates: bool,
-    ) -> f32 {
-        let hovered = self.hovered.get();
-        match autohide {
-            FullscreenControlsAutohide::AlwaysShown => 1.,
-            FullscreenControlsAutohide::AlwaysHidden => 0.,
-            FullscreenControlsAutohide::Automatic => {
-                let progress = match (animates, self.hovered_at.get()) {
-                    (true, Some(at)) => {
-                        let span = Motion::Quick.span().as_secs_f32().max(f32::EPSILON);
-                        (at.elapsed().as_secs_f32() / span).min(1.)
-                    }
-                    _ => 1.,
-                };
-                if progress < 1. {
-                    window.request_animation_frame();
-                }
-                let eased = ease_in_out_cubic(progress);
-                match hovered {
-                    true => eased,
-                    false => 1. - eased,
-                }
-            }
         }
     }
 }
@@ -132,16 +73,10 @@ pub(in crate::screens::settings) fn preview(
     let ambient = settings.ambient();
     let style = settings.visualizer_style();
     let absolute = settings.visualizer_absolute();
-    let autohide = settings.fullscreen_controls_autohide();
 
     let playback = view.playback.read(cx);
     let playing = matches!(playback.state(), PlaybackState::Playing);
     let volume = playback.volume_gain();
-    let loaded = playback.track().is_some();
-    let position = match loaded {
-        true => playback.live_position(),
-        false => sample.duration.mul_f32(PLAYED),
-    };
     let spectrum = (style.shown() && playing)
         .then(|| playback.spectrum(cx))
         .flatten();
@@ -171,30 +106,17 @@ pub(in crate::screens::settings) fn preview(
         .as_ref()
         .and_then(|field| field.read(cx).tint())
         .map(|tint| theme.primary_of(tint));
-    let shown = state.controls(autohide, window, animates);
-    if shown > 0. && playing {
-        state.tick.after(Duration::from_secs(1), window, cx);
-    }
-
     let side = (height * COVER).round();
     let corner = (theme.radius - px(1.)).max(Pixels::ZERO);
 
     Some(
         super::framed(
             div()
-                .id("now-playing-preview")
                 .relative()
                 .w_full()
                 .h(height)
                 .overflow_hidden()
                 .bg(theme.background)
-                .on_hover(cx.listener(|this, over: &bool, _, cx| {
-                    let preview = &this.previews.now_playing;
-                    if preview.hovered.replace(*over) != *over {
-                        preview.hovered_at.set(Some(Instant::now()));
-                        cx.notify();
-                    }
-                }))
                 .children(field)
                 .when(style.shown(), |this| {
                     this.child(
@@ -206,24 +128,6 @@ pub(in crate::screens::settings) fn preview(
                             .left_0()
                             .right_0()
                             .bottom_0(),
-                    )
-                })
-                .when(style.shown() && shown > 0., |this| {
-                    let band = (height * VEIL).round();
-                    this.child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom_0()
-                            .h(band)
-                            .when(shown < 1., |this| this.opacity(shown))
-                            .rounded_b(corner)
-                            .bg(linear_gradient(
-                                0.,
-                                linear_color_stop(theme.background.opacity(VEIL_STRENGTH), 0.),
-                                linear_color_stop(theme.background.opacity(0.), 1.),
-                            )),
                     )
                 })
                 .child(
@@ -254,115 +158,11 @@ pub(in crate::screens::settings) fn preview(
                                 .text_color(theme.muted_foreground)
                                 .child(sample.artist.clone()),
                         ),
-                )
-                .when(shown > 0., |this| {
-                    this.child(
-                        controls(
-                            position,
-                            sample.duration,
-                            playing,
-                            side * SEEK,
-                            tint.unwrap_or(theme.primary),
-                            cx,
-                        )
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom(theme.metrics.pad * 1.5)
-                        .when(shown < 1., |this| this.opacity(shown)),
-                    )
-                }),
+                ),
             cx,
         )
         .into_any_element(),
     )
-}
-
-/// The controls at the bottom of the view, in miniature: the progress with its times, then the
-/// transport.
-fn controls(
-    position: Duration,
-    total: Duration,
-    playing: bool,
-    wide: Pixels,
-    fill: Hsla,
-    cx: &gpui::App,
-) -> Div {
-    let theme = cx.theme();
-    let size = theme.text(Text::Small);
-    let share = match total.is_zero() {
-        true => 0.,
-        false => (position.as_secs_f32() / total.as_secs_f32()).clamp(0., 1.),
-    };
-    let time = |value: Duration| {
-        div()
-            .flex_none()
-            .text_size(theme.text(Text::Tiny))
-            .text_color(theme.muted_foreground)
-            .font_features(tabular())
-            .child(ui::clock(value))
-    };
-    let icon = |path: &'static str, strong: bool| {
-        svg()
-            .path(icons::path(path))
-            .size(size)
-            .flex_none()
-            .text_color(match strong {
-                true => theme.foreground,
-                false => theme.muted_foreground,
-            })
-    };
-
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .w(wide)
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(time(position))
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .h(BAR)
-                        .rounded_full()
-                        .bg(theme.foreground.opacity(TRACK))
-                        .child(div().h_full().w(relative(share)).rounded_full().bg(fill))
-                        .child(
-                            div()
-                                .absolute()
-                                .top((BAR - THUMB) / 2.)
-                                .left(relative(share))
-                                .ml(-THUMB / 2.)
-                                .size(THUMB)
-                                .rounded_full()
-                                .bg(theme.foreground),
-                        ),
-                )
-                .child(time(total)),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_5()
-                .child(icon("icons/shuffle.svg", false))
-                .child(icon("icons/skip-back.svg", true))
-                .child(icon(
-                    match playing {
-                        true => "icons/pause.svg",
-                        false => "icons/play.svg",
-                    },
-                    true,
-                ))
-                .child(icon("icons/skip-forward.svg", true))
-                .child(icon("icons/repeat.svg", false)),
-        )
 }
 
 /// A calm spectrum for when nothing plays: louder in the bass and falling off toward the
