@@ -1,5 +1,4 @@
 mod artwork;
-mod breadcrumbs;
 mod button;
 mod card;
 mod checkbox;
@@ -38,10 +37,8 @@ mod scroller;
 mod scrubber;
 mod separator;
 mod shield;
-mod showcase;
 mod skeleton;
 mod spinner;
-mod spring;
 mod switch;
 mod table;
 mod tabs;
@@ -58,7 +55,6 @@ mod visualizer;
 pub use artwork::{
     Artwork, Avatar, PREFETCH_REACH, Prefetch, artwork_usage, cover_palette, prefetch,
 };
-pub use breadcrumbs::Breadcrumbs;
 pub use button::{Button, SMALL_INSET};
 pub use card::CARD_GROUP;
 pub use card::Card;
@@ -116,10 +112,8 @@ pub use scroller::{Scroller, middle_scroll, perch_room, perched, return_to, retu
 pub use scrubber::{Scrubber, ScrubberState};
 pub use separator::Separator;
 pub use shield::Shield;
-pub use showcase::{Hover, Showcase};
 pub use skeleton::{Initials, Skeleton};
 pub use spinner::Spinner;
-pub use spring::{Beat, Spring};
 pub use switch::Switch;
 pub use table::{
     Activate, Cell, ColumnSpec, Deselect, Layout, Listing, Pending, ROW_GROUP, Remove, SelectNext,

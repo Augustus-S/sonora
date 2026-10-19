@@ -16,7 +16,7 @@ use screens::history::HistoryView;
 use screens::home::HomeView;
 pub use screens::library::LibraryView;
 pub use screens::login::LoginView;
-pub use screens::settings::{HubView, SettingsView};
+pub use screens::settings::SettingsView;
 use screens::song::SongView;
 use screens::user::UserView;
 use shared::adaptive::Adaptive;

@@ -141,8 +141,8 @@ impl Screen {
     }
 }
 
-/// One page of the settings takeover. The hub shows the first ten as tiles in `HUB` order, and
-/// the last two are drill-ins that open from a row on their parent page.
+/// One page of the settings takeover. The first ten stand in its sidebar, and the last two are
+/// drill-ins that open from a row on their parent page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsPage {
     Providers,
@@ -160,21 +160,7 @@ pub enum SettingsPage {
 }
 
 impl SettingsPage {
-    /// The pages the hub shows as tiles, in reading order.
-    pub const HUB: [Self; 10] = [
-        Self::Providers,
-        Self::General,
-        Self::Appearance,
-        Self::NowPlaying,
-        Self::Lyrics,
-        Self::Playback,
-        Self::Sound,
-        Self::Discord,
-        Self::Scrobbling,
-        Self::About,
-    ];
-
-    /// Every page, the hub's first and the drill-ins after them.
+    /// Every page, the sidebar's first and the drill-ins after them.
     pub const ALL: [Self; 12] = [
         Self::Providers,
         Self::General,
@@ -242,7 +228,7 @@ impl SettingsPage {
         }
     }
 
-    /// The page a drill-in returns to, or `None` for a page the hub lists.
+    /// The page a drill-in returns to, or `None` for a page the sidebar lists.
     pub fn parent(self) -> Option<Self> {
         match self {
             Self::LyricsSources => Some(Self::Lyrics),
@@ -269,8 +255,6 @@ pub enum Destination {
     User(SharedString),
     Genre(SharedString),
     Search,
-    /// The tiles every settings page opens from, inside the workspace.
-    SettingsHub,
     Settings(SettingsPage),
     /// The equalizer's own page in the settings takeover, opened from Sound.
     Equalizer,
@@ -294,7 +278,7 @@ impl Destination {
         match (self, other) {
             (Destination::Library(_), Destination::Library(_))
             | (Destination::Local(_), Destination::Local(_)) => true,
-            _ if self.settings_related() && other.settings_related() => true,
+            _ if self.in_settings() && other.in_settings() => true,
             _ => self == other,
         }
     }
@@ -302,12 +286,6 @@ impl Destination {
     /// Whether the settings takeover draws this destination rather than the workspace.
     pub fn in_settings(&self) -> bool {
         matches!(self, Destination::Settings(_) | Destination::Equalizer)
-    }
-
-    /// Whether this is the settings hub or a page of the takeover, which the sidebar's Settings
-    /// entry lights for alike.
-    pub fn settings_related(&self) -> bool {
-        self.in_settings() || matches!(self, Destination::SettingsHub)
     }
 
     /// The settings page a drill-in's back button returns to. Only drill-ins have one.
@@ -319,7 +297,7 @@ impl Destination {
         }
     }
 
-    /// The hub page this destination belongs to: the page itself, or a drill-in's parent.
+    /// The sidebar page this destination belongs to: the page itself, or a drill-in's parent.
     pub fn settings_page(&self) -> Option<SettingsPage> {
         match self {
             Destination::Equalizer => Some(SettingsPage::Sound),
@@ -366,8 +344,13 @@ pub fn up(parent: Destination, cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.up(parent, cx));
 }
 
-/// Leaves the settings takeover for the hub, however many settings pages were visited in
-/// between.
+/// Opens the settings takeover on the page it last showed, or on Providers the first time.
+pub fn open_settings(cx: &mut App) {
+    trail(cx).update(cx, |navigation, cx| navigation.open_settings(cx));
+}
+
+/// Leaves the settings takeover for where the user was before opening it, however many
+/// settings pages were visited in between.
 pub fn close_settings(cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.leave_settings(cx));
 }

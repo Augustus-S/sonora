@@ -24,7 +24,7 @@ use crate::shells::settings::SettingsShell;
 use crate::shells::workspace::Workspace;
 use crate::{
     Adaptive, ArtistView, DetailView, EqualizerView, FullscreenView, GenreView, HistoryView,
-    HomeView, HubView, LibraryView, LoginView, SettingsView, SongView, UserView,
+    HomeView, LibraryView, LoginView, SettingsView, SongView, UserView,
 };
 
 struct Screens {
@@ -46,9 +46,8 @@ struct Screens {
     genres: Entity<Genres>,
     genre: Option<Entity<GenreView>>,
     genre_detail: Option<Entity<GenreDetails>>,
-    /// The settings pages' view, whose search the hub and the takeover share.
+    /// The settings pages' view, whose search the takeover's sidebar draws.
     settings: Entity<SettingsView>,
-    hub: Entity<HubView>,
 }
 
 struct Shells {
@@ -205,7 +204,6 @@ impl Root {
         let search = cx.new(|cx| SearchView::new(queries, genres.clone(), playback.clone(), cx));
 
         let settings = cx.new(|cx| SettingsView::new(session.clone(), playback.clone(), cx));
-        let hub = cx.new(|cx| HubView::new(settings.clone(), cx));
         let equalizer = Sonora::global(cx).equalizer.clone();
         let equalizer = cx.new(|cx| EqualizerView::new(equalizer, window, cx));
         let settings_shell = cx.new(|cx| SettingsShell::new(settings.clone(), equalizer, cx));
@@ -333,7 +331,6 @@ impl Root {
                 genre: None,
                 genre_detail: None,
                 settings,
-                hub,
             },
             adaptive,
             ambient,
@@ -445,11 +442,10 @@ impl Root {
         cx.notify();
     }
 
-    /// Focuses the filter of the page on show. In settings, the hub and the takeover alike, that
-    /// is the settings search.
+    /// Focuses the filter of the page on show. In settings that is the settings search.
     fn open_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let current = router::trail(cx).read(cx).current();
-        if current.settings_related() {
+        if current.in_settings() {
             let search = self.screens.settings.read(cx).search();
             search.update(cx, |search, cx| search.focus(window, cx));
             return;
@@ -525,11 +521,11 @@ impl Root {
         }
     }
 
-    /// Opens the settings hub, leaving the takeover for it when a page is up.
+    /// Opens settings on the page they last showed, or closes them when they are up.
     fn open_settings(&mut self, cx: &mut Context<Self>) {
         match self.view {
             RootView::Settings => router::close_settings(cx),
-            RootView::Workspace | RootView::Fullscreen => navigate(Destination::SettingsHub, cx),
+            RootView::Workspace | RootView::Fullscreen => router::open_settings(cx),
         }
     }
 
@@ -735,7 +731,6 @@ impl Root {
                 genre.into()
             }
             Destination::Search => self.screens.search.clone().into(),
-            Destination::SettingsHub => self.screens.hub.clone().into(),
         };
 
         self.toolbar = toolbar;

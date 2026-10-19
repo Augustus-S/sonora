@@ -11,7 +11,10 @@ use gpui::{
     Pixels, Point, Render, ScrollHandle, svg,
 };
 use gpui::{Window, div, px};
-use router::{Destination, LibraryTab, NavEntry, Navigation, NavigationEvent, navigate};
+use router::{
+    Destination, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsPage, navigate,
+    open_settings,
+};
 use state::{AppSettings, Library, Origin, PinSort, Pins, Playback, Session, Shelf, Sonora};
 
 use crate::shared::menus::{ItemMenu, item_menu};
@@ -21,7 +24,8 @@ use crate::shared::nav::nav_row;
 const PINS: &str = "sidebar-pins";
 
 /// The sidebar's navigation rows in order: the entry that can hide each, its icon and where it goes.
-/// Settings has no entry, so it is always shown.
+/// Settings has no entry, so it is always shown, and it opens on the settings page last visited
+/// rather than on the one named here.
 pub(crate) const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
     (Some(NavEntry::Home), "icons/house.svg", Destination::Home),
     (
@@ -44,7 +48,11 @@ pub(crate) const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
         "icons/rotate-ccw-clock.svg",
         Destination::History,
     ),
-    (None, "icons/settings.svg", Destination::SettingsHub),
+    (
+        None,
+        "icons/settings.svg",
+        Destination::Settings(SettingsPage::Providers),
+    ),
 ];
 
 const LIBRARY_TABS: [(&str, LibraryTab); 4] = [
@@ -555,7 +563,10 @@ impl SidebarLeft {
                 })),
             None => row
                 .when(active, |button| button.bg(accent))
-                .on_click(move |_, _, cx| navigate(destination.clone(), cx)),
+                .on_click(move |_, _, cx| match destination.in_settings() {
+                    true => open_settings(cx),
+                    false => navigate(destination.clone(), cx),
+                }),
         }
         .into_any_element()
     }
@@ -785,7 +796,7 @@ fn chevron(open: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use router::{Destination, LibraryTab};
+    use router::{Destination, LibraryTab, SettingsPage};
 
     use super::expanded;
 
@@ -799,7 +810,10 @@ mod tests {
             expanded(&Destination::Local(LibraryTab::Albums)),
             (false, true)
         );
-        assert_eq!(expanded(&Destination::SettingsHub), (false, false));
+        assert_eq!(
+            expanded(&Destination::Settings(SettingsPage::Providers)),
+            (false, false)
+        );
     }
 
     #[test]
