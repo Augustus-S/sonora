@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::design::{Coefficients, Shape, State};
 use super::shared::Snapshot;
-use super::{Equalizer, MAX_FILTERS};
+use super::{Equalizer, SLOTS};
 
 /// How many channels the equalizer keeps state for. A stream with more passes through untouched.
 pub const MAX_CHANNELS: usize = 8;
@@ -28,12 +28,12 @@ pub(crate) struct FilterStage {
     channels: usize,
     /// How many frames a ramp takes at this rate.
     steps: u32,
-    slots: [Slot; MAX_FILTERS],
+    slots: [Slot; SLOTS],
     /// One past the last slot that runs, so a short curve costs no empty slots per sample.
     used: usize,
     preamp: Ramp,
     /// Indexed by channel, then filter.
-    state: [[State; MAX_FILTERS]; MAX_CHANNELS],
+    state: [[State; SLOTS]; MAX_CHANNELS],
     /// Whether anything runs. While nothing does, samples pass through untouched.
     active: bool,
     frame: u32,
@@ -96,10 +96,10 @@ impl FilterStage {
             rate: 0.,
             channels: 0,
             steps: 1,
-            slots: [Slot::IDLE; MAX_FILTERS],
+            slots: [Slot::IDLE; SLOTS],
             used: 0,
             preamp: Ramp::new(0.),
-            state: [[State::default(); MAX_FILTERS]; MAX_CHANNELS],
+            state: [[State::default(); SLOTS]; MAX_CHANNELS],
             active: false,
             frame: 0,
             bypass: false,
@@ -177,7 +177,7 @@ impl FilterStage {
 
     /// Forgets what the filters have heard, for a seek or a format change.
     pub(crate) fn reset(&mut self) {
-        self.state = [[State::default(); MAX_FILTERS]; MAX_CHANNELS];
+        self.state = [[State::default(); SLOTS]; MAX_CHANNELS];
     }
 
     /// Retargets every slot and the preamp from a snapshot. Before the first format the targets
