@@ -2539,9 +2539,17 @@ impl Library {
         }
     }
 
+    /// Loads a shelf again from its provider. A shelf that is showing rows keeps them, each part
+    /// until all of its new rows have arrived, and its old problems are dropped so the fresh rows
+    /// can be snapshotted.
     pub fn refresh(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         if shelf == Shelf::Streaming {
             self.sync_pin_targets(cx);
+        }
+        let held = self.held_mut(shelf);
+        if let LibraryState::Ready(ready) = &mut held.state {
+            ready.problems.clear();
+            held.stale = LibraryPart::ALL.into_iter().collect();
         }
         self.load(shelf, cx);
     }
@@ -2549,10 +2557,10 @@ impl Library {
     /// Loads a shelf from its provider. A `Saved` shape reads the `saved_*` lists; a `Catalog`
     /// shape reads the `all_*` lists and the `saved_*` ones beside them for hearts and filters.
     /// Rows a snapshot primed stay on screen while this runs, each part until all of its own rows
-    /// arrive; a shelf with nothing primed goes back to loading, as a refresh does. The
-    /// favorites stay up either way until the new ones land, so a Favorites only filter shows
-    /// what it showed before rather than nothing. Edits in flight carry on through a load; only a
-    /// new sign-in drops them.
+    /// arrive, and so do the rows a refresh finds on screen; a shelf with nothing on it goes back
+    /// to loading. The favorites stay up either way until the new ones land, so a Favorites only
+    /// filter shows what it showed before rather than nothing. Edits in flight carry on through a
+    /// load; only a new sign-in drops them.
     fn load(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let Some(client) = session.client_of(shelf) else {
@@ -2741,6 +2749,15 @@ impl Library {
         }
         let part = landed.part();
         let arrived = landed.arrived();
+        let counts = |this: &Self| -> HashMap<String, u32> {
+            this.state(shelf)
+                .playlists()
+                .iter()
+                .map(|playlist| (playlist.id.clone(), playlist.track_count))
+                .collect()
+        };
+        let before =
+            (arrived && part == LibraryPart::Playlists && !shelf.local()).then(|| counts(self));
         let held = self.held_mut(shelf);
         held.expected.remove(&part);
         if arrived {
@@ -2749,6 +2766,15 @@ impl Library {
         place(&mut held.state, &mut held.awaited, landed, shelf.fatal());
         if arrived {
             self.keep(shelf, Kind::Listed, part, cx);
+        }
+        // A streaming playlist's contents are never read again once known, so one whose count
+        // moved, or that is gone, drops them here and the read below fetches them afresh.
+        if let Some(before) = before {
+            let fresh = counts(self);
+            self.contents.retain(|id, _| {
+                Shelf::of(id) != shelf
+                    || (fresh.contains_key(id) && fresh.get(id) == before.get(id))
+            });
         }
         if part == LibraryPart::Playlists {
             self.read_playlists(shelf, cx);
