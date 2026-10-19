@@ -6,8 +6,10 @@
 //! debounce, so a sidebar drag never rewrites the preferences file.
 
 mod equalizer;
+mod themes;
 
 pub use self::equalizer::equalizer_profile_label;
+pub use self::themes::{ThemeFamily, ThemeVariant};
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -254,7 +256,6 @@ const RELOAD_DELAY: Duration = Duration::from_millis(150);
 const RELOAD_RETRY_DELAY: Duration = Duration::from_secs(1);
 const RELOAD_RETRIES: usize = 3;
 const THEMES_DIRECTORY: &str = "themes";
-const THEME_FORMAT_VERSION: u32 = 1;
 const DEFAULT_VOLUME: f32 = 0.7;
 const DEFAULT_SIDEBAR_WIDTH: f32 = 195.;
 const DEFAULT_SIDEBAR_RIGHT_WIDTH: f32 = 254.;
@@ -428,28 +429,6 @@ struct Appearance {
     os_fullscreen: bool,
 }
 
-/// A valid custom theme, identified by its filename stem.
-#[derive(Clone, Debug, PartialEq)]
-struct CustomTheme {
-    id: String,
-    name: String,
-    theme: ThemeOverrides,
-}
-
-/// A theme scan result and whether transient I/O failures merit another scan.
-struct LoadedThemes {
-    themes: Vec<CustomTheme>,
-    retry: bool,
-}
-
-#[derive(Deserialize)]
-struct ThemeFile {
-    name: String,
-    author: String,
-    version: u32,
-    theme: ThemeOverrides,
-}
-
 /// Which watched sources may have changed in one filesystem event.
 #[derive(Clone, Copy, Default)]
 struct FileChanges {
@@ -590,6 +569,8 @@ struct StateValues {
     resume: Option<Resume>,
     window: Option<Frame>,
     system_theme: String,
+    /// The variant last chosen in each theme family, by family id.
+    theme_variants: HashMap<String, String>,
 }
 
 impl Default for StateValues {
@@ -618,6 +599,7 @@ impl Default for StateValues {
             resume: None,
             window: None,
             system_theme: ThemeKind::Dark.id().to_owned(),
+            theme_variants: HashMap::new(),
         }
     }
 }
@@ -729,7 +711,10 @@ pub struct AppSettings {
     values: Values,
     state: StateValues,
     path: PathBuf,
-    themes: Vec<CustomTheme>,
+    /// The theme files in the user's themes folder.
+    themes: Vec<ThemeVariant>,
+    /// The bundled themes and `themes`, grouped the way the Appearance page lists them.
+    families: Vec<ThemeFamily>,
     store: StateStore,
     save: Option<Task<()>>,
     save_state: Option<Task<()>>,
@@ -789,13 +774,16 @@ impl AppSettings {
                 StateValues::default()
             }
         };
-        let themes = load_themes(&themes_path(&path), &[]).themes;
+        themes::adopt_legacy(&values.appearance.theme, &themes_path(&path));
+        let themes = themes::load(&themes_path(&path), &[]).themes;
+        let families = themes::catalog(&themes);
 
         Self {
             values,
             state,
             path,
             themes,
+            families,
             store,
             save: None,
             save_state: None,
@@ -1085,20 +1073,38 @@ impl AppSettings {
         &self.values.appearance.theme
     }
 
-    /// Yields custom theme identifiers with their display names.
-    pub fn custom_themes(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.themes
-            .iter()
-            .map(|theme| (theme.id.as_str(), theme.name.as_str()))
+    /// Every theme file, bundled first and then the user's, grouped into families. The built-in
+    /// System, Dark and Light themes are not in it and stay in `ThemeKind::ALL`.
+    pub fn theme_families(&self) -> &[ThemeFamily] {
+        &self.families
     }
 
-    /// The colours the custom theme `id` sets over the dark palette, or `None` when no custom
-    /// theme has that id.
-    pub fn custom_theme(&self, id: &str) -> Option<ThemeOverrides> {
-        self.themes
-            .iter()
-            .find(|theme| theme.id == id)
-            .map(|theme| theme.theme.clone())
+    /// The family and variant of the selected theme, or `None` while a built-in theme is
+    /// selected or the selected file is gone.
+    pub fn theme_variant(&self) -> Option<(&ThemeFamily, &ThemeVariant)> {
+        self.families.iter().find_map(|family| {
+            family
+                .variant(self.theme())
+                .map(|variant| (family, variant))
+        })
+    }
+
+    /// The variant choosing `family` would select: the one last chosen in it, else the first
+    /// whose lightness matches the system appearance, else the first.
+    pub fn family_variant(&self, family: &str, cx: &App) -> Option<&ThemeVariant> {
+        let family = self.families.iter().find(|found| found.id == family)?;
+        let light = ThemeKind::System.resolved(cx) == ThemeKind::Light;
+        self.state
+            .theme_variants
+            .get(&family.id)
+            .and_then(|id| family.variant(id))
+            .or_else(|| {
+                family
+                    .variants
+                    .iter()
+                    .find(|variant| variant.is_light() == light)
+            })
+            .or(family.variants.first())
     }
 
     pub fn adaptive_theme(&self) -> bool {
@@ -1250,10 +1256,8 @@ impl AppSettings {
     /// Combines the selected theme file with legacy overrides from `settings.json`.
     pub fn theme_overrides(&self) -> ThemeOverrides {
         let inline = &self.values.appearance.theme_overrides;
-        self.themes
-            .iter()
-            .find(|theme| theme.id == self.theme())
-            .map(|theme| theme.theme.clone().merged(inline))
+        self.theme_variant()
+            .map(|(_, variant)| variant.overrides.clone().merged(inline))
             .unwrap_or_else(|| inline.clone())
     }
 
@@ -1762,9 +1766,31 @@ impl AppSettings {
         self.schedule_state_save(cx);
     }
 
+    /// Selects a built-in theme by its `ThemeKind` id or a theme file by its variant id, and
+    /// remembers a variant as the one its family opens on next time.
     pub fn set_theme(&mut self, theme: impl Into<String>, cx: &mut Context<Self>) {
         self.values.appearance.theme = theme.into();
+        if let Some(family) = self.theme_variant().map(|(family, _)| family.id.clone())
+            && self.state.theme_variants.get(&family) != Some(&self.values.appearance.theme)
+        {
+            let variant = self.values.appearance.theme.clone();
+            self.state.theme_variants.insert(family, variant);
+            self.schedule_state_save(cx);
+        }
         self.schedule_save(cx);
+    }
+
+    /// Selects the variant `family_variant` picks for `family`. Returns false and changes
+    /// nothing when there is no such family.
+    pub fn set_theme_family(&mut self, family: &str, cx: &mut Context<Self>) -> bool {
+        let Some(variant) = self
+            .family_variant(family, cx)
+            .map(|variant| variant.id.clone())
+        else {
+            return false;
+        };
+        self.set_theme(variant, cx);
+        true
     }
 
     pub fn set_adaptive_theme(&mut self, adaptive: bool, cx: &mut Context<Self>) {
@@ -2172,9 +2198,10 @@ impl AppSettings {
     fn reload_files(&mut self, changed: FileChanges, cx: &mut Context<Self>) -> FileChanges {
         let previous_theme = self.theme_overrides();
         let (themes_changed, themes_retry) = if changed.themes {
-            let loaded = load_themes(&themes_path(&self.path), &self.themes);
+            let loaded = themes::load(&themes_path(&self.path), &self.themes);
             let different = loaded.themes != self.themes;
             if different {
+                self.families = themes::catalog(&loaded.themes);
                 self.themes = loaded.themes;
             }
             (different, loaded.retry)
@@ -2238,6 +2265,7 @@ impl AppSettings {
         };
 
         log::info!("settings: reloaded {}", self.path.display());
+        themes::adopt_legacy(&values.appearance.theme, &themes_path(&self.path));
         let previous = std::mem::replace(&mut self.values, values);
         self.disk = Some(bytes);
         self.writable = true;
@@ -2284,127 +2312,6 @@ pub fn remember_window(window: &mut Window, cx: &mut App) {
     settings.update(cx, |settings, cx| settings.watch_window(window, cx));
 }
 
-/// Loads every valid direct JSON child, retaining a previous value during a broken write.
-fn load_themes(directory: &Path, previous: &[CustomTheme]) -> LoadedThemes {
-    match fs::symlink_metadata(directory) {
-        Ok(metadata) if metadata.file_type().is_dir() => {}
-        Ok(_) => {
-            log::warn!(
-                "settings: themes path is not a directory: {}",
-                directory.display()
-            );
-            return LoadedThemes {
-                themes: previous.to_vec(),
-                retry: false,
-            };
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return LoadedThemes {
-                themes: Vec::new(),
-                retry: false,
-            };
-        }
-        Err(error) => {
-            log::warn!("settings: cannot inspect {}: {error}", directory.display());
-            return LoadedThemes {
-                themes: previous.to_vec(),
-                retry: true,
-            };
-        }
-    }
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) => {
-            log::warn!("settings: cannot read {}: {error}", directory.display());
-            return LoadedThemes {
-                themes: previous.to_vec(),
-                retry: true,
-            };
-        }
-    };
-    let mut paths = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                log::warn!(
-                    "settings: cannot read an entry in {}: {error}",
-                    directory.display()
-                );
-                return LoadedThemes {
-                    themes: previous.to_vec(),
-                    retry: true,
-                };
-            }
-        };
-        let path = entry.path();
-        if !path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            continue;
-        }
-        let kind = match entry.file_type() {
-            Ok(kind) => kind,
-            Err(error) => {
-                log::warn!("settings: cannot inspect {}: {error}", path.display());
-                return LoadedThemes {
-                    themes: previous.to_vec(),
-                    retry: true,
-                };
-            }
-        };
-        if kind.is_file() {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-
-    let mut themes = Vec::new();
-    let mut retry = false;
-    for path in paths {
-        let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            log::warn!("settings: theme filename is not UTF-8: {}", path.display());
-            continue;
-        };
-        if ThemeKind::ALL.into_iter().any(|kind| kind.id() == id) {
-            log::warn!(
-                "settings: theme {} uses a reserved identifier",
-                path.display()
-            );
-            continue;
-        }
-
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                log::warn!("settings: cannot read theme {}: {error}", path.display());
-                retry = true;
-                if let Some(theme) = previous.iter().find(|theme| theme.id == id) {
-                    themes.push(theme.clone());
-                }
-                continue;
-            }
-        };
-        match parse_theme(&bytes, &path, id) {
-            Ok(theme) => themes.push(theme),
-            Err(error) => {
-                log::warn!("settings: cannot load theme {}: {error:#}", path.display());
-                if let Some(theme) = previous.iter().find(|theme| theme.id == id) {
-                    themes.push(theme.clone());
-                }
-            }
-        }
-    }
-    themes.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    LoadedThemes { themes, retry }
-}
-
 /// Whether reloading `current` from disk would replace the values that serialize to `ours`. A
 /// file that does not parse is left to the broken-file toast, since the reload keeps our values.
 fn overrides(current: &[u8], ours: &[u8]) -> bool {
@@ -2433,49 +2340,6 @@ fn offer_subsonic_lyrics(mut values: Values) -> Values {
         }
     }
     values
-}
-
-/// Parses one theme file and assigns the identifier derived from its path.
-fn parse_theme(bytes: &[u8], path: &Path, id: &str) -> Result<CustomTheme> {
-    let value: serde_json::Value = serde_json::from_slice(json(bytes))
-        .with_context(|| format!("cannot parse {}", path.display()))?;
-    let object = value
-        .as_object()
-        .context("theme file must contain an object")?;
-    for field in object.keys() {
-        anyhow::ensure!(
-            matches!(field.as_str(), "name" | "author" | "version" | "theme"),
-            "unknown theme file field `{field}`"
-        );
-    }
-    let theme = object
-        .get("theme")
-        .and_then(serde_json::Value::as_object)
-        .context("theme must contain an object")?;
-    for field in theme.keys() {
-        anyhow::ensure!(
-            ThemeOverrides::is_color(field),
-            "`{field}` is not a theme color"
-        );
-    }
-    let file: ThemeFile = serde_json::from_value(value)
-        .with_context(|| format!("cannot decode {}", path.display()))?;
-    anyhow::ensure!(
-        file.version == THEME_FORMAT_VERSION,
-        "unsupported theme format version {}",
-        file.version
-    );
-    let name = file.name.trim();
-    anyhow::ensure!(!name.is_empty(), "theme name is empty");
-    anyhow::ensure!(!file.author.trim().is_empty(), "theme author is empty");
-    if let Some(field) = file.theme.invalid_color() {
-        anyhow::bail!("theme.{field} is not a valid color");
-    }
-    Ok(CustomTheme {
-        id: id.to_owned(),
-        name: name.to_owned(),
-        theme: file.theme,
-    })
 }
 
 fn themes_path(settings: &Path) -> PathBuf {
@@ -2518,15 +2382,19 @@ fn changed_files(
         }
 
         let theme_path = |path: &Path| {
-            theme_roots.iter().any(|root| {
-                same_path(path, root, case_insensitive)
-                    || (path
-                        .parent()
-                        .is_some_and(|parent| same_path(parent, root, case_insensitive))
-                        && path
-                            .extension()
-                            .is_some_and(|extension| extension == "json"))
-            })
+            let json = path
+                .extension()
+                .is_some_and(|extension| extension == "json");
+            let within = |path: Option<&Path>| {
+                path.is_some_and(|path| {
+                    theme_roots
+                        .iter()
+                        .any(|root| same_path(path, root, case_insensitive))
+                })
+            };
+            within(Some(path))
+                || within(path.parent())
+                || (json && within(path.parent().and_then(Path::parent)))
         };
         if theme_path(&absolute) || canonical.as_deref().is_some_and(theme_path) {
             changed.themes = true;

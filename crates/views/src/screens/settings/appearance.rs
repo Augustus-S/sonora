@@ -313,11 +313,10 @@ impl SettingsView {
                 settings.theme().to_owned(),
                 settings.adaptive_theme(),
                 settings
-                    .custom_themes()
-                    .map(|(id, name)| {
-                        let overrides = settings.custom_theme(id).unwrap_or_default();
-                        (id.to_owned(), name.to_owned(), overrides)
-                    })
+                    .theme_families()
+                    .iter()
+                    .flat_map(|family| &family.variants)
+                    .map(|variant| (variant.id.clone(), variant.title.clone(), variant.palette()))
                     .collect::<Vec<_>>(),
             )
         };
@@ -356,8 +355,7 @@ impl SettingsView {
             })
             .collect::<Vec<_>>();
 
-        cards.extend(custom.into_iter().map(|(id, name, overrides)| {
-            let palette = Theme::for_kind(ThemeKind::Dark).with_overrides(&overrides);
+        cards.extend(custom.into_iter().map(|(id, name, palette)| {
             OptionCard::new(SharedString::from(format!("custom-theme:{id}")))
                 .thumb(swatch(&palette, cx))
                 .label(name)

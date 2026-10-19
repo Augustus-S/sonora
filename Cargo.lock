@@ -7209,6 +7209,7 @@ dependencies = [
  "async-trait",
  "dirs",
  "discord-rich-presence",
+ "embed",
  "fastrand",
  "futures",
  "gpui",
