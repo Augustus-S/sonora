@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, Pixels, Render, Window};
+use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Window};
 use i18n::t;
 use music::Level;
 use music::equalizer::{
@@ -55,7 +55,15 @@ pub(super) struct EqualizerGraph {
     drawn: Option<Drawn>,
     /// When the spectrum last arrived after none, which its rise counts from.
     spectrum_since: Option<Instant>,
+    /// The node the filter list lit while the pointer is over its row.
+    lit: Option<u64>,
 }
+
+/// Says the selected filter changed by a press on the graph or in the list, so the list can
+/// mark the row of the filter now selected.
+pub(super) struct Selected;
+
+impl EventEmitter<Selected> for EqualizerGraph {}
 
 /// What the graph shows from the equalizer, the output and the spectrum.
 #[derive(PartialEq)]
@@ -233,6 +241,7 @@ impl EqualizerGraph {
             graph: Graph::new(),
             drawn: None,
             spectrum_since: None,
+            lit: None,
         };
         graph.redraw(cx);
         graph
@@ -267,6 +276,35 @@ impl EqualizerGraph {
     /// Selects filter `id`, or none.
     pub(super) fn select(&mut self, id: Option<u64>, cx: &mut Context<Self>) {
         if self.graph.select(id) {
+            cx.emit(Selected);
+            cx.notify();
+        }
+    }
+
+    /// Where the selected filter stands in the playing curve, if one is selected.
+    pub(super) fn selected_index(&self) -> Option<usize> {
+        self.graph.selected.and_then(|id| self.graph.index(id))
+    }
+
+    /// Selects the filter at `index` of the playing curve.
+    pub(super) fn select_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let id = self.graph.ids.get(index).copied();
+        self.select(id, cx);
+    }
+
+    /// Lights the node of the filter at `index` while the pointer is over its row, and puts it
+    /// out when the pointer leaves, unless another row lit a node since.
+    pub(super) fn light(&mut self, index: usize, hovered: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.graph.ids.get(index).copied() else {
+            return;
+        };
+        let lit = match hovered {
+            true => Some(id),
+            false if self.lit == Some(id) => None,
+            false => return,
+        };
+        self.lit = lit;
+        if self.graph.state.light(lit) {
             cx.notify();
         }
     }

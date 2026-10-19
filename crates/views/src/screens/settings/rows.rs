@@ -14,13 +14,13 @@ type Pick<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
 /// row tall with no inset of its own, so its label lines up with the group's heading and rows
 /// stack with nothing between.
 #[derive(IntoElement)]
-pub(super) struct Row {
+pub(crate) struct Row {
     title: SharedString,
     control: AnyElement,
 }
 
 impl Row {
-    pub(super) fn new(title: SharedString, control: AnyElement) -> Self {
+    pub(crate) fn new(title: SharedString, control: AnyElement) -> Self {
         Self { title, control }
     }
 }

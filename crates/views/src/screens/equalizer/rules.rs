@@ -1,15 +1,17 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, SharedString, div, svg};
+use gpui::{AnyElement, App, Context, SharedString, div};
 use i18n::t;
 use music::output::{self, DeviceOption, OutputId, Sink};
 use state::{DeviceRule, RuleDevice};
-use ui::{ActiveTheme as _, Button, MenuItem, Picker, Separator, Text};
+use ui::{ActiveTheme as _, Button, MenuItem, Picker, Text};
 
-use super::{EqualizerView, blurb};
-use crate::shared::equalizer::{SOUND_MENU_HEIGHT, sound_items, sound_label};
+use super::{EqualizerView, heading};
+use crate::shared::equalizer::{SOUND_MENU_HEIGHT, sketch, sound_curve, sound_items, sound_label};
 
 const DEVICE: &str = "equalizer-rule-device";
 const SOUND: &str = "equalizer-rule-sound";
+/// The icon before the group's heading.
+const ICON: &str = "icons/headphones.svg";
 /// How wide a rule's sound column is, in cover sizes, so the sounds line up under each other.
 const SOUND_COLUMN: f32 = 1.4;
 
@@ -21,8 +23,8 @@ struct Offered {
 }
 
 impl EqualizerView {
-    /// The device rules' section: each rule with a remove button, then a row that adds one. A
-    /// rule says which sound plays once the sound moves to its device.
+    /// The device rules' group: a row for each rule with a remove button, then a row that adds
+    /// one. A rule says which sound plays once the sound moves to its device.
     pub(super) fn rules(&self, cx: &mut Context<Self>) -> AnyElement {
         let offered = self.offered(cx);
         let settings = self.settings.read(cx);
@@ -49,14 +51,12 @@ impl EqualizerView {
                 self.rule_row(index, rule, playing, connected, cx)
             })
             .collect();
-        let rows = rows.into_iter().enumerate().flat_map(|(index, row)| {
-            let line = (index > 0).then(|| Separator::horizontal().into_any_element());
-            line.into_iter().chain([row])
-        });
 
-        super::section(t!("equalizer-rules"))
-            .child(blurb(t!("equalizer-rules-detail"), None, cx))
-            .child(div().flex().flex_col().children(rows))
+        div()
+            .flex()
+            .flex_col()
+            .child(heading("equalizer-rules", ICON, None, cx))
+            .children(rows)
             .child(self.add_rule(offered, cx))
             .into_any_element()
     }
@@ -77,6 +77,7 @@ impl EqualizerView {
             (false, false) => Some(t!("equalizer-rule-disconnected")),
             (false, true) => None,
         };
+        let shape = sound_curve(self.settings.read(cx), &rule.sound).map(|curve| sketch(&curve));
         let device = rule.device.clone();
         let remove = Button::new(("equalizer-rule-remove", index))
             .small()
@@ -92,19 +93,20 @@ impl EqualizerView {
             .flex()
             .items_center()
             .gap_3()
-            .py_2()
+            .h(theme.metrics.list_row)
             .when(!connected, |row| row.text_color(theme.muted_foreground))
             .child(
                 div()
                     .flex()
-                    .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .gap_1()
-                    .child(div().truncate().child(device_label(&rule.device)))
-                    .when_some(marker, |column, marker| {
-                        column.child(
+                    .items_center()
+                    .gap_2()
+                    .child(div().min_w_0().truncate().child(device_label(&rule.device)))
+                    .when_some(marker, |line, marker| {
+                        line.child(
                             div()
+                                .flex_none()
                                 .text_size(theme.text(Text::Small))
                                 .text_color(match playing {
                                     true => theme.primary,
@@ -121,13 +123,7 @@ impl EqualizerView {
                     .items_center()
                     .gap_2()
                     .w(theme.metrics.cover * SOUND_COLUMN)
-                    .child(
-                        svg()
-                            .flex_none()
-                            .size(theme.text(Text::Small))
-                            .path(icons::path("icons/chevron-right.svg"))
-                            .text_color(theme.muted_foreground),
-                    )
+                    .children(shape)
                     .child(div().min_w_0().truncate().child(sound_label(&rule.sound))),
             )
             .child(remove)
@@ -192,6 +188,10 @@ impl EqualizerView {
         .items(items);
 
         let picked = self.rule_sound.clone();
+        let shape = picked
+            .as_ref()
+            .and_then(|sound| sound_curve(settings, sound))
+            .map(|curve| sketch(&curve));
         let view = cx.entity().downgrade();
         let sounds = sound_items(
             settings,
@@ -212,6 +212,7 @@ impl EqualizerView {
                 .as_ref()
                 .map_or_else(|| t!("equalizer-rule-choose-sound"), sound_label),
         )
+        .when_some(shape, Picker::leading)
         .left()
         .width(Picker::REGULAR)
         .w(Picker::NARROW)
@@ -232,9 +233,10 @@ impl EqualizerView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            .pt_3()
+            .min_h(theme.metrics.list_row)
             .child(device_picker)
             .child(sound_picker)
+            .child(div().flex_1())
             .child(add)
             .into_any_element()
     }

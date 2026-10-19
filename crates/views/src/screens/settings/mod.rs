@@ -38,9 +38,10 @@ mod sound;
 mod themes;
 
 pub(crate) use layout::{Layout, SIDEBAR, frame};
+pub(crate) use rows::Row;
 
 /// The space between two groups of a page.
-const GROUPS: Pixels = px(40.);
+pub(super) const GROUPS: Pixels = px(40.);
 /// How much a query found in a setting's title counts over one found in its detail.
 const TITLE_WEIGHT: u32 = 2;
 /// The picker keys the page's render watches, shared with the rows that open them.

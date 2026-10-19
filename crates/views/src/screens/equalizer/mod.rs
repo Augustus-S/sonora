@@ -11,18 +11,18 @@ use state::{
     AppSettings, Equalizer, Outputs, RuleDevice, Signal, Sonora, Sound, equalizer_profile_label,
 };
 use ui::{
-    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
-    Picker, Popovers, Room, Scrollbar, Submit, Switch, TabBar, Text,
+    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, Input, Lazy, MenuItem, Modal, Picker,
+    Popovers, Room, Scrollbar, Submit, Switch, TabBar,
 };
 
 use crate::chrome::Chrome;
-use crate::screens::settings;
+use crate::screens::settings::{self, Row};
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::{preset_key, sound_picker};
 
 use graph::EqualizerGraph;
 use meter::OutputMeter;
-use rows::{Row, figure, measured};
+use rows::{Fields, figure, figure_cell};
 
 mod graph;
 mod meter;
@@ -39,12 +39,12 @@ const DIALOG: f32 = 2.8;
 /// How wide the sound picker and its menu are in a wide room, in cover sizes. A narrower room
 /// lets the picker fill its row instead.
 const SOUND_WIDTH: f32 = 2.2;
-/// How narrow a card's description gets before the action beside it wraps underneath, in
-/// cover sizes.
-const BLURB: f32 = 1.6;
+/// The icons before the sound group's heading and the filter group's.
+const SOUND_ICON: &str = "icons/sliders-horizontal.svg";
+const FILTERS_ICON: &str = "icons/funnel.svg";
 
 /// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
-/// and advanced mode adds a card each for the preamp, the filters, the device rules and
+/// and advanced mode adds the preamp and a group each for the filters, the device rules and
 /// Equalizer APO text in and out.
 pub(crate) struct EqualizerView {
     equalizer: Entity<Equalizer>,
@@ -54,7 +54,7 @@ pub(crate) struct EqualizerView {
     popovers: Popovers,
     scrollbar: Entity<Scrollbar>,
     preamp: Entity<Input>,
-    rows: Vec<Row>,
+    rows: Vec<Fields>,
     name: Entity<Input>,
     /// What the name dialog is open for, while it is.
     naming: Option<Naming>,
@@ -114,8 +114,13 @@ impl EqualizerView {
         let signal = Sonora::global(cx).signal.clone();
         let outputs = Sonora::global(cx).outputs.clone();
         let id = cx.entity_id();
-        let preamp = cx.new(|cx| Input::new("", cx).compact());
-        let rows = (0..MAX_FILTERS).map(|_| Row::new(cx)).collect();
+        let preamp = cx.new(|cx| {
+            Input::new("", cx)
+                .compact()
+                .align_end()
+                .suffix("equalizer-decibels")
+        });
+        let rows = (0..MAX_FILTERS).map(|_| Fields::new(cx)).collect();
         let meter = cx.new(|cx| OutputMeter::new(equalizer.clone(), signal.clone(), cx));
         let graph = cx.new(|cx| {
             EqualizerGraph::new(
@@ -134,6 +139,8 @@ impl EqualizerView {
         .detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
+        cx.subscribe(&graph, |_, _, _: &graph::Selected, cx| cx.notify())
+            .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 
@@ -358,9 +365,9 @@ impl EqualizerView {
         );
     }
 
-    /// The Simple and Advanced switch the page opens with. The trail in the header names the page,
-    /// so it carries no title of its own. The choice is remembered across launches.
-    fn header(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// The Simple and Advanced switch, at the end of the sound group's heading. The choice is
+    /// remembered across launches.
+    fn mode(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let mode = |id: &'static str, label: SharedString, choice: bool| {
             Button::new(id)
                 .small()
@@ -380,14 +387,13 @@ impl EqualizerView {
 
         TabBar::new("equalizer-mode")
             .flex_none()
-            .self_start()
             .items(modes)
             .into_any_element()
     }
 
-    /// The main card: the one picker for every preset and profile with the on switch, undo and
+    /// The sound group: the one picker for every preset and profile with the on switch, undo and
     /// redo beside it, then the response graph with the output meter under it. Advanced mode adds
-    /// what can be done to the playing profile.
+    /// what can be done to the playing profile, and the preamp's row.
     fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let graph = self.graph.clone().cached(
             StyleRefinement::default()
@@ -464,33 +470,45 @@ impl EqualizerView {
                         .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
                 )
         });
+        let mode = self.mode(advanced, cx);
+        let preamp = advanced.then(|| self.preamp_row(cx));
 
-        section(t!("equalizer-sound"))
+        div()
+            .flex()
+            .flex_col()
+            .child(heading("equalizer-sound", SOUND_ICON, Some(mode), cx))
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_x_2()
-                    .gap_y_3()
-                    .child(picker)
-                    .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.equalizer
-                                .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
-                        },
-                    )))
-                    .child(history)
-                    .children(manage),
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_x_2()
+                            .gap_y_3()
+                            .child(picker)
+                            .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.equalizer
+                                        .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
+                                },
+                            )))
+                            .child(history)
+                            .children(manage),
+                    )
+                    .child(graph)
+                    .child(meter),
             )
-            .child(graph)
-            .child(meter)
+            .children(preamp)
             .into_any_element()
     }
 
-    /// The preamp's card: whether it follows the filters on its own or holds a level, and that
-    /// level.
-    fn preamp_card(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The preamp's row: whether it follows the filters on its own or holds a level, and that
+    /// level, in a field while it is held and as a figure in the field's place while automatic.
+    fn preamp_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let curve = self.equalizer.read(cx).curve();
         let auto = curve.preamp() == Preamp::Auto;
@@ -516,26 +534,26 @@ impl EqualizerView {
             }),
         );
         let value = match auto {
-            true => div()
+            true => figure_cell(
+                t!("equalizer-decibels-value", db = figure(resolved, 1)),
+                theme.metrics.cover * FIELD,
+                cx,
+            ),
+            false => div()
                 .flex_none()
-                .whitespace_nowrap()
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(t!("equalizer-decibels-value", db = figure(resolved, 1)))
+                .w(theme.metrics.cover * FIELD)
+                .child(self.preamp.clone())
                 .into_any_element(),
-            false => measured(self.preamp.clone(), t!("equalizer-decibels"), cx),
         };
         let controls = div()
             .flex()
             .items_center()
-            .gap_3()
+            .gap_2()
             .child(mode)
             .child(value)
             .into_any_element();
 
-        section(t!("equalizer-preamp"))
-            .child(blurb(t!("equalizer-preamp-detail"), Some(controls), cx))
-            .into_any_element()
+        form(Row::new(t!("equalizer-preamp"), controls), cx).into_any_element()
     }
 
     /// The dialog that names a profile, titled for saving or renaming.
@@ -593,31 +611,14 @@ impl Render for EqualizerView {
         let body = div()
             .flex()
             .flex_col()
-            .gap_6()
-            .child(self.header(advanced, cx))
+            .gap(settings::GROUPS)
             .child(sound)
             .when(advanced, |this| {
-                this.child(
-                    div()
-                        .key_context(FORM_CONTEXT)
-                        .on_action(cx.listener(|this, _: &Submit, window, cx| {
-                            cx.stop_propagation();
-                            this.submit(window, cx);
-                        }))
-                        .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
-                            cx.stop_propagation();
-                            this.revert(window, cx);
-                        }))
-                        .flex()
-                        .flex_col()
-                        .gap_6()
-                        .child(card(&view, "equalizer-preamp", |this, _, cx| {
-                            this.preamp_card(cx)
-                        }))
-                        .child(card(&view, "equalizer-filters", |this, window, cx| {
-                            this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
-                        })),
-                )
+                this.child(card(&view, "equalizer-filters", |this, window, cx| {
+                    let row = Room::of(settings::Layout::of(window, cx).width);
+                    let filters = this.filters(row.fits(Room::Roomy), cx);
+                    form(filters, cx).into_any_element()
+                }))
                 .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
                 .child(card(&view, "equalizer-transfer", |this, _, cx| {
                     this.transfer(cx)
@@ -638,31 +639,38 @@ impl Render for EqualizerView {
     }
 }
 
-/// The muted line that says what a card is for, with the card's action on its right. The
-/// action wraps under the line when the room is too narrow for both.
-fn blurb(description: SharedString, action: Option<AnyElement>, cx: &App) -> Div {
+/// A group's heading as every settings page draws it, its icon before an uppercase eyebrow, with
+/// `action` at the end of its line when the group has one.
+fn heading(key: &'static str, icon: &'static str, action: Option<AnyElement>, cx: &App) -> Div {
     let theme = cx.theme();
     div()
         .flex()
-        .flex_wrap()
         .items_center()
-        .gap_x_4()
-        .gap_y_3()
-        .child(
-            div()
-                .flex_1()
-                .min_w(theme.metrics.cover * BLURB)
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(description),
-        )
-        .when_some(action, |this, action| {
-            this.child(div().flex_none().child(action))
-        })
+        .justify_between()
+        .gap_4()
+        .mb(theme.metrics.pad)
+        .child(settings::group_heading(i18n::lookup(key, None), Some(icon), cx).mb_0())
+        .children(action)
 }
 
-/// An advanced card that is built and laid out only while it is on screen, so scrolling the
-/// long page costs what shows rather than every card on it.
+/// Gives `content` the form keys of the number fields in it: Enter commits the focused field and
+/// Escape puts it back.
+fn form(content: impl IntoElement, cx: &mut Context<EqualizerView>) -> Div {
+    div()
+        .key_context(FORM_CONTEXT)
+        .on_action(cx.listener(|this, _: &Submit, window, cx| {
+            cx.stop_propagation();
+            this.submit(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+            cx.stop_propagation();
+            this.revert(window, cx);
+        }))
+        .child(content)
+}
+
+/// An advanced group that is built and laid out only while it is on screen, so scrolling the
+/// long page costs what shows rather than every group on it.
 fn card(
     view: &Entity<EqualizerView>,
     id: &'static str,
@@ -673,9 +681,4 @@ fn card(
     Lazy::new(id, move |window, cx| {
         view.update(cx, |this, cx| build(this, window, cx))
     })
-}
-
-/// A part of the screen under its title, laid out like a card without the card around it.
-fn section(title: SharedString) -> InfoCard {
-    InfoCard::new(title).plain()
 }
