@@ -505,6 +505,10 @@ settings-page-about = About
 settings-about-name = Sonora
 settings-page-lyrics-sources = Lyrics sources
 settings-page-music-folders = Music folders
+# three lines the Lyrics tile of the settings hub sings when the playing track has no lyrics
+settings-hub-lyrics-first = Turn the volume up a little
+settings-hub-lyrics-second = and let the words come in on time
+settings-hub-lyrics-third = every line a little brighter
 settings-group-services = Streaming services
 settings-group-local-files = Local files
 settings-group-background = Background
