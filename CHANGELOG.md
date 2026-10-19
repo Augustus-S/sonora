@@ -62,6 +62,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sound, what it sends to your device, and whether that is bit-perfect or why not.
 - Undo and redo your equalizer edits with the buttons next to the profile, or with Ctrl+Z and
   Ctrl+Shift+Z.
+- Switch the equalizer's preset or profile straight from Settings → Sound. Each one shows a
+  small drawing of its curve before its name.
+- Each equalizer filter sits on one line with its switch, type, frequency, gain and Q. Point at
+  a filter and its dot lights up on the graph, and the filter you pick on the graph is marked
+  in the list.
 - New themes: Catppuccin (Latte, Frappé, Macchiato and Mocha), Rosé Pine (Main, Moon and Dawn),
   Gruvbox (Dark, Dark Hard, Light and Light Hard), Solarized (Dark and Light), Nord and Dracula.
   Pick one in Settings → Appearance.
