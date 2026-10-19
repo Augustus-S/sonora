@@ -35,6 +35,7 @@ pub struct OptionCard {
     thumb: Option<AnyElement>,
     label: Option<SharedString>,
     detail: Option<SharedString>,
+    accessory: Option<AnyElement>,
     height: Option<Pixels>,
     selected: bool,
     disabled: bool,
@@ -53,6 +54,7 @@ impl OptionCard {
             thumb: None,
             label: None,
             detail: None,
+            accessory: None,
             height: None,
             selected: false,
             disabled: false,
@@ -76,6 +78,13 @@ impl OptionCard {
     /// A second, smaller line under the label, such as the bitrate a quality streams at.
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// A control under the label, such as a button that opens a menu of the option's variants.
+    /// It handles its own clicks, so pressing it does not choose the card.
+    pub fn accessory(mut self, accessory: impl IntoElement) -> Self {
+        self.accessory = Some(accessory.into_any_element());
         self
     }
 
@@ -140,6 +149,7 @@ impl RenderOnce for OptionCard {
             thumb,
             label,
             detail,
+            accessory,
             height,
             selected,
             disabled,
@@ -233,7 +243,8 @@ impl RenderOnce for OptionCard {
                                 .text_color(theme.muted_foreground)
                                 .child(detail),
                         )
-                    }),
+                    })
+                    .children(accessory),
             )
             .when(interactive, |this| {
                 this.when_some(on_click, |this, handler| {
