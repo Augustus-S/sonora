@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, FontWeight, SharedString, div, svg};
+use gpui::{AnyElement, Context, FontWeight, Hsla, SharedString, div, svg};
 use i18n::t;
 use ui::{ActiveTheme as _, Avatar, Switch, Text};
 
@@ -14,6 +14,19 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How large the tile under the app mark stands, in covers, and how much of it the mark fills.
 const MARK_TILE: f32 = 0.5;
 const MARK: f32 = 0.55;
+/// The app icon's own colours, a white tile with black bars, the same in every theme.
+const ICON_TILE: Hsla = Hsla {
+    h: 0.,
+    s: 0.,
+    l: 1.,
+    a: 1.,
+};
+const ICON_BARS: Hsla = Hsla {
+    h: 0.,
+    s: 0.,
+    l: 0.,
+    a: 1.,
+};
 const LICENSE_URL: &str = "https://www.gnu.org/licenses/gpl-3.0.html";
 const SOURCE_URL: &str = "https://github.com/sonorahq/sonora";
 
@@ -129,8 +142,8 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// What the About page opens with: the app mark and the name, centred over the column. The
-    /// mark takes the theme's accent, the adaptive tint while one is laid over it.
+    /// What the About page opens with: the app icon and the name, centred over the column. The
+    /// icon keeps its own white and black in every theme.
     pub(super) fn mark(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let tile = theme.metrics.cover * MARK_TILE;
@@ -147,14 +160,14 @@ impl SettingsView {
                     .justify_center()
                     .size(tile)
                     .rounded(theme.radius)
-                    .bg(theme.secondary)
+                    .bg(ICON_TILE)
                     .border_1()
                     .border_color(theme.border)
                     .child(
                         svg()
                             .path(icons::path("icons/sonora.svg"))
                             .size(tile * MARK)
-                            .text_color(theme.tint.unwrap_or(theme.primary)),
+                            .text_color(ICON_BARS),
                     ),
             )
             .child(
