@@ -35,6 +35,7 @@ mod preview;
 mod rows;
 mod scrobbling;
 mod sound;
+mod themes;
 
 pub(crate) use layout::{Layout, SIDEBAR, frame};
 
@@ -198,6 +199,8 @@ pub struct SettingsView {
     sleep: ScrubberState,
     pending_sleep: Option<Option<Sleep>>,
     popovers: Popovers,
+    /// The theme family whose variant menu opened last, which owns that menu's popover.
+    theme_variants: Option<String>,
     server: Entity<Input>,
     username: Entity<Input>,
     password: Entity<Input>,
@@ -311,6 +314,7 @@ impl SettingsView {
             sleep: ScrubberState::new("sleep"),
             pending_sleep: None,
             popovers,
+            theme_variants: None,
             server: cx.new(|cx| Input::new("login-server-hint", cx)),
             username: cx.new(|cx| Input::new("login-username-hint", cx)),
             password: cx.new(|cx| Input::new("login-password-hint", cx).masked()),
@@ -768,7 +772,7 @@ impl SettingsView {
     fn cards(&self, slot: Slot, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         match slot {
             Slot::Accounts => self.accounts_rows(cx),
-            Slot::Theme => self.theme_cards(window, cx),
+            Slot::Theme => self.theme_cards(cx),
             Slot::Icons => self.icon_cards(window, cx),
             Slot::Corners => self.corner_cards(window, cx),
             Slot::Visualizer => self.visualizer_cards(window, cx),
