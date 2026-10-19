@@ -1,6 +1,83 @@
-use super::*;
+use std::path::PathBuf;
+
+use gpui::prelude::*;
+use gpui::{
+    AnyElement, App, ClickEvent, Context, FontWeight, MouseButton, Pixels, SharedString, Window,
+    div, px, relative, svg,
+};
+use i18n::t;
+use music::{AccountChoice, SignIn, SignInPrompt};
+use router::{Destination, SettingsPage, navigate};
+use state::{Failure, Scan, SessionState, Sonora};
+use ui::{
+    ActiveTheme as _, Avatar, Button, Initials, LEADING, Modal, Radio, Skeleton, Text, Theme,
+};
+
+use super::rows::drill;
+use super::{Group, SettingsView, Slot};
+use crate::shared::device_code::device_code;
+use crate::shared::local;
+use crate::shared::popups::{AccountPicker, CookiePrompt};
+use crate::shared::text;
+
+/// The step between a provider's name and its status, `gap_0p5`.
+const HALF_GAP: Pixels = px(2.);
+/// The icon beside a provider's sign-in error.
+const ERROR_ICON: Pixels = px(14.);
+/// The arrow at the end of a card that signs in when it is clicked.
+const ARROW: Pixels = px(14.);
+/// How many buttons tall the sign-in choice stands, however few it lists.
+const CHOICES: f32 = 3.;
+/// What the guest card answers to, where a provider card answers to its slug.
+const GUEST: &str = "guest";
+
+/// What a whole account card does when it is clicked.
+type Press = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+pub(super) struct Account {
+    slug: &'static str,
+    name: &'static str,
+    options: Vec<SignIn>,
+    web_sign_in: bool,
+    stored: bool,
+    active: bool,
+    cancel: bool,
+    error: Option<Failure>,
+}
+
+/// The guest entry the accounts block draws under the providers. It is a card of the app's
+/// own, not a provider: it stands for the anonymous session `slug` offers, so signing out of
+/// it signs that provider out.
+#[derive(Clone, Copy)]
+pub(super) struct Guest {
+    slug: &'static str,
+    stored: bool,
+    active: bool,
+}
+
+/// Which sign-in methods a provider card lists. Anonymous never appears there, because guest
+/// mode has a card of its own, and a stored account is asked for nothing.
+fn offered(method: &SignIn, stored: bool) -> bool {
+    match method {
+        SignIn::Default | SignIn::Secret | SignIn::Credentials { .. } => !stored,
+        SignIn::Anonymous | SignIn::Path(_) => false,
+    }
+}
 
 impl SettingsView {
+    pub(super) fn accounts_groups(&self, _cx: &App) -> Vec<Group> {
+        vec![
+            Group::new("settings-group-services").cards(Slot::Accounts),
+            Group::new("settings-group-local-files")
+                .icon("icons/file-music.svg")
+                .rows([Slot::LocalFolder]),
+        ]
+    }
+
+    pub(super) fn music_folders_groups(&self) -> Vec<Group> {
+        vec![Group::untitled().rows([Slot::Folders])]
+    }
+
     pub(super) fn profile(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let muted = theme.muted_foreground;
@@ -57,17 +134,35 @@ impl SettingsView {
             )
     }
 
-    pub(super) fn local_folder_row(&self, cx: &mut Context<Self>) -> Setting {
+    /// The row that opens the music folders page, saying how many folders it watches.
+    pub(super) fn local_folder_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let paths = self.session.read(cx).local_paths().len();
+        let value = match paths {
+            0 => t!("settings-local-folder-empty"),
+            count => t!("settings-local-folder-count", count = count),
+        };
+
+        drill(
+            "music-folders",
+            t!("settings-local-folder"),
+            Some(value),
+            cx,
+        )
+        .on_click(|_, _, cx| navigate(Destination::Settings(SettingsPage::MusicFolders), cx))
+        .into_any_element()
+    }
+
+    /// The music folders page's list: one row per watched folder with its remove button, then
+    /// the row that adds a folder or scans them all again, with how the last scan went.
+    pub(super) fn folders(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let paths = self.session.read(cx).local_paths();
 
         let add = local::choose_button("add-local-folder")
             .label(t!("settings-add-folder"))
-            .icon("icons/plus.svg")
+            .icon("icons/folder-plus.svg")
             .small()
-            .outline();
+            .primary();
 
         let scan = Scan::global(cx).read(cx);
         let scanning = scan.progress();
@@ -81,98 +176,85 @@ impl SettingsView {
             (None, Some(took)) => Some(t!("settings-scan-done", seconds = text::lapsed(took))),
             (None, None) => None,
         };
-        let note = note.map(|text| {
-            div()
-                .text_color(muted)
-                .text_size(small)
-                .child(text)
-                .into_any_element()
-        });
 
         let rescan = (!paths.is_empty()).then(|| {
             Button::new("rescan-local-folder")
                 .label(t!("settings-rescan"))
+                .icon("icons/refresh-cw.svg")
                 .small()
-                .ghost()
+                .outline()
                 .disabled(scanning.is_some())
                 .on_click(cx.listener(|this, _, _, cx| this.rescan_local_folder(cx)))
         });
 
-        let Setting {
-            title,
-            detail,
-            element: header,
-        } = self.row(
-            t!("settings-local-folder"),
-            match paths.is_empty() {
-                true => t!("settings-local-folder-empty"),
-                false => SharedString::default(),
-            },
-            muted,
-            small,
+        let items = paths
+            .into_iter()
+            .enumerate()
+            .map(|(index, path)| Self::local_folder_item(index, path, cx))
+            .collect::<Vec<_>>();
+        let empty = items.is_empty().then(|| {
             div()
                 .flex()
                 .items_center()
-                .gap_2()
-                .children(note)
-                .child(add)
-                .children(rescan)
-                .into_any_element(),
-        );
+                .h(theme.metrics.list_row)
+                .px_5()
+                .text_color(theme.muted_foreground)
+                .child(t!("settings-local-folder-none"))
+        });
 
-        let element =
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(header)
-                .children((!paths.is_empty()).then(|| {
-                    div().flex().flex_col().gap_1().pb_2().children(
-                        paths.into_iter().enumerate().map(|(index, path)| {
-                            Self::local_folder_item(index, path, muted, small, &mut *cx)
-                        }),
-                    )
-                }))
-                .into_any_element();
-
-        Setting {
-            title,
-            detail,
-            element,
-        }
+        div()
+            .flex()
+            .flex_col()
+            .children(items)
+            .children(empty)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .h(theme.metrics.list_row)
+                    .px_5()
+                    .child(add)
+                    .children(rescan)
+                    .child(div().flex_1())
+                    .children(note.map(|note| {
+                        div()
+                            .flex_none()
+                            .text_color(theme.muted_foreground)
+                            .text_size(theme.text(Text::Label))
+                            .child(note)
+                    })),
+            )
+            .into_any_element()
     }
 
-    pub(super) fn local_folder_item(
-        index: usize,
-        path: String,
-        muted: gpui::Hsla,
-        small: Pixels,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// One watched folder: its path and the button that stops watching it.
+    fn local_folder_item(index: usize, path: String, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
+
         div()
             .id(("local-folder-item", index))
             .flex()
             .items_center()
             .justify_between()
-            .gap_2()
+            .gap_3()
+            .h(theme.metrics.list_row)
+            .px_5()
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .text_color(muted)
-                    .text_size(small)
+                    .truncate()
                     .child(SharedString::from(path.clone())),
             )
             .child(
                 Button::new(("remove-local-folder", index))
                     .ghost()
-                    .small()
-                    .icon("icons/x.svg")
+                    .icon("icons/trash-2.svg")
+                    .size_8()
+                    .px_0()
                     .tooltip("settings-remove-folder")
-                    .tint(muted)
+                    .tint(theme.muted_foreground)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.remove_local_folder(path.clone(), cx)
                     })),
@@ -267,10 +349,9 @@ impl SettingsView {
         names.join(" ")
     }
 
-    pub(super) fn accounts_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
+    /// One card per provider, then the guest card when a provider offers guest mode.
+    pub(super) fn accounts_cards(&self, cx: &mut Context<Self>) -> AnyElement {
         let pending = self.session.read(cx).is_pending();
-        let names = self.account_words(cx);
         let mut cards = Vec::new();
         for account in self.providers(cx) {
             cards.push(self.account_card(account, pending, cx).into_any_element());
@@ -278,48 +359,13 @@ impl SettingsView {
         if let Some(guest) = self.guest(cx) {
             cards.push(self.guest_card(guest, pending, cx).into_any_element());
         }
-        let title = t!("settings-accounts");
-        let detail = t!("settings-accounts-detail");
 
-        let element = div()
+        div()
             .flex()
             .flex_col()
             .gap_3()
-            .py_3()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .line_height(relative(LEADING))
-                            .child(title.clone()),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .line_height(relative(LEADING))
-                            .text_color(theme.muted_foreground)
-                            .text_size(theme.text(Text::Small))
-                            .child(detail.clone()),
-                    ),
-            )
             .children(cards)
-            .into_any_element();
-
-        // the provider names are words too, so "spotify" finds the accounts
-        Setting {
-            title,
-            detail: format!("{detail} {names}").into(),
-            element,
-        }
+            .into_any_element()
     }
 
     pub(super) fn account_card(
@@ -505,24 +551,30 @@ impl SettingsView {
     }
 
     /// Closes the dialog that is up, topmost first, the way clicking outside it does. A
-    /// prompt a sign-in raised takes the sign-in down with it.
-    pub(super) fn escape(&mut self, cx: &mut Context<Self>) {
+    /// prompt a sign-in raised takes the sign-in down with it. Returns false when no dialog
+    /// was up.
+    pub(super) fn close_dialog(&mut self, cx: &mut Context<Self>) -> bool {
         if self.credentials_for.is_some() {
-            return self.abandon_credentials(cx);
+            self.abandon_credentials(cx);
+            return true;
         }
         if self.scrobble_prompt.is_some() {
-            return self.close_scrobble(cx);
+            self.close_scrobble(cx);
+            return true;
         }
         let prompted = matches!(
             self.session.read(cx).state(),
             SessionState::Authorizing(Some(_))
         );
         if prompted {
-            return self.abandon(cx);
+            self.abandon(cx);
+            return true;
         }
         if self.sign_in_for.is_some() {
             self.close_sign_in(cx);
+            return true;
         }
+        false
     }
 
     pub(super) fn close_sign_in(&mut self, cx: &mut Context<Self>) {
@@ -809,15 +861,9 @@ impl SettingsView {
     }
 }
 
-/// One card: the headline with every button beside it, and the sign-in error when one is
-/// shown. Summed from the same fixed parts `card` is built of, so the deck never clips one.
-pub(super) fn card_height(theme: &Theme, error: bool) -> Pixels {
-    let head = line(theme, Text::Body) + HALF_GAP + line(theme, Text::Small);
-    let mut inner = head.max(theme.metrics.control);
-    if error {
-        inner += SECTION_GAP + line(theme, Text::Small).max(ERROR_ICON);
-    }
-    px(2.) + theme.metrics.pad * 2. + inner
+/// How tall one line of `step` text stands at the leading every label is set in.
+fn line(theme: &Theme, step: Text) -> Pixels {
+    px((theme.text(step) / px(1.) * LEADING).round())
 }
 
 /// The shell every account draws in: the radio saying whether it is the one playing, the logo,

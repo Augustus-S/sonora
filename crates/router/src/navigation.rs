@@ -67,6 +67,41 @@ impl Navigation {
         self.arrive(cx);
     }
 
+    /// Returns from a drill-in to `parent`. Stepping back keeps the trail free of a parent,
+    /// drill-in, parent loop when the parent is the page before, and anywhere else the drill-in
+    /// is replaced so Back does not reopen it.
+    pub fn up(&mut self, parent: Destination, cx: &mut Context<Self>) {
+        match self.at > 0 && self.trail[self.at - 1] == parent {
+            true => self.back(cx),
+            false => self.replace(parent, cx),
+        }
+    }
+
+    /// Drops the run of settings pages that ends at the current one, and the history after it,
+    /// landing where the user was before settings opened. A trail that started in settings
+    /// lands on Home.
+    pub fn leave_settings(&mut self, cx: &mut Context<Self>) {
+        if !self.current().in_settings() {
+            return;
+        }
+        let start = self.trail[..=self.at]
+            .iter()
+            .rposition(|destination| !destination.in_settings())
+            .map_or(0, |before| before + 1);
+        match start {
+            0 => {
+                self.trail.truncate(1);
+                self.trail[0] = Destination::Home;
+                self.at = 0;
+            }
+            start => {
+                self.trail.truncate(start);
+                self.at = start - 1;
+            }
+        }
+        self.arrive(cx);
+    }
+
     pub fn forward(&mut self, cx: &mut Context<Self>) {
         if !self.can_go_forward() {
             return;

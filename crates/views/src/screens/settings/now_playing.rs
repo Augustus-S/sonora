@@ -1,19 +1,43 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, App, Context};
+use i18n::t;
+use state::FullscreenControlsAutohide;
+use ui::{MenuItem, Picker, Switch, VisualizerStyle};
+
+use super::{Group, SettingsView, Slot};
+
+const FULLSCREEN_CONTROLS_AUTOHIDE: &str = "fullscreen-controls-autohide";
+const VISUALIZER_STYLE: &str = "visualizer-style";
 
 impl SettingsView {
+    pub(super) fn now_playing_groups(&self, cx: &App) -> Vec<Group> {
+        let settings = self.settings.read(cx);
+        vec![
+            Group::new("settings-group-background").rows(
+                [Slot::Ambient]
+                    .into_iter()
+                    .chain(settings.ambient().then_some(Slot::AmbientMotion)),
+            ),
+            Group::new("settings-visualizer").rows(
+                [Slot::Visualizer].into_iter().chain(
+                    settings
+                        .visualizer_style()
+                        .shown()
+                        .then_some(Slot::VisualizerAbsolute),
+                ),
+            ),
+            Group::new("settings-group-controls")
+                .rows([Slot::FullscreenControlsAutohide, Slot::OsFullscreen]),
+        ]
+    }
+
     /// The fullscreen background sampled from the cover. It carries the cover's hues itself,
     /// so fullscreen tints from the artwork with the adaptive theme off as well.
-    pub(super) fn ambient_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn ambient_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).ambient();
 
         self.row(
             t!("settings-ambient"),
-            t!("settings-ambient-detail"),
-            muted,
-            small,
             Switch::new("ambient", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -23,17 +47,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn ambient_motion_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn ambient_motion_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).ambient_motion();
 
         self.row(
             t!("settings-ambient-motion"),
-            t!("settings-ambient-motion-detail"),
-            muted,
-            small,
             Switch::new("ambient-motion", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -44,10 +62,7 @@ impl SettingsView {
     }
 
     /// How the spectrum is drawn behind the fullscreen artwork, off included.
-    pub(super) fn visualizer_style_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn visualizer_style_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).visualizer_style();
 
         let picker = Picker::new(VISUALIZER_STYLE, &self.popovers, chosen.label())
@@ -62,26 +77,15 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
-            t!("settings-visualizer"),
-            t!("settings-visualizer-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-visualizer"), picker.into_any_element())
     }
 
-    pub(super) fn visualizer_absolute_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn visualizer_absolute_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).visualizer_absolute();
 
-        self.row(
+        self.hinted(
             t!("settings-visualizer-absolute"),
-            t!("settings-visualizer-absolute-detail"),
-            muted,
-            small,
+            "settings-visualizer-absolute-detail",
             Switch::new("visualizer-absolute", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -91,10 +95,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn fullscreen_controls_autohide_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn fullscreen_controls_autohide_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).fullscreen_controls_autohide();
 
         let picker = Picker::new(
@@ -116,24 +117,15 @@ impl SettingsView {
 
         self.row(
             t!("settings-fullscreen-controls-autohide"),
-            t!("settings-fullscreen-controls-autohide-detail"),
-            muted,
-            small,
             picker.into_any_element(),
         )
     }
 
-    pub(super) fn os_fullscreen_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn os_fullscreen_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).os_fullscreen();
 
         self.row(
             t!("settings-os-fullscreen"),
-            t!("settings-os-fullscreen-detail"),
-            muted,
-            small,
             Switch::new("os-fullscreen", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings

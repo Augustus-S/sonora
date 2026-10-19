@@ -1,47 +1,26 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::fs::File;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+
+use gpui::prelude::*;
+use gpui::{
+    AnyElement, App, Context, Div, Entity, FocusHandle, Pixels, Render, ScrollHandle, SharedString,
+    Task, Window, canvas, div, px, svg,
+};
+use i18n::{Language, t};
+use music::SignInPrompt;
+use router::{Destination, SettingsPage, navigate};
+use state::{
+    AppSettings, Drm, Equalizer, Io, Outputs, Playback, Scan, Scrobbling, Session, SessionState,
+    Sleep, Sonora,
+};
+use ui::{
+    ActiveTheme as _, Button, Card, Deck, Dismiss, InfoCard, Input, Popovers, SMALL_INSET,
+    Scrollbar, Scroller, ScrubberState, Vacancy, faint, heading, snapped,
+};
 
 use crate::chrome::OutputPicker;
-use crate::shared::confirm::{Confirm, Kind};
-use crate::shared::device_code::device_code;
-use crate::shared::effects;
-use crate::shared::equalizer::sound_picker;
-use crate::shared::local;
-use crate::shared::popups::{AccountPicker, CookiePrompt, SearchPopup, matches_query};
+use crate::shared::popups::SearchPopup;
 use crate::shared::text;
-use crate::shared::veil::{Edge, veil};
-use gpui::{
-    AnyElement, App, ClickEvent, Context, DragMoveEvent, Entity, FocusHandle, FontWeight,
-    MouseButton, MouseUpEvent, Pixels, Point, Render, SharedString, Task, Window, div, px,
-    relative,
-};
-use gpui::{ScrollHandle, prelude::*, svg};
-use i18n::{Language, t};
-use music::drm::Origin;
-use music::scrobble::{Link, Secret};
-use music::{
-    AccountChoice, Codec, Encoding, Offer, Quality, SignIn, SignInPrompt, Transcode, WritingSystem,
-};
-use router::{Destination, NavEntry, Screen, SettingsTab, navigate};
-use state::{
-    AppSettings, CdmState, DiscordName, Drm, Equalizer, Failure, FullscreenControlsAutohide, Io,
-    LYRICS_SOURCES, Outputs, Playback, SYSTEM_FONT, Scan, ScrobbleState, Scrobbling, Session,
-    SessionState, Sleep, Sonora,
-};
-use ui::{
-    ActiveTheme as _, Deck, Ghost, LEADING, Scrollbar, Scroller, drop_gap, drop_marker, eyebrow,
-    snapped, tabular,
-};
-use ui::{
-    Avatar, Button, Dismiss, InfoCard, Initials, Input, Look, MAX_FONT, MAX_LYRICS_SCALE,
-    MAX_TRANSPARENCY, MIN_FONT, MIN_LYRICS_SCALE, MenuItem, Modal, Pace, Picker, Popovers, Radio,
-    Rounding, Saver, Scrubber, ScrubberState, Separator, Skeleton, Stillness, Switch, TabBar, Text,
-    Theme, ThemeKind, Vacancy, VisualizerStyle,
-};
 
 mod about;
 mod accounts;
@@ -54,135 +33,72 @@ mod playback;
 mod rows;
 mod scrobbling;
 mod sound;
+mod stage;
 
-use accounts::*;
-use appearance::*;
-use playback::*;
-use rows::*;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// How wide the settings column, the search field and the category bar grow at most.
-const WIDTH: Pixels = px(640.);
+/// How wide a page's column grows at most.
+const COLUMN: Pixels = px(760.);
 /// How much a query found in a setting's title counts over one found in its detail.
 const TITLE_WEIGHT: u32 = 2;
-/// How far the rows are blurred where they pass under the header. One blur pass serves every
-/// strip, so this is also the widest the haze gets. The renderer cuts a kernel off at 24 taps
-/// on a quarter-resolution frame, so past about 32px a wider radius only flattens the curve.
-const HEADER_BLUR: Pixels = px(1.);
-/// How far past the header the rows keep dissolving, so the handoff under the blur has
-/// no hard edge where sharp content emerges from the haze.
-const HEADER_FADE_TAIL: Pixels = px(48.);
-const LICENSE_URL: &str = "https://www.gnu.org/licenses/gpl-3.0.html";
-const SOURCE_URL: &str = "https://github.com/sonorahq/sonora";
-
-const THEMES: &str = "themes";
-const PACKS: &str = "packs";
-const CORNERS: &str = "corners";
-#[cfg(any(
-    target_os = "windows",
-    target_os = "linux",
-    target_os = "freebsd",
-    target_os = "macos"
-))]
-const WINDOW_ROUNDING: &str = "window-rounding";
-const FULLSCREEN_CONTROLS_AUTOHIDE: &str = "fullscreen-controls-autohide";
-const VISUALIZER_STYLE: &str = "visualizer-style";
+/// The picker keys the page's render watches, shared with the rows that open them.
 const LANGUAGES: &str = "languages";
 const TYPEFACES: &str = "typefaces";
-const TYPEFACE_LIMIT: usize = 200;
-const TYPEFACE_LEAD: usize = 2;
-// faces previewed before a measurement
-const TYPEFACE_GUESS: usize = 24;
-// faces loaded per frame
-const TYPEFACE_BATCH: usize = 3;
-const STARTUP: &str = "startup";
-const ENTRIES: &str = "entries";
-const DISCORD_NAME: &str = "discord-name";
-const DISCORD_BUTTONS: &str = "discord-buttons";
-const MOTION: &str = "motion";
-const PACE: &str = "pace";
-const SAVER: &str = "saver";
-const SLEEP: &str = "sleep";
-const STREAM_QUALITIES: &str = "stream-qualities";
-const STREAM_FORMATS: &str = "stream-formats";
-const STREAM_BITRATES: &str = "stream-bitrates";
-const EQUALIZER_PRESETS: &str = "equalizer-presets";
-const SLEEP_MAX_MINUTES: u64 = 120;
-const SLEEP_MAGNETS: [u64; 4] = [15, 30, 45, 60];
-const SLEEP_MAGNET_WEIGHT: usize = 4;
-const SLEEP_LAST: usize =
-    SLEEP_MAX_MINUTES as usize + SLEEP_MAGNETS.len() * (SLEEP_MAGNET_WEIGHT - 1) + 1;
 
-/// How tall one line of `step` text stands. The deck needs every row's height before it
-/// builds anything, so wherever a height is summed from text, that text pins itself to this
-/// leading and truncates to one line.
-fn line(theme: &Theme, step: Text) -> Pixels {
-    px((theme.text(step) / px(1.) * LEADING).round())
-}
-
-/// How tall a standard row draws: its padding over one title line and one detail line, the
-/// layout `SettingsView::row` builds.
-fn standard_height(theme: &Theme) -> Pixels {
-    SECTION_GAP + line(theme, Text::Body) + ROW_GAP + line(theme, Text::Small) + SECTION_GAP
-}
-
-/// The deck draws only the rows in view, so every row's height is fixed by construction:
-/// standard rows and titles keep one height each, separators are one pixel, and the three
-/// composite rows sum theirs from fixed parts in `SettingsView::slot_height`.
-const SEPARATOR_HEIGHT: Pixels = px(1.);
-/// Slack kept under the accounts block, so a border the formula counts differently still
-/// cannot clip the last card.
-const ACCOUNTS_SLACK: Pixels = px(2.);
-/// `gap_1`, the breathing room inside a summed row.
-const ROW_GAP: Pixels = px(4.);
-/// `gap_2`, the step between stacked buttons and band labels.
-const BLOCK_GAP: Pixels = px(8.);
-/// `gap_3` and `py_3`, the step between blocks of a composite row.
-const SECTION_GAP: Pixels = px(12.);
-/// `gap_0p5`, the step between a provider's name and its status.
-const HALF_GAP: Pixels = px(2.);
-/// The icon beside a provider's sign-in error.
-const ERROR_ICON: Pixels = px(14.);
-/// The arrow at the end of a card that signs in when it is clicked.
-const ARROW: Pixels = px(14.);
-/// How many buttons tall the sign-in choice stands, however few it lists.
-const CHOICES: f32 = 3.;
-
-/// One row of the settings page, described without building anything. The deck scores and
-/// measures slots and only builds the ones in view, so typing a search or scrolling never
-/// constructs the rows it does not show.
+/// One setting, named without building anything. Pages list their settings as slots in groups,
+/// a search scores slots by their title and detail, and only the page on show builds its rows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Slot {
-    Title(&'static str),
-    Sep,
+    Accounts,
+    LocalFolder,
+    Folders,
+    Theme,
+    Adaptive,
+    Icons,
+    Corners,
+    Typeface,
+    Font,
+    Opacity,
+    WindowBlur,
+    Blur,
+    Ambient,
+    AmbientMotion,
+    Visualizer,
+    VisualizerAbsolute,
+    FullscreenControlsAutohide,
+    OsFullscreen,
+    Karaoke,
+    BlurLyrics,
+    Romanized,
+    PanelLyricsSize,
+    FullscreenLyricsSize,
+    LyricsSources,
+    LyricsPriority,
+    LyricsForLocal,
+    Normalisation,
+    Gapless,
+    Sleep,
+    StayAwake,
+    StreamQuality,
+    StreamFormat,
+    StreamBitrate,
+    Widevine,
+    OutputDevice,
+    OutputFailure,
+    SampleRate,
+    Buffer,
+    Equalizer,
+    Discord,
+    DiscordName,
+    DiscordShowPaused,
+    DiscordBadge,
+    DiscordAnonymous,
+    DiscordButtons,
+    ArtworkForLocal,
+    Scrobble(usize),
     Startup,
     Entries,
     Language,
     Tray,
     TrayIcon,
-    Accounts,
-    LocalFolder,
-    Theme,
-    Adaptive,
-    Ambient,
-    AmbientMotion,
-    Visualizer,
-    VisualizerAbsolute,
-    Icons,
-    Opacity,
-    WindowBlur,
-    Blur,
-    Corners,
-    FullscreenControlsAutohide,
-    OsFullscreen,
-    PanelLyricsSize,
-    FullscreenLyricsSize,
-    BlurLyrics,
-    Font,
-    Typeface,
-    Motion,
-    Pace,
-    Saver,
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     ServerSideDecorations,
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -198,34 +114,10 @@ enum Slot {
         target_os = "macos"
     ))]
     WindowRounding,
+    Motion,
+    Pace,
+    Saver,
     AdaptiveMenu,
-    Normalisation,
-    Gapless,
-    StreamQuality,
-    StreamFormat,
-    StreamBitrate,
-    Sleep,
-    StayAwake,
-    Widevine,
-    OutputDevice,
-    OutputFailure,
-    SampleRate,
-    Buffer,
-    Equalizer,
-    EqualizerPreset,
-    LyricsProviders,
-    LyricsPriority,
-    Karaoke,
-    Romanized,
-    LyricsForLocal,
-    ArtworkForLocal,
-    Discord,
-    DiscordName,
-    DiscordShowPaused,
-    DiscordBadge,
-    DiscordAnonymous,
-    DiscordButtons,
-    Scrobble(usize),
     Version,
     Updates,
     Log,
@@ -233,110 +125,57 @@ enum Slot {
     Source,
 }
 
-/// One setting on the page: the row that draws it, and the title and detail a search is
-/// matched against.
-struct Setting {
-    title: SharedString,
-    detail: SharedString,
-    element: AnyElement,
+/// One group of a page: a sentence-case heading, an optional block of option cards under it,
+/// and the rows that share one surface below.
+struct Group {
+    title: Option<&'static str>,
+    icon: Option<&'static str>,
+    cards: Option<Slot>,
+    rows: Vec<Slot>,
 }
 
-/// One field of the scrobbling link dialog: which hint it carries, what it starts with, and
-/// whether it holds a secret and so is drawn as dots.
-struct Field {
-    hint: &'static str,
-    value: String,
-    masked: bool,
-}
-
-/// What the guest card answers to, where a provider card answers to its slug.
-const GUEST: &str = "guest";
-
-/// What a whole account card does when it is clicked.
-type Press = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-
-struct Account {
-    slug: &'static str,
-    name: &'static str,
-    options: Vec<SignIn>,
-    web_sign_in: bool,
-    stored: bool,
-    active: bool,
-    cancel: bool,
-    error: Option<Failure>,
-}
-
-/// The guest entry the accounts block draws under the providers. It is a card of the app's
-/// own, not a provider: it stands for the anonymous session `slug` offers, so signing out of
-/// it signs that provider out.
-#[derive(Clone, Copy)]
-struct Guest {
-    slug: &'static str,
-    stored: bool,
-    active: bool,
-}
-
-/// Which sign-in methods a provider card lists. Anonymous never appears there, because guest
-/// mode has a card of its own, and a stored account is asked for nothing.
-fn offered(method: &SignIn, stored: bool) -> bool {
-    match method {
-        SignIn::Default | SignIn::Secret | SignIn::Credentials { .. } => !stored,
-        SignIn::Anonymous | SignIn::Path(_) => false,
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Member {
-    login: &'static str,
-    avatar: &'static str,
-    profile: &'static str,
-    role: Role,
-}
-
-#[derive(Clone, Copy)]
-enum Role {
-    LeadMaintainer,
-    Maintainer,
-    Contributor,
-}
-
-impl Role {
-    fn label(self) -> SharedString {
-        match self {
-            Self::LeadMaintainer => t!("settings-role-lead-maintainer"),
-            Self::Maintainer => t!("settings-role-maintainer"),
-            Self::Contributor => t!("settings-role-contributor"),
+impl Group {
+    /// A group under the heading the Fluent key `title` names.
+    fn new(title: &'static str) -> Self {
+        Self {
+            title: Some(title),
+            icon: None,
+            cards: None,
+            rows: Vec::new(),
         }
     }
-}
 
-macro_rules! member {
-    ($login:literal, $role:expr) => {
-        Member {
-            login: $login,
-            avatar: concat!("https://github.com/", $login, ".png"),
-            profile: concat!("https://github.com/", $login),
-            role: $role,
+    /// A group with no heading, for a page whose first rows need none.
+    fn untitled() -> Self {
+        Self {
+            title: None,
+            icon: None,
+            cards: None,
+            rows: Vec::new(),
         }
-    };
-}
+    }
 
-const MEMBERS: [Member; 5] = [
-    member!("nolight132", Role::LeadMaintainer),
-    member!("zxsleebu", Role::Maintainer),
-    member!("fx-got", Role::Maintainer),
-    member!("Makakashan", Role::Contributor),
-    member!("imizgun", Role::Contributor),
-];
+    /// An icon before the heading, for the few groups whose subject it names.
+    fn icon(mut self, icon: &'static str) -> Self {
+        self.icon = Some(icon);
+        self
+    }
 
-/// A lyrics source being dragged within the priority list. It draws as a chip under the cursor
-/// and changes the saved order only when dropped.
-#[derive(Clone)]
-struct DraggedSource {
-    provider: String,
-    label: SharedString,
-    /// Where the cursor grabbed the entry, so the chip starts under it.
-    position: Point<Pixels>,
+    /// The setting drawn as option cards between the heading and the rows.
+    fn cards(mut self, slot: Slot) -> Self {
+        self.cards = Some(slot);
+        self
+    }
+
+    fn rows(mut self, rows: impl IntoIterator<Item = Slot>) -> Self {
+        self.rows.extend(rows);
+        self
+    }
+
+    /// Every setting the group shows, cards first.
+    fn slots(&self) -> impl Iterator<Item = Slot> + '_ {
+        self.cards.into_iter().chain(self.rows.iter().copied())
+    }
 }
 
 pub struct SettingsView {
@@ -347,22 +186,16 @@ pub struct SettingsView {
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
     output_picker: Entity<OutputPicker>,
-    tab: SettingsTab,
+    /// The page on show, a rail page or a drill-in.
+    page: SettingsPage,
     search: Entity<Input>,
-    /// The search field's text, trimmed. Empty means the page shows one category.
+    /// The search field's text, trimmed. Empty means the page shows its own settings.
     query: String,
+    /// The setting a search result opened, which the page scrolls into view once it is laid out.
+    reveal: Option<Slot>,
     /// Where a lyrics source dragged over the priority list would land, as a gap between the
     /// enabled sources. `None` while the drop would leave the order as it is.
     lyrics_drop_gap: Option<usize>,
-    /// How tall the header floating over the page measured last, so the rows start beneath it.
-    header_height: Pixels,
-    /// Whether the header has measured itself at least once. Until then the height is a
-    /// zero stand-in, and the page stays hidden rather than flashing unpadded for a frame.
-    header_measured: bool,
-    /// How wide the rows measured last. The Widevine row wraps its explanation to this width
-    /// and needs it before the deck is built, so the first frame falls back to the widest the
-    /// column can be.
-    column: Option<Pixels>,
     scrollbar: Entity<Scrollbar>,
     opacity: ScrubberState,
     sleep: ScrubberState,
@@ -400,6 +233,8 @@ pub struct SettingsView {
     installed: Option<Vec<SharedString>>,
     loading_fonts: bool,
     font_task: Option<Task<()>>,
+    /// What the pages' previews keep between frames.
+    stages: stage::Stages,
 }
 
 impl SettingsView {
@@ -440,15 +275,12 @@ impl SettingsView {
             Input::new("settings-search", cx)
                 .icon("icons/search.svg")
                 .clearable()
-                // the field floats over the rows the page scrolls beneath it, so it frosts
-                // them the way the category bar under it does
-                .blurred()
         });
         cx.observe(&search, |this, input, cx| {
             let query = input.read(cx).text().trim().to_owned();
-            // A search swaps the rows for hits from every category, so wherever the page was
+            // A search swaps the page for hits from every page, so wherever the page was
             // scrolled to answers for nothing once one starts.
-            if this.query.is_empty() && !query.is_empty() {
+            if this.query.is_empty() != query.is_empty() {
                 this.scrollbar.update(cx, |bar, _| bar.place(Pixels::ZERO));
             }
             this.query = query;
@@ -458,6 +290,7 @@ impl SettingsView {
 
         let popovers = Popovers::default();
         let output_picker = cx.new(|cx| OutputPicker::new(outputs.clone(), popovers.clone(), cx));
+        let stages = stage::Stages::new(cx);
 
         Self {
             session,
@@ -467,13 +300,11 @@ impl SettingsView {
             settings,
             outputs,
             output_picker,
-            tab: SettingsTab::General,
+            page: SettingsPage::Accounts,
             search,
             query: String::new(),
+            reveal: None,
             lyrics_drop_gap: None,
-            header_height: Pixels::ZERO,
-            header_measured: false,
-            column: None,
             scrollbar: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(me)),
             opacity: ScrubberState::new("opacity"),
             sleep: ScrubberState::new("sleep"),
@@ -500,105 +331,134 @@ impl SettingsView {
             installed: None,
             loading_fonts: false,
             font_task: None,
+            stages,
         }
     }
 
-    /// Shows one category and ends any search, so a route always lands on a plain page.
-    pub(crate) fn select(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
-        self.tab = tab;
+    /// Shows one page and ends any search, so a route always lands on a plain page. A new page
+    /// starts at its top.
+    pub(crate) fn select(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+        if self.page != page {
+            self.scrollbar.update(cx, |bar, _| bar.place(Pixels::ZERO));
+        }
+        self.page = page;
         self.popovers.close();
         // a device plugged in since the list was read is only found by asking again
-        if tab == SettingsTab::Playback {
+        if page == SettingsPage::Sound {
             self.outputs.update(cx, |outputs, cx| outputs.refresh(cx));
         }
-        if !self.search.read(cx).text().is_empty() {
-            self.search.update(cx, |input, cx| input.set_text("", cx));
-        }
+        self.clear_search(cx);
         cx.notify();
     }
 
-    fn searching(&self) -> bool {
+    pub(crate) fn searching(&self) -> bool {
         !self.query.is_empty()
     }
 
-    /// Takes the header's measured height. The header floats over the page, so the rows pad
-    /// themselves by this much and scroll beneath it, and the scrollbar starts below it so
-    /// the bar never slides under the blur.
-    fn set_header_height(&mut self, height: Pixels, cx: &mut Context<Self>) {
-        if self.header_height == height {
-            return;
-        }
-        self.header_height = height;
-        self.header_measured = true;
-        self.scrollbar.update(cx, |bar, cx| {
-            bar.set_track_top(height, cx);
-        });
-        cx.notify();
+    /// The search field, which the rail draws.
+    pub(crate) fn search(&self) -> Entity<Input> {
+        self.search.clone()
     }
 
-    /// Takes the rows' measured width, which only the Widevine row's height depends on.
-    fn set_column(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        if self.column == Some(width) {
-            return;
+    pub(crate) fn clear_search(&mut self, cx: &mut Context<Self>) {
+        if !self.search.read(cx).text().is_empty() {
+            self.search.update(cx, |input, cx| input.set_text("", cx));
         }
-        self.column = Some(width);
-        cx.notify();
     }
 
-    /// The rows of the page as a deck: the current category's, or, while a search is on,
-    /// every category's that answers it, best match first and without the group titles. Only
-    /// the rows in view are ever built.
-    fn panel(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let bare = match self.searching() {
-            false => self.tab_slots(self.tab, cx),
-            true => self.found(cx),
-        };
-        if bare.is_empty() {
-            return Vacancy::new(t!("search-no-matches"))
-                .icon("icons/search.svg")
-                .py_6()
-                .into_any_element();
+    /// Takes one step back out of whatever is open on the page: a dialog first, then a menu,
+    /// then the search. Returns false when nothing was open.
+    pub(crate) fn escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.close_dialog(cx) {
+            return true;
         }
+        if self.popovers.any() {
+            self.popovers.close();
+            cx.notify();
+            return true;
+        }
+        if self.searching() {
+            self.clear_search(cx);
+            return true;
+        }
+        false
+    }
 
-        let mut slots = Vec::with_capacity(bare.len() * 2);
-        let mut parted = false;
-        for slot in bare {
-            let titled = matches!(slot, Slot::Title(_));
-            if parted && !titled {
-                slots.push(Slot::Sep);
+    /// The groups a page shows, in order.
+    fn groups(&self, page: SettingsPage, cx: &App) -> Vec<Group> {
+        match page {
+            SettingsPage::Accounts => self.accounts_groups(cx),
+            SettingsPage::Appearance => self.appearance_groups(),
+            SettingsPage::NowPlaying => self.now_playing_groups(cx),
+            SettingsPage::Lyrics => self.lyrics_groups(),
+            SettingsPage::Playback => self.playback_groups(cx),
+            SettingsPage::Sound => self.sound_groups(cx),
+            SettingsPage::Discord => self.discord_groups(cx),
+            SettingsPage::Scrobbling => self.scrobbling_groups(cx),
+            SettingsPage::General => self.general_groups(cx),
+            SettingsPage::About => self.about_groups(),
+            SettingsPage::LyricsSources => self.lyrics_sources_groups(),
+            SettingsPage::MusicFolders => self.music_folders_groups(),
+        }
+    }
+
+    /// What a page shows between its title and its groups, other than a preview.
+    fn header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        match self.page {
+            SettingsPage::Accounts => Some(self.profile(cx).into_any_element()),
+            _ => None,
+        }
+    }
+
+    /// What a page shows under its groups.
+    fn footer(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        match self.page {
+            SettingsPage::About => vec![
+                self.team(cx).into_any_element(),
+                self.notice(cx).into_any_element(),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The live preview of the page on show, framed, for the pages that have one.
+    fn stage(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let preview = match self.page {
+            SettingsPage::Appearance => {
+                stage::appearance::stage(&self.stages.appearance, self, window, cx)
             }
-            parted = !titled;
-            slots.push(slot);
-        }
-
-        let heights = slots
-            .iter()
-            .map(|slot| self.slot_height(*slot, window, cx))
-            .collect::<Vec<_>>();
-        Deck::new("settings-deck")
-            .rows(heights)
-            .draw(cx.processor(
-                move |this: &mut Self, index: usize, _, cx| match slots.get(index) {
-                    Some(slot) => this.slot_element(*slot, cx),
-                    None => div().into_any_element(),
-                },
-            ))
-            .into_any_element()
+            SettingsPage::NowPlaying => {
+                stage::now_playing::stage(&self.stages.now_playing, self, window, cx)
+            }
+            SettingsPage::Lyrics => stage::lyrics::stage(&self.stages.lyrics, self, window, cx),
+            SettingsPage::Sound => stage::sound::stage(&self.stages.sound, self, window, cx),
+            SettingsPage::Discord => stage::discord::stage(&self.stages.discord, self, window, cx),
+            _ => None,
+        }?;
+        Some(stage::frame(preview, cx))
     }
 
-    /// Every setting of every category that answers the query, best match first. Ties keep
-    /// the order of the categories. Only titles and details are read; no row is built.
-    fn found(&self, cx: &App) -> Vec<Slot> {
-        let mut hits: Vec<(u32, Slot)> = SettingsTab::ALL
+    /// Every setting of every page that answers the query, best match first, with the page it
+    /// lives on. Ties keep the order of the pages. Only titles and details are read and no row
+    /// is built.
+    fn found(&self, cx: &App) -> Vec<(SettingsPage, Slot)> {
+        let mut hits: Vec<(u32, SettingsPage, Slot)> = SettingsPage::ALL
             .into_iter()
-            .flat_map(|tab| self.tab_slots(tab, cx))
-            .filter_map(|slot| {
+            .flat_map(|page| {
+                self.groups(page, cx)
+                    .into_iter()
+                    .flat_map(|group| group.slots().collect::<Vec<_>>())
+                    .map(move |slot| (page, slot))
+            })
+            .filter_map(|(page, slot)| {
                 self.slot_score(slot, &self.query, cx)
-                    .map(|score| (score, slot))
+                    .map(|score| (score, page, slot))
             })
             .collect();
-        hits.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
-        hits.into_iter().map(|(_, slot)| slot).collect()
+        hits.sort_by_key(|(score, ..)| std::cmp::Reverse(*score));
+        hits.into_iter()
+            .map(|(_, page, slot)| (page, slot))
+            .collect()
     }
 
     /// How well the slot answers `query`, or `None` when it does not. The query may span
@@ -611,154 +471,16 @@ impl SettingsView {
         Some(whole + titled)
     }
 
-    fn tab_slots(&self, tab: SettingsTab, cx: &App) -> Vec<Slot> {
-        match tab {
-            SettingsTab::General => vec![
-                Slot::Startup,
-                Slot::Entries,
-                Slot::Language,
-                Slot::Title("settings-group-window"),
-                Slot::Tray,
-                Slot::TrayIcon,
-                Slot::Title("settings-group-accounts"),
-                Slot::Accounts,
-                Slot::Title("settings-group-library"),
-                Slot::LocalFolder,
-            ],
-            SettingsTab::Appearance => vec![
-                Slot::Title("settings-tab-general"),
-                Slot::Theme,
-                Slot::Adaptive,
-                Slot::Icons,
-                Slot::Opacity,
-            ]
-            .into_iter()
-            .chain(ui::WINDOW_BLUR.then_some(Slot::WindowBlur))
-            .chain([
-                Slot::Blur,
-                Slot::Corners,
-                Slot::Title("settings-group-fullscreen"),
-                Slot::Ambient,
-            ])
-            .chain(
-                self.settings
-                    .read(cx)
-                    .ambient()
-                    .then_some(Slot::AmbientMotion),
-            )
-            .chain([Slot::Visualizer])
-            .chain(
-                self.settings
-                    .read(cx)
-                    .visualizer_style()
-                    .shown()
-                    .then_some(Slot::VisualizerAbsolute),
-            )
-            .chain([
-                Slot::FullscreenControlsAutohide,
-                Slot::OsFullscreen,
-                Slot::Title("settings-group-lyrics"),
-                Slot::PanelLyricsSize,
-                Slot::FullscreenLyricsSize,
-                Slot::BlurLyrics,
-                Slot::Title("settings-group-text"),
-                Slot::Font,
-                Slot::Typeface,
-                Slot::Title("settings-group-motion"),
-                Slot::Motion,
-                Slot::Pace,
-                Slot::Saver,
-            ])
-            .chain(self.decoration_slots(cx))
-            .chain([Slot::Title("settings-advanced"), Slot::AdaptiveMenu])
-            .collect(),
-            SettingsTab::Playback => {
-                let mut slots = vec![
-                    Slot::Title("settings-tab-general"),
-                    Slot::Normalisation,
-                    Slot::Gapless,
-                    Slot::Sleep,
-                    Slot::StayAwake,
-                ];
-                if self.drm.read(cx).shown(cx) {
-                    slots.push(Slot::Widevine);
-                }
-                let capabilities = self.session.read(cx).capabilities();
-                let qualities = !capabilities.qualities.is_empty();
-                if qualities || capabilities.transcode {
-                    slots.push(Slot::Title("settings-group-streaming"));
-                }
-                if qualities {
-                    slots.push(Slot::StreamQuality);
-                }
-                if capabilities.transcode {
-                    slots.extend([Slot::StreamFormat, Slot::StreamBitrate]);
-                }
-                slots.extend([Slot::Title("settings-group-devices"), Slot::OutputDevice]);
-                let outputs = self.outputs.read(cx);
-                if outputs.failure().is_some() {
-                    slots.push(Slot::OutputFailure);
-                }
-                // with nothing open there is no rate or buffer to show
-                if outputs.failure().is_none() {
-                    slots.extend([Slot::SampleRate, Slot::Buffer]);
-                }
-                slots.extend([Slot::Title("settings-group-equalizer"), Slot::Equalizer]);
-                if self.equalizer.read(cx).enabled() {
-                    slots.push(Slot::EqualizerPreset);
-                }
-                slots.extend([Slot::Title("settings-group-lyrics"), Slot::LyricsProviders]);
-                if self
-                    .settings
-                    .read(cx)
-                    .enabled_lyrics_provider_priority()
-                    .len()
-                    > 1
-                {
-                    slots.push(Slot::LyricsPriority);
-                }
-                slots.extend([Slot::Karaoke, Slot::Romanized]);
-                slots
-            }
-            SettingsTab::Privacy => {
-                vec![
-                    Slot::Title("settings-group-lyrics"),
-                    Slot::LyricsForLocal,
-                    Slot::Title("settings-group-discord"),
-                    Slot::ArtworkForLocal,
-                ]
-            }
-            SettingsTab::Integrations => self
-                .discord_slots(cx)
-                .into_iter()
-                .chain([Slot::Title("settings-group-scrobbling")])
-                .chain(self.scrobble_slots(cx))
-                .collect(),
-            SettingsTab::About => vec![
-                Slot::Title("settings-tab-general"),
-                Slot::Version,
-                Slot::Updates,
-                Slot::Log,
-            ]
-            .into_iter()
-            .chain([
-                Slot::Title("settings-group-project"),
-                Slot::License,
-                Slot::Source,
-            ])
-            .collect(),
-        }
-    }
-
     /// The title and detail a search is matched against, without building the row. Kept next
-    /// to the builders by key: a new row needs its pair here to be found.
+    /// to the slots: a new row needs its pair here to be found. A slot with no pair is left out
+    /// of searches.
     #[allow(
         clippy::too_many_lines,
         reason = "one arm per row keeps the keys beside the rows"
     )]
     fn slot_meta(&self, slot: Slot, cx: &App) -> Option<(SharedString, SharedString)> {
         let meta = match slot {
-            Slot::Title(_) | Slot::Sep => return None,
+            Slot::Folders => return None,
             Slot::Startup => (t!("settings-startup"), t!("settings-startup-detail")),
             Slot::Entries => (t!("settings-entries"), t!("settings-entries-detail")),
             Slot::Language => (t!("settings-language"), t!("settings-language-detail")),
@@ -808,12 +530,12 @@ impl SettingsView {
                 t!("settings-os-fullscreen-detail"),
             ),
             Slot::PanelLyricsSize => (
-                i18n::lookup("settings-panel-lyrics-size", None),
-                i18n::lookup("settings-panel-lyrics-size-detail", None),
+                t!("settings-panel-lyrics-size"),
+                t!("settings-panel-lyrics-size-detail"),
             ),
             Slot::FullscreenLyricsSize => (
-                i18n::lookup("settings-fullscreen-lyrics-size", None),
-                i18n::lookup("settings-fullscreen-lyrics-size-detail", None),
+                t!("settings-fullscreen-lyrics-size"),
+                t!("settings-fullscreen-lyrics-size-detail"),
             ),
             Slot::BlurLyrics => (
                 t!("settings-blur-lyrics"),
@@ -877,10 +599,7 @@ impl SettingsView {
             ),
             Slot::Sleep => (t!("settings-sleep"), t!("settings-sleep-detail")),
             Slot::StayAwake => (t!("settings-stay-awake"), t!("settings-stay-awake-detail")),
-            Slot::Widevine => {
-                let (detail, _) = widevine_copy(self.drm.read(cx).state());
-                (t!("settings-widevine"), i18n::lookup(detail, None))
-            }
+            Slot::Widevine => (t!("settings-widevine"), self.widevine_detail(cx)),
             Slot::OutputDevice => (
                 t!("settings-output-device"),
                 t!("settings-output-device-detail"),
@@ -891,13 +610,17 @@ impl SettingsView {
                 t!("settings-sample-rate-detail"),
             ),
             Slot::Buffer => (t!("settings-buffer"), t!("settings-buffer-detail")),
-            Slot::Equalizer => (t!("settings-equalizer"), t!("settings-equalizer-detail")),
-            Slot::EqualizerPreset => (
-                t!("settings-equalizer-preset"),
-                t!("settings-equalizer-preset-detail"),
+            Slot::Equalizer => (
+                t!("settings-equalizer"),
+                format!(
+                    "{} {}",
+                    t!("settings-equalizer-detail"),
+                    t!("settings-equalizer-preset-detail")
+                )
+                .into(),
             ),
-            Slot::LyricsProviders => (
-                t!("settings-lyrics-providers"),
+            Slot::LyricsSources => (
+                t!("settings-lyrics-sources"),
                 t!("settings-lyrics-providers-detail"),
             ),
             Slot::LyricsPriority => (
@@ -941,21 +664,7 @@ impl SettingsView {
                 t!("settings-discord-buttons"),
                 t!("settings-discord-buttons-detail"),
             ),
-            Slot::Scrobble(index) => {
-                let rows = self.scrobbling.read(cx).rows();
-                let row = rows.get(index)?;
-                let service = row.id();
-                let detail = match row.state() {
-                    ScrobbleState::Off => t!("settings-scrobble-off"),
-                    ScrobbleState::Linking => t!("settings-scrobble-waiting"),
-                    ScrobbleState::On(name) => match name.is_empty() {
-                        true => t!("settings-scrobble-on"),
-                        false => t!("settings-scrobble-as", name = name.as_ref()),
-                    },
-                    ScrobbleState::Failed(key) => i18n::lookup(key, None),
-                };
-                (i18n::lookup(&format!("settings-{service}"), None), detail)
-            }
+            Slot::Scrobble(index) => self.scrobble_meta(index, cx)?,
             Slot::Version => (t!("settings-version"), t!("settings-version-detail")),
             Slot::Updates => (
                 t!("settings-check-updates"),
@@ -968,217 +677,330 @@ impl SettingsView {
         Some(meta)
     }
 
-    /// How tall the slot draws. Standard rows share one height with the row builder, and
-    /// the composite rows sum theirs from the same fixed parts their elements are built of.
-    fn slot_height(&self, slot: Slot, window: &Window, cx: &App) -> Pixels {
-        let theme = *cx.theme();
-        match slot {
-            Slot::Title(_) => snapped(theme.metrics.row, window),
-            Slot::Sep => SEPARATOR_HEIGHT,
-            Slot::Accounts => snapped(self.accounts_height(&theme, cx), window),
-            Slot::LocalFolder => snapped(self.local_height(&theme, cx), window),
-            Slot::LyricsPriority => snapped(self.lyrics_priority_height(&theme, cx), window),
-            Slot::Widevine => snapped(self.widevine_height(&theme, window, cx), window),
-            _ => snapped(standard_height(&theme), window),
-        }
-    }
-
-    /// The accounts block: the header over one card per provider. Summed from the same fixed
-    /// parts the element is built of, so the deck never clips a card.
-    fn accounts_height(&self, theme: &Theme, cx: &App) -> Pixels {
-        let head = line(theme, Text::Body) + ROW_GAP + line(theme, Text::Small);
-        let mut total = SECTION_GAP + head + SECTION_GAP;
-        for account in self.providers(cx) {
-            total += SECTION_GAP + card_height(theme, account.error.is_some());
-        }
-        if self.guest(cx).is_some() {
-            total += SECTION_GAP + card_height(theme, false);
-        }
-        total + ACCOUNTS_SLACK
-    }
-
-    /// The Widevine row: its title and action over every line its explanation wraps to.
-    fn widevine_height(&self, theme: &Theme, window: &Window, cx: &App) -> Pixels {
-        let (detail, _) = widevine_copy(self.drm.read(cx).state());
-        let width = self.column.unwrap_or(WIDTH);
-        let lines = wrapped_lines(
-            i18n::lookup(detail, None),
-            theme.text(Text::Small),
-            width,
-            window,
-        );
-        SECTION_GAP
-            + widevine_head(theme)
-            + ROW_GAP
-            + line(theme, Text::Small) * lines as f32
-            + SECTION_GAP
-    }
-
-    /// The local folder block: the header over one line per watched folder.
-    fn local_height(&self, theme: &Theme, cx: &App) -> Pixels {
-        let mut total = standard_height(theme);
-        let paths = self.session.read(cx).local_paths().len();
-        if paths > 0 {
-            total += ROW_GAP
-                + theme.metrics.control_small * paths as f32
-                + ROW_GAP * paths.saturating_sub(1) as f32
-                + BLOCK_GAP;
-        }
-        total
-    }
-
-    /// The lyrics priority block: the header over one entry per enabled source.
-    fn lyrics_priority_height(&self, theme: &Theme, cx: &App) -> Pixels {
-        let sources = self
-            .settings
-            .read(cx)
-            .enabled_lyrics_provider_priority()
-            .len();
-        standard_height(theme) + ROW_GAP + theme.metrics.row * sources as f32 + BLOCK_GAP
-    }
-
-    /// Builds the slot's row. Asked only for the rows in view, every frame they are.
+    /// Builds the slot's row or cards. Asked only for the page on show, every frame it is.
     fn slot_element(&self, slot: Slot, cx: &mut Context<Self>) -> AnyElement {
         match slot {
-            Slot::Title(key) => div()
-                .h(cx.theme().metrics.row)
-                .flex()
-                .flex_col()
-                .justify_end()
-                .pb_1()
-                .child(
-                    div()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(eyebrow(i18n::lookup(key, None), cx)),
-                )
-                .into_any_element(),
-            Slot::Sep => Separator::horizontal().w_full().into_any_element(),
-            Slot::Startup => self.startup_row(cx).element,
-            Slot::Entries => self.entries_row(cx).element,
-            Slot::Language => self.language_row(cx).element,
-            Slot::Tray => self.tray_row(cx).element,
-            Slot::TrayIcon => self.tray_icon_row(cx).element,
-            Slot::Accounts => self.accounts_row(cx).element,
-            Slot::LocalFolder => self.local_folder_row(cx).element,
-            Slot::Theme => self.theme_row(cx).element,
-            Slot::Adaptive => self.adaptive_row(cx).element,
-            Slot::Ambient => self.ambient_row(cx).element,
-            Slot::AmbientMotion => self.ambient_motion_row(cx).element,
-            Slot::Visualizer => self.visualizer_style_row(cx).element,
-            Slot::VisualizerAbsolute => self.visualizer_absolute_row(cx).element,
-            Slot::Icons => self.icons_row(cx).element,
-            Slot::Opacity => self.opacity_row(cx).element,
-            Slot::WindowBlur => self.blur_window_row(cx).element,
-            Slot::Blur => self.blur_row(cx).element,
-            Slot::Corners => self.corners_row(cx).element,
-            Slot::FullscreenControlsAutohide => self.fullscreen_controls_autohide_row(cx).element,
-            Slot::OsFullscreen => self.os_fullscreen_row(cx).element,
-            Slot::PanelLyricsSize => self.panel_lyrics_size_row(cx).element,
-            Slot::FullscreenLyricsSize => self.fullscreen_lyrics_size_row(cx).element,
-            Slot::BlurLyrics => self.blur_lyrics_row(cx).element,
-            Slot::Font => self.font_row(cx).element,
-            Slot::Typeface => self.typeface_row(cx).element,
-            Slot::Motion => self.motion_row(cx).element,
-            Slot::Pace => self.pace_row(cx).element,
-            Slot::Saver => self.saver_row(cx).element,
+            Slot::Startup => self.startup_row(cx),
+            Slot::Entries => self.entries_row(cx),
+            Slot::Language => self.language_row(cx),
+            Slot::Tray => self.tray_row(cx),
+            Slot::TrayIcon => self.tray_icon_row(cx),
+            Slot::Accounts => self.accounts_cards(cx),
+            Slot::LocalFolder => self.local_folder_row(cx),
+            Slot::Folders => self.folders(cx),
+            Slot::Theme => self.theme_row(cx),
+            Slot::Adaptive => self.adaptive_row(cx),
+            Slot::Ambient => self.ambient_row(cx),
+            Slot::AmbientMotion => self.ambient_motion_row(cx),
+            Slot::Visualizer => self.visualizer_style_row(cx),
+            Slot::VisualizerAbsolute => self.visualizer_absolute_row(cx),
+            Slot::Icons => self.icons_row(cx),
+            Slot::Opacity => self.opacity_row(cx),
+            Slot::WindowBlur => self.blur_window_row(cx),
+            Slot::Blur => self.blur_row(cx),
+            Slot::Corners => self.corners_row(cx),
+            Slot::FullscreenControlsAutohide => self.fullscreen_controls_autohide_row(cx),
+            Slot::OsFullscreen => self.os_fullscreen_row(cx),
+            Slot::PanelLyricsSize => self.panel_lyrics_size_row(cx),
+            Slot::FullscreenLyricsSize => self.fullscreen_lyrics_size_row(cx),
+            Slot::BlurLyrics => self.blur_lyrics_row(cx),
+            Slot::Font => self.font_row(cx),
+            Slot::Typeface => self.typeface_row(cx),
+            Slot::Motion => self.motion_row(cx),
+            Slot::Pace => self.pace_row(cx),
+            Slot::Saver => self.saver_row(cx),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            Slot::ServerSideDecorations => self.server_side_decorations_row(cx).element,
+            Slot::ServerSideDecorations => self.server_side_decorations_row(cx),
             #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-            Slot::Decorations => self.decorations_row(cx).element,
+            Slot::Decorations => self.decorations_row(cx),
             #[cfg(not(target_os = "macos"))]
-            Slot::Side => self.side_row(cx).element,
+            Slot::Side => self.side_row(cx),
             #[cfg(not(target_os = "macos"))]
-            Slot::TrafficLights => self.traffic_light_controls_row(cx).element,
+            Slot::TrafficLights => self.traffic_light_controls_row(cx),
             #[cfg(any(
                 target_os = "windows",
                 target_os = "linux",
                 target_os = "freebsd",
                 target_os = "macos"
             ))]
-            Slot::WindowRounding => self.window_rounding_row(cx).element,
-            Slot::AdaptiveMenu => self.adaptive_menu_row(cx).element,
-            Slot::Normalisation => self.playback_row(cx).element,
-            Slot::Gapless => self.gapless_row(cx).element,
-            Slot::StreamQuality => self.stream_quality_row(cx).element,
-            Slot::StreamFormat => self.stream_format_row(cx).element,
-            Slot::StreamBitrate => self.stream_bitrate_row(cx).element,
-            Slot::Sleep => self.sleep_row(cx).element,
-            Slot::StayAwake => self.stay_awake_row(cx).element,
-            Slot::OutputDevice => self.output_device_row(cx).element,
-            Slot::OutputFailure => self.output_failure_row(cx).element,
-            Slot::SampleRate => self.sample_rate_row(cx).element,
-            Slot::Buffer => self.buffer_row(cx).element,
-            Slot::Widevine => self.widevine_row(cx).element,
-            Slot::Equalizer => self.equalizer_row(cx).element,
-            Slot::EqualizerPreset => self.equalizer_preset_row(cx).element,
-            Slot::LyricsProviders => self.lyrics_providers_row(cx).element,
-            Slot::LyricsPriority => self.lyrics_priority_row(cx).element,
-            Slot::Karaoke => self.karaoke_lyrics_row(cx).element,
-            Slot::Romanized => self.romanized_lyrics_row(cx).element,
-            Slot::LyricsForLocal => self.lyrics_for_local_files_row(cx).element,
-            Slot::Discord => self.discord_row(cx).element,
-            Slot::DiscordName => self.discord_name_row(cx).element,
-            Slot::DiscordShowPaused => self.discord_show_paused_row(cx).element,
-            Slot::DiscordBadge => self.discord_badge_row(cx).element,
-            Slot::ArtworkForLocal => self.artwork_for_local_files_row(cx).element,
-            Slot::DiscordAnonymous => self.discord_anonymous_row(cx).element,
-            Slot::DiscordButtons => self.discord_buttons_row(cx).element,
+            Slot::WindowRounding => self.window_rounding_row(cx),
+            Slot::AdaptiveMenu => self.adaptive_menu_row(cx),
+            Slot::Normalisation => self.playback_row(cx),
+            Slot::Gapless => self.gapless_row(cx),
+            Slot::StreamQuality => self.stream_quality_row(cx),
+            Slot::StreamFormat => self.stream_format_row(cx),
+            Slot::StreamBitrate => self.stream_bitrate_row(cx),
+            Slot::Sleep => self.sleep_row(cx),
+            Slot::StayAwake => self.stay_awake_row(cx),
+            Slot::OutputDevice => self.output_device_row(),
+            Slot::OutputFailure => self.output_failure_row(cx),
+            Slot::SampleRate => self.sample_rate_row(cx),
+            Slot::Buffer => self.buffer_row(cx),
+            Slot::Widevine => self.widevine_row(cx),
+            Slot::Equalizer => self.equalizer_row(cx),
+            Slot::LyricsSources => self.lyrics_sources_row(cx),
+            Slot::LyricsPriority => self.lyrics_priority(cx),
+            Slot::Karaoke => self.karaoke_lyrics_row(cx),
+            Slot::Romanized => self.romanized_lyrics_row(cx),
+            Slot::LyricsForLocal => self.lyrics_for_local_files_row(cx),
+            Slot::Discord => self.discord_row(cx),
+            Slot::DiscordName => self.discord_name_row(cx),
+            Slot::DiscordShowPaused => self.discord_show_paused_row(cx),
+            Slot::DiscordBadge => self.discord_badge_row(cx),
+            Slot::ArtworkForLocal => self.artwork_for_local_files_row(cx),
+            Slot::DiscordAnonymous => self.discord_anonymous_row(cx),
+            Slot::DiscordButtons => self.discord_buttons_row(cx),
             Slot::Scrobble(index) => match index < self.scrobbling.read(cx).rows().len() {
-                true => self.scrobble_row(index, cx).element,
+                true => self.scrobble_row(index, cx),
                 false => div().into_any_element(),
             },
-            Slot::Version => self.version_row(cx).element,
-            Slot::Updates => self.updates_row(cx).element,
-            Slot::Log => self.log_row(cx).element,
-            Slot::License => self.license_row(cx).element,
-            Slot::Source => self.source_row(cx).element,
+            Slot::Version => self.version_row(),
+            Slot::Updates => self.updates_row(cx),
+            Slot::Log => self.log_row(cx),
+            Slot::License => self.license_row(cx),
+            Slot::Source => self.source_row(cx),
         }
     }
 
-    fn look(&self, cx: &Context<Self>) -> Look {
-        Look {
-            tint: cx.theme().tint,
-            tint_secondary: cx.theme().tint_secondary,
-            ..self.settings.read(cx).look()
-        }
+    /// One group: its heading, its option cards, then its rows on one surface with nothing
+    /// between them.
+    fn group(&self, group: Group, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
+        let Group {
+            title,
+            icon,
+            cards,
+            rows,
+        } = group;
+        let heading = title.map(|key| {
+            faint(cx)
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_5()
+                .mb(theme.metrics.pad)
+                .children(icon.map(|icon| {
+                    svg()
+                        .path(icons::path(icon))
+                        .size(theme.text(ui::Text::Small))
+                        .flex_none()
+                        .text_color(theme.muted_foreground)
+                }))
+                .child(i18n::lookup(key, None))
+        });
+        let carded = cards.is_some();
+        let cards = cards.map(|slot| {
+            let cards = self.slot_element(slot, cx);
+            self.revealing(slot, cards, cx)
+        });
+        let rows = rows
+            .into_iter()
+            .map(|slot| {
+                let row = self.slot_element(slot, cx);
+                self.revealing(slot, row, cx)
+            })
+            .collect::<Vec<_>>();
+        let surface = (!rows.is_empty()).then(|| {
+            InfoCard::new("")
+                .untitled()
+                .flush()
+                .when(carded, |surface| surface.mt_3())
+                .children(rows)
+        });
+
+        div()
+            .flex()
+            .flex_col()
+            .children(heading)
+            .children(cards)
+            .children(surface)
+            .into_any_element()
     }
 
-    #[allow(
-        unused_variables,
-        reason = "cx is only read on Linux and FreeBSD, where rounding follows the decorations"
-    )]
-    fn decoration_slots(&self, cx: &App) -> Vec<Slot> {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        let mut slots = vec![
-            Slot::Title("settings-group-window-style"),
-            Slot::ServerSideDecorations,
-            Slot::Side,
-            Slot::TrafficLights,
-        ];
-        // Server-side decorations put the compositor in charge of the frame, so window
-        // rounding is only ever this app's call with client-side ones.
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        if !self.settings.read(cx).server_side_decorations() {
-            slots.push(Slot::WindowRounding);
+    /// Wraps the element of the setting a search result opened so that, once it is laid out,
+    /// the page scrolls to put it near the top.
+    fn revealing(&self, slot: Slot, element: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        if self.reveal != Some(slot) {
+            return element;
         }
-        #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "macos")))]
-        let slots = vec![
-            Slot::Title("settings-group-title-bar"),
-            Slot::Decorations,
-            Slot::Side,
-            Slot::TrafficLights,
-            Slot::WindowRounding,
-        ];
-        #[cfg(target_os = "macos")]
-        let slots = vec![
-            Slot::Title("settings-group-window-style"),
-            Slot::Decorations,
-            Slot::WindowRounding,
-        ];
-        slots
+        let bar = self.scrollbar.clone();
+        let view = cx.entity().downgrade();
+        let lead = cx.theme().metrics.inset;
+
+        div()
+            .relative()
+            .child(element)
+            .child(
+                canvas(
+                    move |bounds, window, cx| {
+                        let scroll = bar.read(cx).scroll().clone();
+                        let top = bounds.top() - scroll.bounds().top() - scroll.offset().y;
+                        let to = -(top - lead).max(Pixels::ZERO);
+                        window.on_next_frame(move |_, cx| {
+                            bar.update(cx, |bar, _| bar.place(to));
+                            view.update(cx, |view, cx| {
+                                view.reveal = None;
+                                cx.notify();
+                            })
+                            .ok();
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .into_any_element()
     }
+
+    /// The page on show: the way back for a drill-in, the title, the preview, the groups.
+    fn page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let theme = *cx.theme();
+        let title = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mb(theme.metrics.inset)
+            .when_some(self.page.parent(), |this, parent| this.child(back(parent)))
+            .child(heading(i18n::lookup(self.page.key(), None), cx));
+        let header = self.header(cx);
+        let stage = self.stage(window, cx);
+        let groups = self
+            .groups(self.page, cx)
+            .into_iter()
+            .map(|group| self.group(group, cx))
+            .collect::<Vec<_>>();
+
+        div().child(title).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme.metrics.inset * 1.5)
+                .children(header)
+                .children(stage)
+                .children(groups)
+                .children(self.footer(cx)),
+        )
+    }
+
+    /// What a search shows instead of the page: every setting that answers it, each naming the
+    /// page it lives on and opening it there.
+    fn results(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let theme = *cx.theme();
+        let hits = self.found(cx);
+        let title = heading(t!("settings-search-results"), cx).mb(theme.metrics.inset);
+        if hits.is_empty() {
+            return div().child(title).child(
+                Vacancy::new(t!("search-no-matches"))
+                    .icon("icons/search.svg")
+                    .py_6(),
+            );
+        }
+        let row = snapped(theme.metrics.list_row, window);
+
+        div().child(title).child(
+            Deck::new("settings-results")
+                .rows(hits.iter().map(|_| row))
+                .draw(cx.processor(
+                    move |this: &mut Self, index: usize, _, cx| match hits.get(index) {
+                        Some((page, slot)) => this.result(index, *page, *slot, cx),
+                        None => div().into_any_element(),
+                    },
+                )),
+        )
+    }
+
+    /// One search result: the setting's name over the page it lives on.
+    fn result(
+        &self,
+        index: usize,
+        page: SettingsPage,
+        slot: Slot,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let title = self
+            .slot_meta(slot, cx)
+            .map(|(title, _)| title)
+            .unwrap_or_default();
+        let place = match page.parent() {
+            Some(parent) => t!(
+                "settings-result-place",
+                parent = i18n::lookup(parent.key(), None).to_string(),
+                page = i18n::lookup(page.key(), None).to_string()
+            ),
+            None => i18n::lookup(page.key(), None),
+        };
+
+        Card::new(("settings-result", index), title)
+            .meta(place)
+            .press(cx.listener(move |this, _, _, cx| this.open_result(page, slot, cx)))
+            .into_any_element()
+    }
+
+    /// Opens the page a result lives on and scrolls its setting into view.
+    fn open_result(&mut self, page: SettingsPage, slot: Slot, cx: &mut Context<Self>) {
+        self.reveal = Some(slot);
+        self.clear_search(cx);
+        navigate(Destination::Settings(page), cx);
+        cx.notify();
+    }
+
+    /// Starts reading the installed fonts the first time the typeface picker could need them.
+    fn load_fonts(&mut self, cx: &mut Context<Self>) {
+        let picking = self.popovers.shows(TYPEFACES);
+        let wanted = self.page == SettingsPage::Appearance || picking;
+        if !wanted || self.installed.is_some() || self.loading_fonts {
+            return;
+        }
+        self.loading_fonts = true;
+        let text_system = cx.text_system().clone();
+        let io = Io::global(cx);
+        self.font_task = Some(cx.spawn(async move |this, cx| {
+            let names = io
+                .spawn_blocking(move || appearance::usable_fonts(text_system))
+                .await
+                .unwrap_or_default();
+            this.update(cx, |this, cx| {
+                this.installed = Some(names);
+                this.loading_fonts = false;
+                this.font_task = None;
+                // the picker may already be open on an empty list: put the
+                // cursor on the chosen face now that it can be found
+                if this.popovers.shows(TYPEFACES) {
+                    let chosen = this.settings.read(cx).font();
+                    let place = this
+                        .typeface_entries()
+                        .iter()
+                        .position(|name| name.as_ref() == chosen);
+                    this.typefaces.place(place, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+}
+
+/// The button above a drill-in's title that returns to the page it opened from.
+pub(crate) fn back(parent: SettingsPage) -> Button {
+    Button::new("settings-back")
+        .small()
+        .ghost()
+        .icon("icons/chevron-left.svg")
+        .label(i18n::lookup(parent.key(), None))
+        .ml(-SMALL_INSET)
+        .on_click(move |_, _, cx| router::up(Destination::Settings(parent), cx))
+}
+
+/// The column every settings page is laid out in: centred, no wider than `COLUMN`, inset all
+/// round by half as much again as a workspace page.
+pub(crate) fn column(cx: &App) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .max_w(COLUMN)
+        .p(cx.theme().metrics.inset * 1.5)
 }
 
 impl Render for SettingsView {
@@ -1186,38 +1008,7 @@ impl Render for SettingsView {
         if !cx.has_active_drag() {
             self.lyrics_drop_gap = None;
         }
-        let searching = self.searching();
-        // a search can list the typeface row from any category
-        let in_appearance = self.tab == SettingsTab::Appearance || searching;
-        let picking_typefaces = self.popovers.shows(TYPEFACES);
-        if (in_appearance || picking_typefaces) && self.installed.is_none() && !self.loading_fonts {
-            self.loading_fonts = true;
-            let text_system = cx.text_system().clone();
-            let io = Io::global(cx);
-            self.font_task = Some(cx.spawn(async move |this, cx| {
-                let names = io
-                    .spawn_blocking(move || usable_fonts(text_system))
-                    .await
-                    .unwrap_or_default();
-                this.update(cx, |this, cx| {
-                    this.installed = Some(names);
-                    this.loading_fonts = false;
-                    this.font_task = None;
-                    // the picker may already be open on an empty list: put the
-                    // cursor on the chosen face now that it can be found
-                    if this.popovers.shows(TYPEFACES) {
-                        let chosen = this.settings.read(cx).font();
-                        let place = this
-                            .typeface_entries()
-                            .iter()
-                            .position(|name| name.as_ref() == chosen);
-                        this.typefaces.place(place, cx);
-                    }
-                    cx.notify();
-                })
-                .ok();
-            }));
-        }
+        self.load_fonts(cx);
 
         let picking_languages = self.popovers.shows(LANGUAGES);
         if picking_languages {
@@ -1232,7 +1023,7 @@ impl Render for SettingsView {
             self.languages.sync(false, None, window, cx);
         }
 
-        if picking_typefaces {
+        if self.popovers.shows(TYPEFACES) {
             let chosen_typeface = self.settings.read(cx).font();
             let typeface_selected = self
                 .typeface_entries()
@@ -1285,64 +1076,26 @@ impl Render for SettingsView {
             _ => {}
         }
 
-        let general = self.tab == SettingsTab::General && !searching;
-        let about = self.tab == SettingsTab::About && !searching;
-        let view = cx.entity().downgrade();
+        let body = match self.searching() {
+            true => self.results(window, cx),
+            false => self.page(window, cx),
+        };
 
         div()
             .relative()
             .size_full()
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
-                cx.stop_propagation();
-                this.escape(cx);
+                if this.escape(cx) {
+                    cx.stop_propagation();
+                }
             }))
-            // the padding, the fade and the scrollbar all hang off the header's measured
-            // height, so the page sits out the first frame rather than snapping into place
-            .when(!self.header_measured, |this| this.invisible())
             .child(
                 Scroller::new("settings", &self.scrollbar)
                     .flex()
                     .flex_col()
                     .items_center()
-                    // the rows dissolve over the header's height as they scroll up beneath
-                    // it, the way the verse sheet fades its edges, so no sharp content ever
-                    // sits over the blur. The tail reaches past the header so the handoff
-                    // has no hard edge.
-                    .when(effects(), |this| {
-                        this.fade_edges(self.header_height + HEADER_FADE_TAIL, px(0.))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_6()
-                            .w_full()
-                            .max_w(WIDTH)
-                            .px_6()
-                            .pb_6()
-                            .pt(self.header_height)
-                            // every child stretches across the column, so the widest is the
-                            // width the rows are laid out at
-                            .on_children_prepainted(move |bounds, _, cx| {
-                                let Some(width) = bounds
-                                    .iter()
-                                    .map(|bounds| bounds.size.width)
-                                    .reduce(Pixels::max)
-                                else {
-                                    return;
-                                };
-                                view.update(cx, |view, cx| view.set_column(width, cx)).ok();
-                            })
-                            .when(general, |this| {
-                                this.child(self.profile(cx))
-                                    .child(Separator::horizontal().w_full())
-                            })
-                            .child(self.panel(window, cx))
-                            .when(about, |this| {
-                                this.child(self.team(cx)).child(self.notice(cx))
-                            }),
-                    ),
+                    .child(column(cx).child(body)),
             )
             .when_some(accounts, |this, accounts| {
                 this.child(self.account_modal(accounts, cx).into_any_element())
@@ -1362,101 +1115,5 @@ impl Render for SettingsView {
             .when_some(sign_in_for, |this, (slug, provider)| {
                 this.child(self.sign_in_prompt(slug, provider, cx).into_any_element())
             })
-    }
-}
-
-/// The search field and the category bar over the settings page. `Workspace` floats it over
-/// the page, outside the transition, so a category switch fades the rows and nothing else, and
-/// the rows scroll beneath it. It reads the page's state, writes back through
-/// `SettingsView::select`, and reports its height so the page can start below it.
-pub struct SettingsHeader {
-    view: Entity<SettingsView>,
-    /// The category clicked last, kept free of the hover shade until the pointer leaves it,
-    /// so the change of selection never flashes.
-    calm: Option<SettingsTab>,
-}
-
-impl SettingsHeader {
-    pub fn new(view: Entity<SettingsView>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&view, |_, _, cx| cx.notify()).detach();
-        Self { view, calm: None }
-    }
-}
-
-impl Render for SettingsHeader {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = self.view.read(cx);
-        let search = page.search.clone();
-        let chosen = page.tab;
-        let searching = page.searching();
-        let height = page.header_height;
-        let calm = self.calm;
-        let view = self.view.clone();
-        let theme = *cx.theme();
-
-        // a search lights no category, since its rows come from all of them, and picking
-        // one ends the search
-        let categories = TabBar::new("settings-categories")
-            .max_w_full()
-            .blurred()
-            .items(SettingsTab::ALL.map(|tab| {
-                Button::new(tab.id())
-                    .label(i18n::lookup(tab.key(), None))
-                    .icon(tab.icon())
-                    .small()
-                    .ghost()
-                    .selected(!searching && tab == chosen)
-                    .when(calm == Some(tab), Button::hoverless)
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if !hovered && this.calm == Some(tab) {
-                            this.calm = None;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.calm = Some(tab);
-                        this.view.update(cx, |view, cx| view.select(tab, cx));
-                        navigate(Destination::Settings(tab), cx);
-                    }))
-            }));
-
-        div()
-            .relative()
-            .flex()
-            .justify_center()
-            .px_6()
-            // the veil is absolute and takes the header's own size, so the last child, the
-            // column, is the one to measure
-            .on_children_prepainted(move |bounds, _, cx| {
-                let Some(height) = bounds.last().map(|bounds| bounds.size.height) else {
-                    return;
-                };
-                view.update(cx, |view, cx| view.set_header_height(height, cx));
-            })
-            // The haze follows the window: a see-through page has content of its own passing
-            // under the header and reads worse without it. Only the flat fallback is dropped
-            // there, since a solid band over a see-through page is a slab.
-            .when(effects() || !theme.transparent, |this| {
-                this.child(veil(
-                    Edge::Top,
-                    height,
-                    HEADER_BLUR,
-                    theme.background,
-                    None,
-                    window,
-                ))
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .max_w(WIDTH)
-                    .gap_2()
-                    .pt_6()
-                    .pb_6()
-                    .child(search)
-                    .child(div().flex().justify_center().child(categories)),
-            )
     }
 }

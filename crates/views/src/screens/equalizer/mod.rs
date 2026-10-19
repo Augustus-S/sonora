@@ -6,6 +6,7 @@ use gpui::{
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
 use music::output::{DeviceOption, OutputId, Port};
+use router::SettingsPage;
 use state::{
     AppSettings, Equalizer, Outputs, RuleDevice, Signal, Sonora, Sound, equalizer_profile_label,
 };
@@ -15,6 +16,7 @@ use ui::{
 };
 
 use crate::chrome::Chrome;
+use crate::screens::settings;
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::{preset_key, sound_picker};
 
@@ -208,6 +210,14 @@ impl EqualizerView {
         }
     }
 
+    /// Closes an open menu on escape. Returns false when none was open, so the escape can close
+    /// settings instead.
+    pub(crate) fn escape(&mut self) -> bool {
+        let open = self.popovers.any();
+        self.popovers.close();
+        open
+    }
+
     /// Plays `curve`, an edit made on this screen.
     fn apply(&mut self, curve: Curve, cx: &mut Context<Self>) {
         self.graph.update(cx, |graph, cx| graph.apply(curve, cx));
@@ -361,12 +371,19 @@ impl EqualizerView {
 
         div()
             .flex()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap_4()
-            .child(heading(t!("settings-equalizer"), cx))
-            .child(TabBar::new("equalizer-mode").flex_none().items(modes))
+            .flex_col()
+            .gap_1()
+            .child(settings::back(SettingsPage::Sound))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(heading(t!("settings-equalizer"), cx))
+                    .child(TabBar::new("equalizer-mode").flex_none().items(modes)),
+            )
             .into_any_element()
     }
 
@@ -569,18 +586,17 @@ impl EqualizerView {
 
 impl Render for EqualizerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let inset = cx.theme().metrics.inset;
         let room = Chrome::room(window, cx);
         let advanced = self.settings.read(cx).equalizer_advanced();
         let sound = self.sound(room, advanced, cx);
 
         let view = cx.entity();
         let page = Scroller::new("equalizer-page", &self.scrollbar)
-            .p(inset)
+            .flex()
+            .flex_col()
+            .items_center()
             .child(
-                div()
-                    .flex()
-                    .flex_col()
+                settings::column(cx)
                     .gap_6()
                     .child(self.header(advanced, cx))
                     .child(sound)

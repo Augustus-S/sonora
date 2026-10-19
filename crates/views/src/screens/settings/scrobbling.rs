@@ -1,24 +1,36 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, App, Context, SharedString, div, px};
+use i18n::t;
+use music::scrobble::{Link, Secret};
+use state::ScrobbleState;
+use ui::{ActiveTheme as _, Button, Modal, Switch, Text};
+
+use super::{Group, SettingsView, Slot};
+
+/// One field of the scrobbling link dialog: which hint it carries, what it starts with, and
+/// whether it holds a secret and so is drawn as dots.
+struct Field {
+    hint: &'static str,
+    value: String,
+    masked: bool,
+}
 
 impl SettingsView {
     /// One row per scrobbling service, in the order `music::scrobble` lists them.
-    pub(super) fn scrobble_slots(&self, cx: &App) -> Vec<Slot> {
+    pub(super) fn scrobbling_groups(&self, cx: &App) -> Vec<Group> {
         let services = self.scrobbling.read(cx).rows().len();
-        (0..services).map(Slot::Scrobble).collect()
+        vec![Group::untitled().rows((0..services).map(Slot::Scrobble))]
     }
 
-    pub(super) fn scrobble_row(&self, index: usize, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-
-        let row = &self.scrobbling.read(cx).rows()[index];
+    /// A service's name and where its link stands, which the row shows and a search reads.
+    pub(super) fn scrobble_meta(
+        &self,
+        index: usize,
+        cx: &App,
+    ) -> Option<(SharedString, SharedString)> {
+        let rows = self.scrobbling.read(cx).rows();
+        let row = rows.get(index)?;
         let service = row.id();
-        let link = row.link();
-        let linked = row.linked();
-        let linking = row.linking();
-        let enabled = row.enabled();
-        let title = i18n::lookup(&format!("settings-{service}"), None);
         let detail = match row.state() {
             ScrobbleState::Off => t!("settings-scrobble-off"),
             ScrobbleState::Linking => t!("settings-scrobble-waiting"),
@@ -28,6 +40,22 @@ impl SettingsView {
             },
             ScrobbleState::Failed(key) => i18n::lookup(key, None),
         };
+        Some((i18n::lookup(&format!("settings-{service}"), None), detail))
+    }
+
+    /// A service: its name, where its link stands unless the Connect button says so already,
+    /// and the controls for its state.
+    pub(super) fn scrobble_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
+        let (title, detail) = self.scrobble_meta(index, cx).unwrap_or_default();
+
+        let row = &self.scrobbling.read(cx).rows()[index];
+        let service = row.id();
+        let link = row.link();
+        let linked = row.linked();
+        let linking = row.linking();
+        let enabled = row.enabled();
+        let status = (!matches!(row.state(), ScrobbleState::Off)).then_some(detail);
 
         let action = match linked {
             true => div()
@@ -77,7 +105,20 @@ impl SettingsView {
             },
         };
 
-        self.row(title, detail, muted, small, action)
+        let control = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .children(status.map(|status| {
+                div()
+                    .max_w(theme.metrics.cover * 1.5)
+                    .truncate()
+                    .text_size(theme.text(Text::Label))
+                    .text_color(theme.muted_foreground)
+                    .child(status)
+            }))
+            .child(action);
+        self.row(title, control.into_any_element())
     }
 
     /// Starts a link. A service with nothing to type goes straight to the browser; the rest put

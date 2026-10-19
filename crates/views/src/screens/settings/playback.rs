@@ -1,17 +1,65 @@
-use super::*;
+use std::time::Duration;
+
+use gpui::prelude::*;
+use gpui::{AnyElement, App, Context, MouseUpEvent, SharedString, div};
+use i18n::t;
+use music::drm::Origin;
+use music::{Codec, Encoding, Offer, Quality, Transcode};
+use state::{CdmState, Sleep};
+use ui::{ActiveTheme as _, Button, MenuItem, Picker, Scrubber, Switch, Text};
+
+use super::{Group, SettingsView, Slot};
+use crate::shared::confirm::{Confirm, Kind};
+
+const SLEEP: &str = "sleep";
+const STREAM_QUALITIES: &str = "stream-qualities";
+const STREAM_FORMATS: &str = "stream-formats";
+const STREAM_BITRATES: &str = "stream-bitrates";
+const SLEEP_MAX_MINUTES: u64 = 120;
+const SLEEP_MAGNETS: [u64; 4] = [15, 30, 45, 60];
+const SLEEP_MAGNET_WEIGHT: usize = 4;
+const SLEEP_LAST: usize =
+    SLEEP_MAX_MINUTES as usize + SLEEP_MAGNETS.len() * (SLEEP_MAGNET_WEIGHT - 1) + 1;
 
 impl SettingsView {
-    pub(super) fn playback_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn playback_groups(&self, cx: &App) -> Vec<Group> {
+        let capabilities = self.session.read(cx).capabilities();
+        let mut groups = vec![Group::new("settings-group-playing").rows([
+            Slot::Normalisation,
+            Slot::Gapless,
+            Slot::Sleep,
+            Slot::StayAwake,
+        ])];
+        if !capabilities.qualities.is_empty() {
+            groups.push(Group::new("settings-stream-quality").rows([Slot::StreamQuality]));
+        }
+        if capabilities.transcode {
+            groups.push(
+                Group::new("settings-group-streaming")
+                    .rows([Slot::StreamFormat, Slot::StreamBitrate]),
+            );
+        }
+        if self.drm.read(cx).shown(cx) {
+            groups.push(
+                Group::new("settings-group-protected")
+                    .icon("icons/lock.svg")
+                    .rows([Slot::Widevine]),
+            );
+        }
+        groups
+    }
+
+    /// The detail of the Widevine row for its state, which a search reads.
+    pub(super) fn widevine_detail(&self, cx: &App) -> SharedString {
+        let (detail, _) = widevine_copy(self.drm.read(cx).state());
+        i18n::lookup(detail, None)
+    }
+
+    pub(super) fn playback_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.playback.read(cx).normalisation();
 
         self.row(
             t!("settings-normalisation"),
-            t!("settings-normalisation-detail"),
-            muted,
-            small,
             Switch::new("normalisation", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
@@ -21,17 +69,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn gapless_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn gapless_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.playback.read(cx).gapless();
 
         self.row(
             t!("settings-gapless"),
-            t!("settings-gapless-detail"),
-            muted,
-            small,
             Switch::new("gapless", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
@@ -44,10 +86,8 @@ impl SettingsView {
     /// The stream level picker, offering only the levels the signed-in service serves, each with
     /// what it streams as. A saved level the service lacks shows as the one it plays instead, and
     /// a service with one level states it without a picker.
-    pub(super) fn stream_quality_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn stream_quality_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let offers = self.session.read(cx).capabilities().qualities;
         let current = self.playback.read(cx).quality().within(offers);
 
@@ -63,8 +103,8 @@ impl SettingsView {
                 .selected(quality == current)
                 .detail(
                     div()
-                        .text_color(muted)
-                        .text_size(small)
+                        .text_color(theme.muted_foreground)
+                        .text_size(theme.text(Text::Small))
                         .child(encoding_label(offer)),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -75,27 +115,19 @@ impl SettingsView {
         }));
 
         // one level is nothing to choose between, so it is stated rather than offered
-        let (detail, control) = match offers {
-            [only] => (
-                t!("settings-stream-quality-fixed-detail"),
-                div()
-                    .text_color(muted)
-                    .text_size(small)
-                    .child(encoding_label(only))
-                    .into_any_element(),
-            ),
-            _ => (
-                t!("settings-stream-quality-detail"),
-                picker.into_any_element(),
-            ),
+        let control = match offers {
+            [only] => div()
+                .text_color(theme.muted_foreground)
+                .text_size(theme.text(Text::Small))
+                .child(encoding_label(only))
+                .into_any_element(),
+            _ => picker.into_any_element(),
         };
-        self.row(t!("settings-stream-quality"), detail, muted, small, control)
+        self.row(t!("settings-stream-quality"), control)
     }
 
-    pub(super) fn stream_format_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn stream_format_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let transcode = self.playback.read(cx).transcode();
 
         let picker = Picker::new(
@@ -115,8 +147,8 @@ impl SettingsView {
                     .selected(codec == transcode.codec)
                     .detail(
                         div()
-                            .text_color(muted)
-                            .text_size(small)
+                            .text_color(theme.muted_foreground)
+                            .text_size(theme.text(Text::Small))
                             .child(i18n::lookup(codec_detail_key(codec), None)),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -128,19 +160,11 @@ impl SettingsView {
                 }),
         );
 
-        self.row(
-            t!("settings-stream-format"),
-            t!("settings-stream-format-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-stream-format"), picker.into_any_element())
     }
 
-    pub(super) fn stream_bitrate_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn stream_bitrate_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let transcode = self.playback.read(cx).transcode();
 
         let picker = Picker::new(
@@ -158,8 +182,8 @@ impl SettingsView {
                         .selected(bitrate == transcode.bitrate)
                         .detail(
                             div()
-                                .text_color(muted)
-                                .text_size(small)
+                                .text_color(theme.muted_foreground)
+                                .text_size(theme.text(Text::Small))
                                 .child(bitrate_detail(bitrate)),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -177,26 +201,14 @@ impl SettingsView {
                 }),
         );
 
-        self.row(
-            t!("settings-stream-bitrate"),
-            t!("settings-stream-bitrate-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-stream-bitrate"), picker.into_any_element())
     }
 
-    pub(super) fn stay_awake_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn stay_awake_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).stay_awake();
 
         self.row(
             t!("settings-stay-awake"),
-            t!("settings-stay-awake-detail"),
-            muted,
-            small,
             Switch::new("stay-awake", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -206,10 +218,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn sleep_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn sleep_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).sleep_timer();
 
         let picker = Picker::plain(SLEEP, &self.popovers, t!("settings-sleep-configure"))
@@ -236,13 +245,7 @@ impl SettingsView {
                 })),
             );
 
-        self.row(
-            t!("settings-sleep"),
-            t!("settings-sleep-detail"),
-            muted,
-            small,
-            action.into_any_element(),
-        )
+        self.row(t!("settings-sleep"), action.into_any_element())
     }
 
     /// The slider that arms the timer: off at the left, end of track at the right, minutes in
@@ -301,11 +304,9 @@ impl SettingsView {
     /// when one is here and otherwise offers Google's download, so the row says where that
     /// stands. The download is offered by hand whenever Google's copy is not the one in use,
     /// because a browser's copy can be one this host cannot open. The explanation wraps below
-    /// the title rather than truncating, to the height `widevine_height` measured.
-    pub(super) fn widevine_row(&self, cx: &mut Context<Self>) -> Setting {
+    /// the row as the one description the settings keep, since it asks for consent.
+    pub(super) fn widevine_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let state = self.drm.read(cx).state().clone();
         let (detail, note) = widevine_copy(&state);
         let offerable = matches!(
@@ -313,7 +314,6 @@ impl SettingsView {
             CdmState::Declined | CdmState::Missing | CdmState::Ready(Origin::Installed)
         );
         let removable = matches!(state, CdmState::Ready(Origin::Fetched));
-        let title = t!("settings-widevine");
         let detail = i18n::lookup(detail, None);
 
         let action = div()
@@ -321,8 +321,8 @@ impl SettingsView {
             .flex_none()
             .items_center()
             .gap_2()
-            .text_color(muted)
-            .text_size(small)
+            .text_color(theme.muted_foreground)
+            .text_size(theme.text(Text::Label))
             .child(i18n::lookup(note, None))
             .when(offerable, |row| {
                 row.child(
@@ -352,44 +352,19 @@ impl SettingsView {
                 )
             });
 
-        let element = div()
+        div()
             .flex()
             .flex_col()
-            .gap_1()
-            .py_3()
+            .child(self.row(t!("settings-widevine"), action.into_any_element()))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .h(widevine_head(&theme))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .line_height(relative(LEADING))
-                            .child(title.clone()),
-                    )
-                    .child(action),
+                    .px_5()
+                    .pb_5()
+                    .text_color(theme.muted_foreground)
+                    .text_size(theme.text(Text::Label))
+                    .child(detail),
             )
-            .child(
-                div()
-                    .overflow_hidden()
-                    .line_height(relative(LEADING))
-                    .text_color(muted)
-                    .text_size(small)
-                    .child(detail.clone()),
-            )
-            .into_any_element();
-
-        Setting {
-            title,
-            detail,
-            element,
-        }
+            .into_any_element()
     }
 }
 
@@ -416,12 +391,6 @@ pub(super) fn widevine_copy(state: &CdmState) -> (&'static str, &'static str) {
             ("settings-widevine-none", "settings-widevine-missing")
         }
     }
-}
-
-/// How tall the Widevine row's top line stands: the title, or the small button beside it
-/// when that is taller.
-pub(super) fn widevine_head(theme: &Theme) -> Pixels {
-    line(theme, Text::Body).max(theme.metrics.control_small)
 }
 
 pub(super) fn sleep_slot(sleep: Option<Sleep>) -> usize {

@@ -5,7 +5,7 @@ use input::{
     CloseWindow, MinimizeWindow, NavigateBack, NavigateForward, OpenFilter, OpenSearch,
     OpenSettings, ToggleFullscreen, ToggleLyrics, ToggleQueue, ToggleWindowFullscreen, ZoomWindow,
 };
-use router::{Destination, NavigationEvent, Screen, SettingsTab, back, forward, navigate};
+use router::{Destination, NavigationEvent, Screen, SettingsPage, back, forward, navigate};
 use state::{
     ArtistDetail, Detail, GenreDetails, Genres, Home, Io, Library, Network, Playback, Profile,
     Queue, Reconnected, SYSTEM_FONT, Scan, Search, Session, SessionEvent, SessionState, Shelf,
@@ -17,10 +17,10 @@ use ui::{ActiveTheme as _, Dismiss, Entrance, Look, Stillness, Theme, ThemeKind,
 
 use crate::chrome::{TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
 use crate::screens::search::SearchView;
-use crate::screens::settings::SettingsHeader;
 use crate::shared::ambient::{self, Ambient};
 use crate::shared::tracks::{LIBRARY_COLUMNS, album_columns};
 use crate::shells::Shell;
+use crate::shells::settings::SettingsShell;
 use crate::shells::workspace::Workspace;
 use crate::{
     Adaptive, ArtistView, DetailView, EqualizerView, FullscreenView, GenreView, HistoryView,
@@ -46,25 +46,38 @@ struct Screens {
     genres: Entity<Genres>,
     genre: Option<Entity<GenreView>>,
     genre_detail: Option<Entity<GenreDetails>>,
-    settings: Entity<SettingsView>,
-    settings_header: Entity<SettingsHeader>,
-    equalizer: Entity<EqualizerView>,
 }
 
 struct Shells {
     workspace: Entity<Workspace>,
     fullscreen: Entity<FullscreenView>,
+    settings: Entity<SettingsShell>,
 }
 
+/// Which shell fills the window.
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum RootView {
     Workspace,
     Fullscreen,
+    Settings,
+}
+
+impl RootView {
+    /// The shell that draws `destination`.
+    fn of(destination: &Destination) -> Self {
+        match destination {
+            Destination::Fullscreen => Self::Fullscreen,
+            destination if destination.in_settings() => Self::Settings,
+            _ => Self::Workspace,
+        }
+    }
 }
 
 enum Focus {
     Search,
     Workspace,
     Fullscreen,
+    Settings,
 }
 
 pub struct Root {
@@ -80,13 +93,15 @@ pub struct Root {
     toolbar: Option<Entity<Toolbar>>,
     pending: Option<Focus>,
     navigation_transition: Option<Task<()>>,
-    /// The entrance the shell plays as the window moves into or out of fullscreen.
+    /// The entrance the shell plays as the window moves from one shell to another.
     shell_entrance: Option<Entrance>,
     /// The OS fullscreen move the next render owes the fullscreen view, true as it opens and
     /// false as it closes.
     os_follow: Option<bool>,
     /// Whether the window is in OS fullscreen because opening the fullscreen view put it there.
     os_entered: bool,
+    /// The settings page that was on show last, where settings opens again.
+    last_settings: Option<Destination>,
     screens: Screens,
     adaptive: Entity<Adaptive>,
     background: Option<gpui::WindowBackgroundAppearance>,
@@ -189,9 +204,10 @@ impl Root {
         let search = cx.new(|cx| SearchView::new(queries, genres.clone(), playback.clone(), cx));
 
         let settings = cx.new(|cx| SettingsView::new(session.clone(), playback.clone(), cx));
-        let settings_header = cx.new(|cx| SettingsHeader::new(settings.clone(), cx));
         let equalizer = Sonora::global(cx).equalizer.clone();
         let equalizer = cx.new(|cx| EqualizerView::new(equalizer, window, cx));
+        let settings_shell =
+            cx.new(|cx| SettingsShell::new(settings, equalizer, playback.clone(), cx));
 
         let song_detail = cx.new(|cx| SongDetail::new(session.clone(), io.clone(), cx));
         let song = cx.new(|cx| SongView::new(song_detail.clone(), playback.clone(), cx));
@@ -286,6 +302,7 @@ impl Root {
             shells: Shells {
                 workspace: workspace.clone(),
                 fullscreen,
+                settings: settings_shell,
             },
             view: RootView::Workspace,
             signing_in: false,
@@ -295,6 +312,7 @@ impl Root {
             shell_entrance: None,
             os_follow: None,
             os_entered: false,
+            last_settings: None,
             screens: Screens {
                 home,
                 history,
@@ -314,9 +332,6 @@ impl Root {
                 genres,
                 genre: None,
                 genre_detail: None,
-                settings,
-                settings_header,
-                equalizer,
             },
             adaptive,
             ambient,
@@ -475,14 +490,18 @@ impl Root {
 
     fn toggle_fullscreen(&mut self, cx: &mut Context<Self>) {
         match self.view {
-            RootView::Workspace => navigate(Destination::Fullscreen, cx),
+            RootView::Workspace | RootView::Settings => navigate(Destination::Fullscreen, cx),
             RootView::Fullscreen => back(cx),
         }
     }
 
+    /// Escape that nothing on the page took: it leaves fullscreen, or closes settings on where
+    /// the user was before opening them.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.view, RootView::Fullscreen) {
-            back(cx);
+        match self.view {
+            RootView::Fullscreen => back(cx),
+            RootView::Settings => router::close_settings(cx),
+            RootView::Workspace => {}
         }
     }
 
@@ -492,29 +511,49 @@ impl Root {
         match self.view {
             RootView::Workspace => self.shells.workspace.read(cx).title_bar(content, cx),
             RootView::Fullscreen => self.shells.fullscreen.read(cx).title_bar(content, cx),
+            RootView::Settings => self.shells.settings.read(cx).title_bar(content, cx),
         }
     }
 
+    /// Opens settings on the page that was on show last, or on Accounts the first time.
     fn open_settings(&mut self, cx: &mut Context<Self>) {
-        navigate(Destination::Settings(SettingsTab::General), cx);
-        self.pending = Some(Focus::Workspace);
+        if matches!(self.view, RootView::Settings) {
+            return;
+        }
+        let page = self
+            .last_settings
+            .clone()
+            .unwrap_or(Destination::Settings(SettingsPage::Accounts));
+        navigate(page, cx);
+        self.pending = Some(Focus::Settings);
         cx.notify();
     }
 
+    /// Moves to `destination`. A move to another shell plays the entrance over the whole
+    /// window, a move within the workspace or within settings plays it over the page, and
+    /// reduced motion skips both.
     fn transition_to(&mut self, destination: Destination, cx: &mut Context<Self>) {
         self.navigation_transition = None;
         self.shell_entrance = None;
 
-        let fullscreen = matches!(destination, Destination::Fullscreen);
-        let was_fullscreen = matches!(self.view, RootView::Fullscreen);
-        if fullscreen || was_fullscreen || cx.reduce_motion() {
+        let next = RootView::of(&destination);
+        let moving = next != self.view;
+        if moving || next == RootView::Fullscreen || cx.reduce_motion() {
             self.shells
                 .workspace
                 .update(cx, |workspace, cx| workspace.finish_transition(cx));
             self.show(destination, cx);
-            if fullscreen != was_fullscreen && !cx.reduce_motion() {
+            if moving && !cx.reduce_motion() {
                 self.reveal_shell(cx);
             }
+            return;
+        }
+
+        if next == RootView::Settings {
+            self.show(destination, cx);
+            self.shells
+                .settings
+                .update(cx, |settings, cx| settings.reveal_page(cx));
             return;
         }
 
@@ -535,7 +574,7 @@ impl Root {
         }));
     }
 
-    /// Plays the page entrance over the whole shell, for the move into and out of fullscreen.
+    /// Plays the page entrance over the whole shell, for a move from one shell to another.
     fn reveal_shell(&mut self, cx: &mut Context<Self>) {
         let entrance = Entrance::start();
         self.shell_entrance = Some(entrance);
@@ -600,19 +639,15 @@ impl Root {
             self.os_follow = Some(opening);
         }
         // Leaving settings is what clears the note about the last scan, so every move tells it.
-        let settings = matches!(
-            destination,
-            Destination::Settings(_) | Destination::Equalizer
-        );
+        let settings = destination.in_settings();
         Scan::global(cx).update(cx, |scan, cx| scan.viewing_settings(settings, cx));
         let home = matches!(destination, Destination::Home);
         self.screens
             .home
             .update(cx, |view, cx| view.set_visible(home, cx));
-        let equalizer = matches!(destination, Destination::Equalizer);
-        self.screens
-            .equalizer
-            .update(cx, |view, cx| view.set_visible(equalizer, cx));
+        self.shells
+            .settings
+            .update(cx, |shell, cx| shell.show(&destination, cx));
         if let Destination::Fullscreen = destination {
             self.view = RootView::Fullscreen;
             self.announce_fullscreen(true, cx);
@@ -620,18 +655,25 @@ impl Root {
             cx.notify();
             return;
         }
-        self.view = RootView::Workspace;
         self.announce_fullscreen(false, cx);
+        if settings {
+            self.view = RootView::Settings;
+            self.toolbar = None;
+            self.last_settings = Some(destination);
+            self.pending = Some(Focus::Settings);
+            cx.notify();
+            return;
+        }
+        self.view = RootView::Workspace;
         self.pending = Some(match destination {
             Destination::Search => Focus::Search,
             _ => Focus::Workspace,
         });
 
         let mut toolbar = None;
-        let mut header = None;
 
         let content: AnyView = match destination {
-            Destination::Fullscreen => return,
+            Destination::Fullscreen | Destination::Settings(_) | Destination::Equalizer => return,
             Destination::Home => self.screens.home.clone().into(),
             Destination::History => {
                 let history = self.screens.history.clone();
@@ -690,21 +732,13 @@ impl Root {
                 genre.into()
             }
             Destination::Search => self.screens.search.clone().into(),
-            Destination::Equalizer => self.screens.equalizer.clone().into(),
-            Destination::Settings(tab) => {
-                self.screens
-                    .settings
-                    .update(cx, |settings, cx| settings.select(tab, cx));
-                header = Some(self.screens.settings_header.clone().into());
-                self.screens.settings.clone().into()
-            }
         };
 
         self.toolbar = toolbar;
 
-        self.shells.workspace.update(cx, |workspace, cx| {
-            workspace.set_content(content, header, cx)
-        });
+        self.shells
+            .workspace
+            .update(cx, |workspace, cx| workspace.set_content(content, cx));
         cx.notify();
     }
 }
@@ -789,6 +823,10 @@ impl Render for Root {
                 .shells
                 .fullscreen
                 .update(cx, |fullscreen, cx| fullscreen.focus(window, cx)),
+            Some(Focus::Settings) => self
+                .shells
+                .settings
+                .update(cx, |settings, cx| settings.focus(window, cx)),
             None => {}
         }
         self.follow_os_fullscreen(window, cx);
@@ -875,14 +913,15 @@ impl Render for Root {
         // The shell enters the way a page enters the workspace. An opaque window fades it
         // under a scrim of the page colour, which leaves the workspace's cached views alone,
         // and a see-through one fades the shell itself. The scrim reaches the bottom corners
-        // of the window, so it rounds them. Neither shell takes the veil. The renderer drops a
-        // backdrop inside a filtered layer, so fullscreen's frosted controls and the settings
-        // header's haze would show flat until the veil lifted.
+        // of the window, so it rounds them. No shell takes the veil. The renderer drops a
+        // backdrop inside a filtered layer, so fullscreen's frosted controls would show flat
+        // until the veil lifted.
         let hidden = self.shell_hidden(window, cx);
         let dissolving = theme.transparent;
         let shell = match self.view {
             RootView::Workspace => self.shells.workspace.clone().into_any_element(),
             RootView::Fullscreen => self.shells.fullscreen.clone().into_any_element(),
+            RootView::Settings => self.shells.settings.clone().into_any_element(),
         };
         let shell = div()
             .relative()

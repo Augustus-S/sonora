@@ -30,16 +30,7 @@ pub(crate) fn sound_picker(
         .map(|curve| Preset::matching(&curve));
     let on_scratch = scratch == Some(playing);
     let custom = matches!(shaped, Some(None));
-
-    let current = match (on_scratch, shaped.flatten()) {
-        (true, Some(preset)) => i18n::lookup(preset_key(preset), None),
-        (true, None) => t!("settings-equalizer-custom"),
-        (false, _) => settings
-            .equalizer_profiles()
-            .nth(playing)
-            .map(|name| SharedString::from(name.to_owned()))
-            .unwrap_or_default(),
-    };
+    let current = sound_name(settings);
 
     let custom_item = custom.then(|| {
         let equalizer = equalizer.clone();
@@ -121,5 +112,24 @@ pub(crate) fn preset_key(preset: Preset) -> &'static str {
         Preset::Electronic => "settings-equalizer-electronic",
         Preset::Acoustic => "settings-equalizer-acoustic",
         Preset::Loudness => "settings-equalizer-loudness",
+    }
+}
+
+/// The name of the sound the equalizer plays: the preset the unnamed profile matches, Custom
+/// once that profile was edited away from every preset, or the playing profile's own name.
+pub(crate) fn sound_name(settings: &AppSettings) -> SharedString {
+    let playing = settings.equalizer_profile();
+    let scratch = settings.equalizer_scratch();
+    let shaped = scratch
+        .and_then(|index| settings.equalizer_profile_curve(index))
+        .map(|curve| Preset::matching(&curve));
+    match (scratch == Some(playing), shaped.flatten()) {
+        (true, Some(preset)) => i18n::lookup(preset_key(preset), None),
+        (true, None) => t!("settings-equalizer-custom"),
+        (false, _) => settings
+            .equalizer_profiles()
+            .nth(playing)
+            .map(|name| SharedString::from(name.to_owned()))
+            .unwrap_or_default(),
     }
 }

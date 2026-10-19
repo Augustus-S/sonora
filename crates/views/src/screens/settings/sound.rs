@@ -1,30 +1,55 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, App, Context, MouseButton, Pixels, SharedString, div, px, svg};
+use i18n::t;
+use router::{Destination, navigate};
+use state::Outputs;
+use ui::{ActiveTheme as _, Button, Switch, Text};
+
+use super::{Group, SettingsView, Slot};
+use crate::shared::equalizer::sound_name;
+
+/// The chevron at the end of the equalizer row, as large as a button's icon.
+const CHEVRON: Pixels = px(16.);
 
 impl SettingsView {
+    pub(super) fn sound_groups(&self, cx: &App) -> Vec<Group> {
+        let failed = self.outputs.read(cx).failure().is_some();
+        // with nothing open there is no rate or buffer to show
+        let output = match failed {
+            true => vec![Slot::OutputDevice, Slot::OutputFailure],
+            false => vec![Slot::OutputDevice, Slot::SampleRate, Slot::Buffer],
+        };
+        vec![
+            Group::new("settings-group-output").rows(output),
+            Group::new("settings-equalizer")
+                .icon("icons/sliders-horizontal.svg")
+                .rows([Slot::Equalizer]),
+        ]
+    }
+
     /// The device picker, whose "System default" follows whatever the system plays on.
-    pub(super) fn output_device_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
+    pub(super) fn output_device_row(&self) -> AnyElement {
         self.row(
             t!("settings-output-device"),
-            t!("settings-output-device-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
             self.output_picker.clone().into_any_element(),
         )
     }
 
     /// Why nothing plays: the device to play on would not open. It stands in for the rate and
     /// buffer rows.
-    pub(super) fn output_failure_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn output_failure_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let (title, detail) = self.output_failure(cx);
 
         self.row(
             title,
-            detail,
-            theme.muted_foreground,
-            theme.text(Text::Small),
-            div().into_any_element(),
+            div()
+                .max_w(theme.metrics.cover * 2.)
+                .truncate()
+                .text_size(theme.text(Text::Label))
+                .text_color(theme.muted_foreground)
+                .child(detail)
+                .into_any_element(),
         )
     }
 
@@ -44,8 +69,7 @@ impl SettingsView {
     /// The rate the device runs at. Where Sonora can open the device at other rates it steps
     /// through them, otherwise it offers a way into the system's own settings where there is one.
     /// The row keeps its shape while the stream reopens, showing the rate it reopens at.
-    pub(super) fn sample_rate_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
+    pub(super) fn sample_rate_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let outputs = self.outputs.read(cx);
         let device = outputs.current();
         let current = outputs.rate(cx);
@@ -76,9 +100,6 @@ impl SettingsView {
 
         self.row(
             t!("settings-sample-rate"),
-            t!("settings-sample-rate-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
             div()
                 .flex()
                 .items_center()
@@ -104,8 +125,7 @@ impl SettingsView {
     /// The buffer Sonora asks the device for, in frames, with the buffers the device allows to
     /// step through. The row keeps its shape while the stream reopens, showing the buffer it
     /// reopens with.
-    pub(super) fn buffer_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
+    pub(super) fn buffer_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let outputs = self.outputs.read(cx);
         let current = outputs.buffer(cx);
         let buffers = outputs
@@ -122,9 +142,6 @@ impl SettingsView {
 
         self.row(
             t!("settings-buffer"),
-            t!("settings-buffer-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
             div()
                 .flex()
                 .items_center()
@@ -137,58 +154,56 @@ impl SettingsView {
         )
     }
 
-    /// The equalizer switch, with a button beside it that opens the equalizer screen.
-    pub(super) fn equalizer_row(&self, cx: &mut Context<Self>) -> Setting {
+    /// The way into the equalizer: its name, the sound it plays, its switch and a chevron. The
+    /// whole row opens the equalizer page, and the switch turns it on or off without leaving.
+    pub(super) fn equalizer_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let on = self.equalizer.read(cx).enabled();
+        let sound = sound_name(self.settings.read(cx));
 
-        self.row(
-            t!("settings-equalizer"),
-            t!("settings-equalizer-detail"),
-            muted,
-            small,
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    Button::new("open-equalizer")
-                        .label(t!("settings-equalizer-editor"))
-                        .small()
-                        .outline()
-                        .on_click(|_, _, cx| navigate(Destination::Equalizer, cx)),
-                )
-                .child(
-                    Switch::new("equalizer", on).on_click(cx.listener(move |this, _, _, cx| {
-                        this.equalizer
-                            .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx));
-                    })),
-                )
-                .into_any_element(),
-        )
-    }
-
-    /// The sound that plays, picked from the built-in presets, Custom and the named profiles.
-    pub(super) fn equalizer_preset_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let picker = sound_picker(
-            EQUALIZER_PRESETS,
-            &self.popovers,
-            &self.equalizer,
-            &self.settings,
-            cx,
-        )
-        .width(Picker::REGULAR);
-
-        self.row(
-            t!("settings-equalizer-preset"),
-            t!("settings-equalizer-preset-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
-            picker.into_any_element(),
-        )
+        div()
+            .id("open-equalizer")
+            .flex()
+            .items_center()
+            .gap_3()
+            .h(theme.metrics.list_row)
+            .px_5()
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.secondary_hover))
+            .on_click(|_, _, cx| navigate(Destination::Equalizer, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(t!("settings-equalizer")),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(theme.text(Text::Label))
+                    .text_color(theme.muted_foreground)
+                    .child(sound),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Switch::new("equalizer", on).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.equalizer
+                                .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx));
+                        },
+                    ))),
+            )
+            .child(
+                svg()
+                    .path(icons::path("icons/chevron-right.svg"))
+                    .size(CHEVRON)
+                    .flex_none()
+                    .text_color(theme.muted_foreground),
+            )
+            .into_any_element()
     }
 }
 

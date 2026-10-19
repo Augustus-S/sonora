@@ -22,6 +22,11 @@ impl Popovers {
         self.open.set(None);
     }
 
+    /// Whether any popover of the group is open.
+    pub fn any(&self) -> bool {
+        self.open.get().is_some()
+    }
+
     pub fn shows(&self, key: &'static str) -> bool {
         self.open.get() == Some(key)
     }

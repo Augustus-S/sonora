@@ -10,6 +10,7 @@ pub(crate) mod equalizer;
 pub(crate) mod hero;
 pub(crate) mod local;
 pub(crate) mod menus;
+pub(crate) mod nav;
 pub(crate) mod page;
 pub(crate) mod picks;
 pub(crate) mod pins;

@@ -33,6 +33,7 @@ pub struct Button {
     base: Stateful<Div>,
     label: Option<SharedString>,
     icon: Option<SharedString>,
+    detail: Option<SharedString>,
     trailing: Option<SharedString>,
     variant: Variant,
     small: bool,
@@ -57,6 +58,7 @@ impl Button {
             base: div().id(id),
             label: None,
             icon: None,
+            detail: None,
             trailing: None,
             variant: Variant::Ghost,
             small: false,
@@ -82,6 +84,13 @@ impl Button {
 
     pub fn icon(mut self, path: impl Into<SharedString>) -> Self {
         self.icon = Some(path.into());
+        self
+    }
+
+    /// A current value shown muted after the label and before the trailing icon, the way a row
+    /// that opens a page of its own says what is chosen there.
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
         self
     }
 
@@ -229,6 +238,7 @@ impl RenderOnce for Button {
             mut base,
             label,
             icon,
+            detail,
             trailing,
             variant,
             small,
@@ -372,8 +382,19 @@ impl RenderOnce for Button {
                     div()
                         .min_w_0()
                         .truncate()
-                        .when(trailing.is_some(), |this| this.flex_1())
+                        .when(trailing.is_some() || detail.is_some(), |this| this.flex_1())
                         .child(label),
+                )
+            })
+            .when_some(detail, |this, detail| {
+                this.child(
+                    div()
+                        .flex_none()
+                        .max_w(relative(0.5))
+                        .truncate()
+                        .text_size(theme.text(Text::Label))
+                        .text_color(theme.muted_foreground)
+                        .child(detail),
                 )
             })
             .when_some(trailing, |this, path| {

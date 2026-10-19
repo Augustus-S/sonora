@@ -22,7 +22,7 @@ use ui::{
 use crate::chrome::{Aside, TitleBarOptions};
 use crate::shared::menus::ItemMenu;
 use crate::shared::transport::{NOTCH, like, moved, percent, transport, volume_icon};
-use crate::shared::veil::{Edge, veil};
+use crate::shared::veil::veil;
 use crate::shared::visualizer::VisualizerDrive;
 use crate::shared::{self, ambient};
 use crate::shells::Shell;
@@ -1210,14 +1210,7 @@ impl Render for FullscreenView {
                         .bottom_0()
                         .h(band)
                         .opacity(1. - hide)
-                        .child(veil(
-                            Edge::Bottom,
-                            band,
-                            VEIL_BLUR,
-                            theme.background,
-                            corner,
-                            window,
-                        )),
+                        .child(veil(band, VEIL_BLUR, theme.background, corner, window)),
                 )
             })
             .child(

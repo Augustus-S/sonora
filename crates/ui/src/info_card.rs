@@ -14,6 +14,8 @@ pub struct InfoCard {
     borderless: bool,
     stretch: bool,
     plain: bool,
+    untitled: bool,
+    flush: bool,
 }
 
 impl InfoCard {
@@ -25,6 +27,8 @@ impl InfoCard {
             borderless: false,
             stretch: false,
             plain: false,
+            untitled: false,
+            flush: false,
         }
     }
 
@@ -42,6 +46,19 @@ impl InfoCard {
     /// them, for a page that separates its parts by space alone.
     pub fn plain(mut self) -> Self {
         self.plain = true;
+        self
+    }
+
+    /// Leaves the eyebrow title out, for a card whose heading sits outside it or that needs none.
+    pub fn untitled(mut self) -> Self {
+        self.untitled = true;
+        self
+    }
+
+    /// Drops the inset and the gap between children for a thin band above and below, so rows that
+    /// pad themselves run edge to edge and read as one surface.
+    pub fn flush(mut self) -> Self {
+        self.flush = true;
         self
     }
 }
@@ -73,6 +90,8 @@ impl RenderOnce for InfoCard {
             borderless,
             stretch,
             plain,
+            untitled,
+            flush,
         } = self;
 
         let theme = *cx.theme();
@@ -84,16 +103,17 @@ impl RenderOnce for InfoCard {
             .min_w_0()
             .overflow_hidden()
             .when(stretch, |this| this.h_full())
-            .gap_4()
+            .when(!flush, |this| this.gap_4())
+            .when(flush, |this| this.py_1())
             .when(!plain, |this| {
-                this.p_5()
+                this.when(!flush, |this| this.p_5())
                     .rounded(theme.radius)
                     .bg(theme.secondary.opacity(0.45))
                     .when(!borderless, |this| {
                         this.border_1().border_color(theme.border)
                     })
             })
-            .child(eyebrow(title, cx))
+            .when(!untitled, |this| this.child(eyebrow(title, cx)))
             .children(children);
 
         card.style().refine(&overrides);

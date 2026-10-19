@@ -1,6 +1,50 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, Context, SharedString, div, px, svg};
+use i18n::t;
+use state::SYSTEM_FONT;
+use ui::{
+    ActiveTheme as _, Button, Look, MAX_FONT, MAX_TRANSPARENCY, MIN_FONT, MenuItem, Picker,
+    Rounding, Scrubber, Switch, Theme, ThemeKind,
+};
+
+use super::{Group, SettingsView, Slot, TYPEFACES};
+use crate::shared::popups::matches_query;
+
+const THEMES: &str = "themes";
+const PACKS: &str = "packs";
+const CORNERS: &str = "corners";
+const TYPEFACE_LIMIT: usize = 200;
+const TYPEFACE_LEAD: usize = 2;
+/// How many faces are previewed before a row has been measured.
+const TYPEFACE_GUESS: usize = 24;
+/// How many faces are loaded a frame.
+const TYPEFACE_BATCH: usize = 3;
 
 impl SettingsView {
+    pub(super) fn appearance_groups(&self) -> Vec<Group> {
+        vec![
+            Group::new("settings-theme").rows([Slot::Theme, Slot::Adaptive]),
+            Group::new("settings-icons").rows([Slot::Icons]),
+            Group::new("settings-corners").rows([Slot::Corners]),
+            Group::new("settings-group-text").rows([Slot::Typeface, Slot::Font]),
+            Group::new("settings-group-window").rows(
+                [Slot::Opacity]
+                    .into_iter()
+                    .chain(ui::WINDOW_BLUR.then_some(Slot::WindowBlur))
+                    .chain([Slot::Blur]),
+            ),
+        ]
+    }
+
+    /// The look the theme is drawn from now, with the tint the adaptive theme put on it.
+    pub(super) fn look(&self, cx: &Context<Self>) -> Look {
+        Look {
+            tint: cx.theme().tint,
+            tint_secondary: cx.theme().tint_secondary,
+            ..self.settings.read(cx).look()
+        }
+    }
+
     pub(super) fn typeface_entries(&self) -> Vec<SharedString> {
         let asked = self.typefaces.query();
         let installed = self.installed.as_deref().unwrap_or_default();
@@ -18,10 +62,7 @@ impl SettingsView {
             .collect()
     }
 
-    pub(super) fn typeface_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn typeface_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).font().to_owned();
         let bundled = chosen == SYSTEM_FONT;
         let current = match bundled {
@@ -161,19 +202,10 @@ impl SettingsView {
             cx,
         );
 
-        self.row(
-            t!("settings-typeface"),
-            t!("settings-typeface-detail"),
-            muted,
-            small,
-            keys.into_any_element(),
-        )
+        self.row(t!("settings-typeface"), keys.into_any_element())
     }
 
-    pub(super) fn corners_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn corners_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
 
@@ -192,30 +224,18 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
-            t!("settings-corners"),
-            t!("settings-corners-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-corners"), picker.into_any_element())
     }
 
     /// Turns every frosted treatment in the app on or off at once: the menus, the fields, the
     /// floating panels and the bands the chrome lays over the page. A backdrop blur is the
     /// priciest thing the renderer does per frame, which is the whole reason it is a choice.
-    pub(super) fn blur_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn blur_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
 
         self.row(
             t!("settings-blur"),
-            t!("settings-blur-detail"),
-            muted,
-            small,
             Switch::new("blur", look.blur)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let blur = !look.blur;
@@ -230,19 +250,13 @@ impl SettingsView {
 
     /// Asks the platform to blur the desktop behind a see-through window. It needs something to
     /// show through, so the switch is off and disabled while the window is opaque.
-    pub(super) fn blur_window_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn blur_window_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
         let opaque = !look.transparent;
 
         self.row(
             t!("settings-blur-window"),
-            t!("settings-blur-window-detail"),
-            muted,
-            small,
             Switch::new("blur-window", look.blur_window && !opaque)
                 .disabled(opaque)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -263,10 +277,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn font_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn font_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
 
@@ -302,19 +313,10 @@ impl SettingsView {
             .child(div().child(t!("settings-font-value", size = look.font.round() as i64)))
             .child(step("font-larger", "+", 1.));
 
-        self.row(
-            t!("settings-font"),
-            t!("settings-font-detail"),
-            muted,
-            small,
-            actions.into_any_element(),
-        )
+        self.row(t!("settings-font"), actions.into_any_element())
     }
 
-    pub(super) fn theme_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn theme_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look(cx);
         let (selected, adaptive, custom) = {
             let settings = self.settings.read(cx);
@@ -417,19 +419,11 @@ impl SettingsView {
             )
             .child(picker);
 
-        self.row(
-            t!("settings-theme"),
-            t!("settings-theme-detail"),
-            muted,
-            small,
-            actions.into_any_element(),
-        )
+        self.row(t!("settings-theme"), actions.into_any_element())
     }
 
-    pub(super) fn icons_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn icons_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let chosen = self.settings.read(cx).icons().to_owned();
         let current = icons::pack(&chosen).unwrap_or_else(icons::active);
 
@@ -438,7 +432,7 @@ impl SettingsView {
             .items(icons::packs().map(|pack| {
                 MenuItem::new(pack.id, pack.title())
                     .selected(pack.id == current.id)
-                    .detail(samples(pack, muted))
+                    .detail(samples(pack, theme.muted_foreground))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings
                             .update(cx, |settings, cx| settings.set_icons(pack.id, cx));
@@ -446,19 +440,11 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
-            t!("settings-icons"),
-            t!("settings-icons-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-icons"), picker.into_any_element())
     }
 
-    pub(super) fn opacity_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn opacity_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
         let look = self.look(cx);
         let overrides = self.settings.read(cx).theme_overrides();
         let transparency = match look.transparent {
@@ -504,19 +490,10 @@ impl SettingsView {
                     .child(t!("settings-opacity-value", percent = percent)),
             );
 
-        self.row(
-            t!("settings-opacity"),
-            t!("settings-opacity-detail"),
-            muted,
-            small,
-            control.into_any_element(),
-        )
+        self.row(t!("settings-opacity"), control.into_any_element())
     }
 
-    pub(super) fn adaptive_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn adaptive_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let (on, neutral) = {
             let settings = self.settings.read(cx);
             let theme = settings.theme();
@@ -529,11 +506,9 @@ impl SettingsView {
         };
         let look = self.look(cx);
 
-        self.row(
+        self.hinted(
             t!("settings-adaptive"),
-            t!("settings-adaptive-detail"),
-            muted,
-            small,
+            "settings-adaptive-detail",
             Switch::new("adaptive-theme", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let adaptive = !on;

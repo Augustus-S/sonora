@@ -1,23 +1,24 @@
 use std::rc::Rc;
 
 use ui::{
-    ActiveTheme as _, Button, Card, Deck, DraggedPin, Edge, MenuItem, Panel, Picker, Pin,
-    Pinnable as _, Popup, SNUG, Scroller, Shield, Side, Spot, Tabs, Text, Vacancy, drop_gap,
-    drop_marker,
+    ActiveTheme as _, Card, Deck, DraggedPin, Edge, MenuItem, Panel, Picker, Pin, Pinnable as _,
+    Popup, SNUG, Scroller, Shield, Side, Spot, Tabs, Text, Vacancy, drop_gap, drop_marker,
 };
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, DragMoveEvent, ElementId, Entity, Hsla, MouseButton, MouseDownEvent,
+    AnyElement, App, Context, DragMoveEvent, ElementId, Entity, MouseButton, MouseDownEvent,
     Pixels, Point, Render, ScrollHandle, svg,
 };
 use gpui::{Window, div, px};
+use input::OpenSettings;
 use router::{
-    Destination, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsTab, navigate,
+    Destination, LibraryTab, NavEntry, Navigation, NavigationEvent, SettingsPage, navigate,
 };
 use state::{AppSettings, Library, Origin, PinSort, Pins, Playback, Session, Shelf, Sonora};
 
 use crate::shared::menus::{ItemMenu, item_menu};
+use crate::shared::nav::nav_row;
 
 /// The one drag list the pinned section keeps, so a pin dropped anywhere in it lands in order.
 const PINS: &str = "sidebar-pins";
@@ -47,7 +48,7 @@ const NAV: [(Option<NavEntry>, &str, Destination); 6] = [
     (
         None,
         "icons/settings.svg",
-        Destination::Settings(SettingsTab::General),
+        Destination::Settings(SettingsPage::Accounts),
     ),
 ];
 
@@ -120,7 +121,7 @@ impl SidebarLeft {
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| ui::Scrollbar::inset().watching(me));
         let scrollbar = cx.new(|_| ui::Scrollbar::new(ScrollHandle::new()).watching(me));
-        let width = px(settings.read(cx).sidebar_width()).clamp(MIN_WIDTH, MAX_WIDTH);
+        let width = sidebar_width(settings.read(cx));
         let open = settings.read(cx).sidebar_open();
         let pinned_open = settings.read(cx).sidebar_pinned_open();
         let trail = router::trail(cx);
@@ -557,6 +558,10 @@ impl SidebarLeft {
                     this.flip(group);
                     cx.notify();
                 })),
+            // Settings opens where it was last left, which only the root knows.
+            None if destination.in_settings() => row
+                .when(active, |button| button.bg(accent))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
             None => row
                 .when(active, |button| button.bg(accent))
                 .on_click(move |_, _, cx| navigate(destination.clone(), cx)),
@@ -711,6 +716,11 @@ impl Render for SidebarLeft {
     }
 }
 
+/// How wide the left sidebar stands from its saved width, which the settings rail matches.
+pub(crate) fn sidebar_width(settings: &AppSettings) -> Pixels {
+    px(settings.sidebar_width()).clamp(MIN_WIDTH, MAX_WIDTH)
+}
+
 /// The kind of an entry, behind a dimmed pin when it is one of the pinned ones.
 fn caption(kind: &'static str, marked: bool, cx: &App) -> impl IntoElement {
     let theme = *cx.theme();
@@ -782,20 +792,9 @@ fn chevron(open: bool) -> &'static str {
     }
 }
 
-fn nav_row(id: impl Into<ElementId>, key: &'static str, tint: Hsla, accent: Hsla) -> Button {
-    Button::new(id)
-        .ghost()
-        .label(i18n::lookup(key, None))
-        .tint(tint)
-        .gap_2p5()
-        .justify_start()
-        .hover(move |style| style.bg(accent))
-        .active(move |style| style.bg(accent))
-}
-
 #[cfg(test)]
 mod tests {
-    use router::{Destination, LibraryTab, SettingsTab};
+    use router::{Destination, LibraryTab, SettingsPage};
 
     use super::expanded;
 
@@ -810,7 +809,7 @@ mod tests {
             (false, true)
         );
         assert_eq!(
-            expanded(&Destination::Settings(SettingsTab::General)),
+            expanded(&Destination::Settings(SettingsPage::Accounts)),
             (false, false)
         );
     }

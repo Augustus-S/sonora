@@ -489,6 +489,42 @@ month-12 = Dec
 
 # settings
 settings-search = Search settings
+settings-close = Close settings
+settings-search-results = Results
+# where a search result lives: a drill-in page under the page it opens from
+settings-result-place = { $parent } › { $page }
+settings-page-accounts = Accounts
+settings-page-appearance = Appearance
+settings-page-now-playing = Now playing
+settings-page-lyrics = Lyrics
+settings-page-playback = Playback
+settings-page-sound = Sound
+settings-page-discord = Discord
+settings-page-scrobbling = Scrobbling
+settings-page-general = General
+settings-page-about = About
+settings-page-lyrics-sources = Lyrics sources
+settings-page-music-folders = Music folders
+settings-group-services = Services
+settings-group-local-files = Local files
+settings-group-background = Background
+settings-group-controls = Controls
+settings-group-display = Display
+settings-group-sources = Sources
+settings-group-lyrics-order = Ask in this order
+settings-group-playing = Playing
+settings-group-protected = Protected playback
+settings-group-output = Output
+settings-group-status = Status
+settings-group-startup = Startup
+settings-group-context-menus = Context menus
+settings-lyrics-sources = Lyrics sources
+settings-local-folder-count = { $count ->
+    [one] { $count } folder
+   *[other] { $count } folders
+    }
+settings-local-folder-none = No folders yet
+settings-license-short = GPL-3.0 or later
 settings-tab-general = General
 settings-tab-appearance = Appearance
 settings-tab-playback = Playback

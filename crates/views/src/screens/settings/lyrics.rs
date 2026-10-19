@@ -1,45 +1,78 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, Context, DragMoveEvent, Pixels, Point, Render, SharedString, Window, div};
+use i18n::t;
+use music::WritingSystem;
+use router::{Destination, SettingsPage, navigate};
+use state::{AppSettings, LYRICS_SOURCES};
+use ui::{
+    ActiveTheme as _, Button, Ghost, MAX_LYRICS_SCALE, MIN_LYRICS_SCALE, MenuItem, Picker, Switch,
+    drop_gap, drop_marker, tabular,
+};
+
+use super::rows::drill;
+use super::{Group, SettingsView, Slot};
+
+/// A lyrics source being dragged within the priority list. It draws as a chip under the cursor
+/// and changes the saved order only when dropped.
+#[derive(Clone)]
+pub(super) struct DraggedSource {
+    provider: String,
+    label: SharedString,
+    /// Where the cursor grabbed the entry, so the chip starts under it.
+    position: Point<Pixels>,
+}
 
 impl SettingsView {
-    pub(super) fn panel_lyrics_size_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn lyrics_groups(&self) -> Vec<Group> {
+        vec![
+            Group::new("settings-group-display").rows([
+                Slot::Karaoke,
+                Slot::BlurLyrics,
+                Slot::Romanized,
+                Slot::PanelLyricsSize,
+                Slot::FullscreenLyricsSize,
+            ]),
+            Group::new("settings-group-sources").rows([Slot::LyricsSources, Slot::LyricsForLocal]),
+        ]
+    }
+
+    pub(super) fn lyrics_sources_groups(&self) -> Vec<Group> {
+        vec![Group::new("settings-group-lyrics-order").rows([Slot::LyricsPriority])]
+    }
+
+    pub(super) fn panel_lyrics_size_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let scale = self.settings.read(cx).panel_lyrics_scale();
 
         self.lyrics_size_row(
             "panel-lyrics-size",
             "settings-panel-lyrics-size",
-            "settings-panel-lyrics-size-detail",
             scale,
             |settings, scale, cx| settings.set_panel_lyrics_scale(scale, cx),
             cx,
         )
     }
 
-    pub(super) fn fullscreen_lyrics_size_row(&self, cx: &mut Context<Self>) -> Setting {
+    pub(super) fn fullscreen_lyrics_size_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let scale = self.settings.read(cx).fullscreen_lyrics_scale();
 
         self.lyrics_size_row(
             "fullscreen-lyrics-size",
             "settings-fullscreen-lyrics-size",
-            "settings-fullscreen-lyrics-size-detail",
             scale,
             |settings, scale, cx| settings.set_fullscreen_lyrics_scale(scale, cx),
             cx,
         )
     }
 
+    /// A lyrics text size, stepped a tenth at a time between its limits.
     pub(super) fn lyrics_size_row(
         &self,
         id: &'static str,
         title: &'static str,
-        detail: &'static str,
         scale: f32,
         apply: fn(&mut AppSettings, f32, &mut Context<AppSettings>),
         cx: &mut Context<Self>,
-    ) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-
+    ) -> AnyElement {
         let step = move |suffix: &'static str, label: &'static str, delta: f32| {
             let wanted = (scale + delta).clamp(MIN_LYRICS_SCALE, MAX_LYRICS_SCALE);
 
@@ -66,26 +99,14 @@ impl SettingsView {
             )))
             .child(step("larger", "+", 0.1));
 
-        self.row(
-            i18n::lookup(title, None),
-            i18n::lookup(detail, None),
-            muted,
-            small,
-            actions.into_any_element(),
-        )
+        self.row(i18n::lookup(title, None), actions.into_any_element())
     }
 
-    pub(super) fn lyrics_for_local_files_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn lyrics_for_local_files_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).lyrics_for_local_files();
 
         self.row(
             t!("settings-lyrics-for-local-files"),
-            t!("settings-lyrics-for-local-files-detail"),
-            muted,
-            small,
             Switch::new("lyrics-for-local-files", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -96,65 +117,50 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn lyrics_providers_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
+    /// The row that opens the sources page, saying how many sources are on.
+    pub(super) fn lyrics_sources_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let settings = self.settings.read(cx);
         let count = LYRICS_SOURCES
             .iter()
             .filter(|provider| settings.lyrics_provider_enabled(provider))
             .count();
-        let picker = Picker::new(
-            "lyrics-providers",
-            &self.popovers,
-            t!("settings-lyrics-providers-selected", count = count),
+
+        drill(
+            "lyrics-sources",
+            t!("settings-lyrics-sources"),
+            Some(t!("settings-lyrics-providers-selected", count = count)),
+            cx,
         )
-        .sticky()
-        .items(LYRICS_SOURCES.map(|provider| {
-            MenuItem::new(provider, source_name(provider))
-                .selected(settings.lyrics_provider_enabled(provider))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings.update(cx, |settings, cx| {
-                        let enabled = settings.lyrics_provider_enabled(provider);
-                        settings.set_lyrics_provider(provider, !enabled, cx);
-                    });
-                }))
-        }));
-        self.row(
-            t!("settings-lyrics-providers"),
-            t!("settings-lyrics-providers-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
-            picker.into_any_element(),
-        )
+        .on_click(|_, _, cx| navigate(Destination::Settings(SettingsPage::LyricsSources), cx))
+        .into_any_element()
     }
 
-    /// The enabled lyrics sources in the order ties between them are settled. Each entry can be
-    /// dragged anywhere in the list or stepped with its arrows.
-    pub(super) fn lyrics_priority_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let order = self.settings.read(cx).enabled_lyrics_provider_priority();
+    /// Every lyrics source in one list. The ones that are on come first, in the order ties
+    /// between them are settled, and each can be dragged anywhere among them or stepped with
+    /// its arrows. The ones that are off follow. Every source carries its own switch.
+    pub(super) fn lyrics_priority(&self, cx: &mut Context<Self>) -> AnyElement {
+        let settings = self.settings.read(cx);
+        let order = settings.enabled_lyrics_provider_priority();
+        let off = LYRICS_SOURCES
+            .into_iter()
+            .filter(|provider| !settings.lyrics_provider_enabled(provider))
+            .collect::<Vec<_>>();
         let count = order.len();
-        let entries: Vec<AnyElement> = order
+        let mut entries: Vec<AnyElement> = order
             .into_iter()
             .enumerate()
             .map(|(index, provider)| self.lyrics_source_entry(index, provider, count, cx))
             .collect();
-        let Setting {
-            title,
-            detail,
-            element: header,
-        } = self.row(
-            t!("settings-lyrics-priority"),
-            t!("settings-lyrics-priority-detail"),
-            theme.muted_foreground,
-            theme.text(Text::Small),
-            div().into_any_element(),
+        entries.extend(
+            off.into_iter()
+                .enumerate()
+                .map(|(index, provider)| self.lyrics_source_off(count + index, provider, cx)),
         );
-        let list = div()
+
+        div()
             .id("lyrics-priority")
             .flex()
             .flex_col()
-            .pb_2()
             .children(entries)
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<DraggedSource>, _, cx| {
@@ -173,21 +179,58 @@ impl SettingsView {
                     settings.place_lyrics_provider(&dragged.provider, gap, cx)
                 });
                 cx.notify();
-            }));
-        Setting {
-            title,
-            detail,
-            element: div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(header)
-                .child(list)
-                .into_any_element(),
-        }
+            }))
+            .into_any_element()
     }
 
-    /// One source in the priority list: its muted position, its name and the arrows that step it.
+    /// The switch that turns one source on or off.
+    fn lyrics_source_switch(
+        &self,
+        provider: &'static str,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) -> Switch {
+        Switch::new(
+            SharedString::from(format!("lyrics-source-on-{provider}")),
+            on,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.settings.update(cx, |settings, cx| {
+                settings.set_lyrics_provider(provider, !on, cx)
+            });
+        }))
+    }
+
+    /// A source that is off: no place in the order, its name muted, and its switch.
+    fn lyrics_source_off(
+        &self,
+        index: usize,
+        provider: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.theme();
+
+        div()
+            .id(("lyrics-source", index))
+            .flex()
+            .items_center()
+            .gap_3()
+            .h(theme.metrics.list_row)
+            .px_5()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.muted_foreground)
+                    .child(source_name(provider)),
+            )
+            .child(self.lyrics_source_switch(provider, false, cx))
+            .into_any_element()
+    }
+
+    /// One source that is on: its muted place in the order, its name, the arrows that step it,
+    /// and its switch.
     pub(super) fn lyrics_source_entry(
         &self,
         index: usize,
@@ -230,6 +273,10 @@ impl SettingsView {
                     });
                 }))
         });
+        let switch = LYRICS_SOURCES
+            .into_iter()
+            .find(|source| *source == provider)
+            .map(|source| self.lyrics_source_switch(source, true, cx));
         let dragged = DraggedSource {
             provider,
             label: name.clone(),
@@ -238,7 +285,8 @@ impl SettingsView {
         div()
             .id(("lyrics-source", index))
             .relative()
-            .h(theme.metrics.row)
+            .h(theme.metrics.list_row)
+            .px_5()
             .flex()
             .items_center()
             .gap_3()
@@ -258,6 +306,7 @@ impl SettingsView {
                     .gap_1()
                     .children(arrows),
             )
+            .children(switch)
             .on_drag(dragged, |dragged, position, _, cx| {
                 cx.new(|_| DraggedSource {
                     position,
@@ -290,17 +339,11 @@ impl SettingsView {
             .into_any_element()
     }
 
-    pub(super) fn karaoke_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn karaoke_lyrics_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).karaoke_lyrics();
 
         self.row(
             t!("settings-karaoke-lyrics"),
-            t!("settings-karaoke-lyrics-detail"),
-            muted,
-            small,
             Switch::new("karaoke-lyrics", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -310,17 +353,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn blur_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn blur_lyrics_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).blur_lyrics();
 
         self.row(
             t!("settings-blur-lyrics"),
-            t!("settings-blur-lyrics-detail"),
-            muted,
-            small,
             Switch::new("blur-lyrics", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -330,10 +367,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn romanized_lyrics_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn romanized_lyrics_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let settings = self.settings.read(cx);
         let on = settings.romanized_lyrics();
         let scripts = settings.romanization_scripts();
@@ -368,13 +402,7 @@ impl SettingsView {
                 },
             )));
 
-        self.row(
-            t!("settings-romanized-lyrics"),
-            t!("settings-romanized-lyrics-detail"),
-            muted,
-            small,
-            action.into_any_element(),
-        )
+        self.row(t!("settings-romanized-lyrics"), action.into_any_element())
     }
 }
 

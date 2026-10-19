@@ -1,10 +1,68 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, App, Context, SharedString};
+use i18n::{Language, t};
+use router::{NavEntry, Screen};
+use ui::{Button, MenuItem, Pace, Picker, Rounding, Saver, Stillness, Switch};
+
+use super::{Group, LANGUAGES, SettingsView, Slot};
+use crate::shared::popups::matches_query;
+
+const STARTUP: &str = "startup";
+const ENTRIES: &str = "entries";
+const MOTION: &str = "motion";
+const PACE: &str = "pace";
+const SAVER: &str = "saver";
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+const WINDOW_ROUNDING: &str = "window-rounding";
 
 impl SettingsView {
-    pub(super) fn startup_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn general_groups(&self, cx: &App) -> Vec<Group> {
+        vec![
+            Group::new("settings-group-startup").rows([
+                Slot::Startup,
+                Slot::Entries,
+                Slot::Language,
+            ]),
+            Group::new("settings-group-window")
+                .rows([Slot::Tray, Slot::TrayIcon])
+                .rows(self.decoration_slots(cx)),
+            Group::new("settings-group-motion").rows([Slot::Motion, Slot::Pace, Slot::Saver]),
+            Group::new("settings-group-context-menus").rows([Slot::AdaptiveMenu]),
+        ]
+    }
+
+    /// The rows about the window's own frame, which differ by platform.
+    #[allow(
+        unused_variables,
+        reason = "cx is only read on Linux and FreeBSD, where rounding follows the decorations"
+    )]
+    fn decoration_slots(&self, cx: &App) -> Vec<Slot> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let mut slots = vec![Slot::ServerSideDecorations, Slot::Side, Slot::TrafficLights];
+        // Server-side decorations put the compositor in charge of the frame, so window
+        // rounding is only ever this app's call with client-side ones.
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if !self.settings.read(cx).server_side_decorations() {
+            slots.push(Slot::WindowRounding);
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "macos")))]
+        let slots = vec![
+            Slot::Decorations,
+            Slot::Side,
+            Slot::TrafficLights,
+            Slot::WindowRounding,
+        ];
+        #[cfg(target_os = "macos")]
+        let slots = vec![Slot::Decorations, Slot::WindowRounding];
+        slots
+    }
+
+    pub(super) fn startup_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = Screen::from_id(self.settings.read(cx).startup()).unwrap_or(Screen::Home);
         let current = i18n::lookup(chosen.key(), None);
         let guest = !self.session.read(cx).authenticated();
@@ -24,20 +82,10 @@ impl SettingsView {
                 }
             }));
 
-        self.row(
-            t!("settings-startup"),
-            t!("settings-startup-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-startup"), picker.into_any_element())
     }
 
-    pub(super) fn entries_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
-
+    pub(super) fn entries_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let picker = Picker::new(ENTRIES, &self.popovers, t!("settings-entries-pick"))
             .width(Picker::REGULAR)
             .sticky()
@@ -54,19 +102,10 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
-            t!("settings-entries"),
-            t!("settings-entries-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-entries"), picker.into_any_element())
     }
 
-    pub(super) fn language_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn language_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).language().to_owned();
         let current = match Language::from_id(&chosen) {
             Some(language) => SharedString::from(language.label()),
@@ -120,27 +159,15 @@ impl SettingsView {
             cx,
         );
 
-        self.row(
-            t!("settings-language"),
-            t!("settings-language-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-language"), picker.into_any_element())
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    pub(super) fn server_side_decorations_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn server_side_decorations_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let enabled = self.settings.read(cx).server_side_decorations();
 
         self.row(
             t!("settings-server-side-decorations"),
-            t!("settings-server-side-decorations-detail"),
-            muted,
-            small,
             Switch::new("server-side-decorations", enabled)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let decorations = this.settings.update(cx, |settings, cx| {
@@ -154,17 +181,11 @@ impl SettingsView {
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-    pub(super) fn decorations_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn decorations_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).window_controls();
 
         self.row(
             t!("settings-window-controls"),
-            t!("settings-window-controls-detail"),
-            muted,
-            small,
             Switch::new("window-controls", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -175,17 +196,11 @@ impl SettingsView {
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub(super) fn traffic_light_controls_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn traffic_light_controls_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).traffic_light_controls();
 
         self.row(
             t!("settings-traffic-light-controls"),
-            t!("settings-traffic-light-controls-detail"),
-            muted,
-            small,
             Switch::new("traffic-light-controls", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -202,10 +217,7 @@ impl SettingsView {
         target_os = "freebsd",
         target_os = "macos"
     ))]
-    pub(super) fn window_rounding_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn window_rounding_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).window_rounding();
 
         let picker = Picker::new(WINDOW_ROUNDING, &self.popovers, current.label())
@@ -229,20 +241,11 @@ impl SettingsView {
                     }),
             );
 
-        self.row(
-            t!("settings-window-rounding"),
-            t!("settings-window-rounding-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-window-rounding"), picker.into_any_element())
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub(super) fn side_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn side_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let settings = self.settings.read(cx);
         let left = settings.controls_on_left();
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -252,9 +255,6 @@ impl SettingsView {
 
         self.row(
             t!("settings-controls-side"),
-            t!("settings-controls-side-detail"),
-            muted,
-            small,
             Button::new("controls-side")
                 .label(match left {
                     true => t!("common-left"),
@@ -271,10 +271,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn motion_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn motion_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).stillness();
 
         let picker = Picker::new(MOTION, &self.popovers, current.label())
@@ -290,19 +287,10 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
-            t!("settings-motion"),
-            t!("settings-motion-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-motion"), picker.into_any_element())
     }
 
-    pub(super) fn pace_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn pace_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).pace();
 
         let picker = Picker::new(PACE, &self.popovers, current.label())
@@ -317,19 +305,10 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
-            t!("settings-pace"),
-            t!("settings-pace-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-pace"), picker.into_any_element())
     }
 
-    pub(super) fn saver_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn saver_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).saver();
 
         let picker = Picker::new(SAVER, &self.popovers, current.label())
@@ -344,26 +323,19 @@ impl SettingsView {
                     }))
             }));
 
-        self.row(
+        self.hinted(
             t!("settings-saver"),
-            t!("settings-saver-detail"),
-            muted,
-            small,
+            "settings-saver-detail",
             picker.into_any_element(),
         )
     }
 
-    pub(super) fn adaptive_menu_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn adaptive_menu_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).adaptive_menu();
 
-        self.row(
+        self.hinted(
             t!("settings-adaptive-menu"),
-            t!("settings-adaptive-menu-detail"),
-            muted,
-            small,
+            "settings-adaptive-menu-detail",
             Switch::new("adaptive-menu", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -373,17 +345,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn tray_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn tray_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).close_to_tray();
 
         self.row(
             t!("settings-close-to-tray"),
-            t!("settings-close-to-tray-detail"),
-            muted,
-            small,
             Switch::new("close-to-tray", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -393,17 +359,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn tray_icon_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn tray_icon_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).tray_icon();
 
         self.row(
             t!("settings-tray-icon"),
-            t!("settings-tray-icon-detail"),
-            muted,
-            small,
             Switch::new("tray-icon", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings

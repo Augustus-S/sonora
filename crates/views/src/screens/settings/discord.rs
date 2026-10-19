@@ -1,29 +1,37 @@
-use super::*;
+use gpui::prelude::*;
+use gpui::{AnyElement, App, Context};
+use i18n::t;
+use state::DiscordName;
+use ui::{MenuItem, Picker, Switch};
+
+use super::{Group, SettingsView, Slot};
+
+const DISCORD_NAME: &str = "discord-name";
+const DISCORD_BUTTONS: &str = "discord-buttons";
 
 impl SettingsView {
-    pub(super) fn discord_slots(&self, cx: &App) -> Vec<Slot> {
-        let mut slots = vec![Slot::Title("settings-group-discord"), Slot::Discord];
+    /// The Discord page. While the status is off only the master switch and the local files
+    /// row stand, since the rest shapes a status nobody sees.
+    pub(super) fn discord_groups(&self, cx: &App) -> Vec<Group> {
+        let mut groups = vec![Group::untitled().rows([Slot::Discord])];
         if self.settings.read(cx).discord_presence() {
-            slots.push(Slot::DiscordName);
-            slots.push(Slot::DiscordShowPaused);
-            slots.push(Slot::DiscordBadge);
-            slots.push(Slot::DiscordAnonymous);
-            slots.push(Slot::DiscordButtons);
+            groups.push(Group::new("settings-group-status").rows([
+                Slot::DiscordName,
+                Slot::DiscordShowPaused,
+                Slot::DiscordBadge,
+                Slot::DiscordAnonymous,
+            ]));
+            groups.push(Group::new("settings-discord-buttons").rows([Slot::DiscordButtons]));
         }
-        slots
+        groups.push(Group::new("settings-group-local-files").rows([Slot::ArtworkForLocal]));
+        groups
     }
 
-    pub(super) fn discord_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn discord_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).discord_presence();
 
         self.row(
             t!("settings-discord"),
-            t!("settings-discord-detail"),
-            muted,
-            small,
             Switch::new("discord", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -33,10 +41,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn discord_name_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn discord_name_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).discord_name();
 
         let picker = Picker::new(
@@ -55,26 +60,14 @@ impl SettingsView {
                 }))
         }));
 
-        self.row(
-            t!("settings-discord-name"),
-            t!("settings-discord-name-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-discord-name"), picker.into_any_element())
     }
 
-    pub(super) fn discord_show_paused_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn discord_show_paused_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).discord_show_paused();
 
         self.row(
             t!("settings-discord-show-paused"),
-            t!("settings-discord-show-paused-detail"),
-            muted,
-            small,
             Switch::new("discord-show-paused", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -84,17 +77,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn discord_badge_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn discord_badge_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).discord_badge();
 
         self.row(
             t!("settings-discord-badge"),
-            t!("settings-discord-badge-detail"),
-            muted,
-            small,
             Switch::new("discord-badge", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -104,17 +91,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn artwork_for_local_files_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn artwork_for_local_files_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).artwork_for_local_files();
 
         self.row(
             t!("settings-artwork-for-local-files"),
-            t!("settings-artwork-for-local-files-detail"),
-            muted,
-            small,
             Switch::new("artwork-for-local-files", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -125,17 +106,11 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn discord_anonymous_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn discord_anonymous_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).discord_without_details();
 
         self.row(
             t!("settings-discord-anonymous"),
-            t!("settings-discord-anonymous-detail"),
-            muted,
-            small,
             Switch::new("discord-anonymous", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -146,10 +121,7 @@ impl SettingsView {
         )
     }
 
-    pub(super) fn discord_buttons_row(&self, cx: &mut Context<Self>) -> Setting {
-        let theme = *cx.theme();
-        let muted = theme.muted_foreground;
-        let small = theme.text(Text::Small);
+    pub(super) fn discord_buttons_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let settings = self.settings.read(cx);
         let sonora = settings.discord_sonora_button();
         let provider = settings.discord_provider_button();
@@ -185,12 +157,6 @@ impl SettingsView {
                 })),
         );
 
-        self.row(
-            t!("settings-discord-buttons"),
-            t!("settings-discord-buttons-detail"),
-            muted,
-            small,
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-discord-buttons"), picker.into_any_element())
     }
 }
