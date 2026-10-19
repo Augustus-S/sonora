@@ -225,6 +225,20 @@ struct Sung {
     from: gpui::Point<f32>,
 }
 
+/// How one verse is drawn outside the sheet, for a still picture of the lyrics such as the
+/// settings preview. The sizes are the sheet's own, before an active verse grows.
+#[derive(Clone, Copy)]
+pub(crate) struct VerseLook {
+    pub(crate) active: bool,
+    /// The verse's text size and its romanized lane's.
+    pub(crate) size: Pixels,
+    pub(crate) lane: Pixels,
+    pub(crate) karaoke: bool,
+    pub(crate) scripts: Option<RomanizationScripts>,
+    /// How far out of focus the verse sits, from 0 for sharp to 1 at the sheet's edge.
+    pub(crate) haze: f32,
+}
+
 #[derive(Clone, Copy)]
 struct RowLook {
     playing: bool,
@@ -1069,7 +1083,7 @@ impl Aside {
                     * lyrics_frame_scale(window.viewport_size())
             }
         };
-        let lane_size = theme.text(Text::Body) * scale;
+        let (verse, lane_size) = verse_sizes(self.titled, scale, &theme);
         let sung = Sung {
             karaoke: karaoke_effects,
             lane: lane_size,
@@ -1118,10 +1132,6 @@ impl Aside {
             self.pin_verse(focus, window, cx);
         }
 
-        let verse = match self.titled {
-            true => theme.text(Text::Large),
-            false => theme.text(Text::Title) + FULLSCREEN_VERSE_GROWTH,
-        } * scale;
         let reach = verse * REACH;
         let wrap_size = active_verse_size(verse);
         let scroll = self.verse_bar.read(cx).scroll().clone();
@@ -2015,6 +2025,100 @@ fn fixed_lyrics_lane(rows: &[SharedString], voice: Voice, sung: Sung) -> Div {
                 sung,
             )
         }))
+}
+
+/// One verse drawn the way the sheet draws it at rest, with its karaoke sweep at `position` and
+/// its romanized lane, but without the sheet's pointer handling, drift or growth animations.
+pub(crate) fn verse(
+    line: &music::LyricsLine,
+    look: VerseLook,
+    position: std::time::Duration,
+    theme: ui::Theme,
+) -> Div {
+    let karaoke = look.karaoke && effects();
+    let ended = line_has_passed(line, position);
+    let worded = karaoke && line.worded() && line.words.is_some();
+    let tint = match (look.active, ended) {
+        (true, _) if worded => theme.muted_foreground,
+        (true, _) => theme.foreground,
+        (false, true) => theme.muted_foreground.opacity(PAST),
+        (false, false) => theme.muted_foreground.opacity(AHEAD),
+    };
+    let sung = Sung {
+        karaoke,
+        lane: look.lane,
+        scripts: look.scripts,
+        theme,
+        karaoke_tint: mix(
+            theme.foreground,
+            tint,
+            primary_karaoke_fade(line, look.active, position),
+        ),
+        lift: 1.,
+        from: match line.voice.lead() {
+            true => gpui::point(0., 0.5),
+            false => gpui::point(1., 0.5),
+        },
+    };
+    let primary = match (
+        worded && primary_karaoke_visible(line, look.active, position),
+        line.words.as_deref(),
+    ) {
+        (true, Some(words)) => karaoke_lane(
+            &loose_plan(&line.text, words),
+            line.start,
+            words,
+            position,
+            look.size,
+            line.voice,
+            sung,
+        ),
+        _ => fixed_lyrics_lane(&[SharedString::from(line.text.clone())], line.voice, sung),
+    };
+    let active_size = active_verse_size(look.size);
+    let haze = match effects() {
+        true => look.haze,
+        false => 0.,
+    };
+
+    div()
+        .w_full()
+        .px_2()
+        .py_1()
+        .text_size(match look.active {
+            true => active_size,
+            false => look.size,
+        })
+        .line_height(active_size * ui::LEADING)
+        .text_color(tint)
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(!line.voice.lead(), |this| this.items_end().text_right())
+                .child(primary)
+                .when_some(
+                    selected_romanization(&line.romanized, look.scripts),
+                    |this, text| this.child(romanized_lyrics_lane(text, look.lane, &theme)),
+                ),
+        )
+        .when(haze > 0., |this| this.opacity(1. - VEIL * haze))
+        .map(|this| match look.size * BLUR * haze {
+            soft if soft > HAZE_LEAST => this.blur(soft),
+            _ => this,
+        })
+}
+
+/// The verse and lane sizes the sheet sets at `scale`, in the side panel or in Now playing,
+/// leaving out how much a large window grows Now playing's.
+pub(crate) fn verse_sizes(panel: bool, scale: f32, theme: &ui::Theme) -> (Pixels, Pixels) {
+    let verse = match panel {
+        true => theme.text(Text::Large),
+        false => theme.text(Text::Title) + FULLSCREEN_VERSE_GROWTH,
+    };
+    (verse * scale, theme.text(Text::Body) * scale)
 }
 
 // a lane with no measured plan of its own, split on the spot
