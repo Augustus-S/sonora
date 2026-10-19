@@ -105,7 +105,7 @@ impl SettingsShell {
     }
 
     /// Answers escape inside settings: an open menu or dialog closes first, then the search
-    /// clears. Returns false when there was nothing left to close, and the root closes settings.
+    /// clears. Returns false when there was nothing left to close, and settings close instead.
     fn escape(&mut self, cx: &mut Context<Self>) -> bool {
         match self.shown {
             Destination::Equalizer => self.equalizer.update(cx, |view, _| view.escape()),
@@ -152,8 +152,8 @@ impl Render for SettingsShell {
             .key_context(super::shell_context(&[WORKSPACE_CONTEXT, SETTINGS_CONTEXT]))
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
-                if this.escape(cx) {
-                    cx.stop_propagation();
+                if !this.escape(cx) {
+                    router::close_settings(cx);
                 }
             }))
             .child(

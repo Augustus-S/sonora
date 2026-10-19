@@ -1084,9 +1084,11 @@ impl Render for SettingsView {
             cx,
         )
         .track_focus(&self.focus)
+        // an action stops where it is handled unless told to go on, so an escape with nothing
+        // to close here goes on to the shell, which closes settings
         .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
-            if this.escape(cx) {
-                cx.stop_propagation();
+            if !this.escape(cx) {
+                cx.propagate();
             }
         }))
         .when_some(accounts, |this, accounts| {
