@@ -105,9 +105,10 @@ pub(in crate::screens::settings) fn preview(
         icon: slug.map_or("icons/music.svg", provider_logo),
         tint: slug.map(|slug| provider_brand(slug, cx)),
         label: name.map_or_else(|| t!("settings-signal-source"), SharedString::from),
-        detail: track
-            .as_ref()
-            .map(|track| source(track.rate, track.encoding)),
+        detail: Some(track.as_ref().map_or_else(
+            || t!("settings-output-idle"),
+            |track| source(track.rate, track.encoding),
+        )),
     });
     let normalised = match track.as_ref().map(|track| track.normalisation) {
         Some(Normalisation::Off) => None,
