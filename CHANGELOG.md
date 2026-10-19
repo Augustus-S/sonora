@@ -62,11 +62,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sound, what it sends to your device, and whether that is bit-perfect or why not.
 - Undo and redo your equalizer edits with the buttons next to the profile, or with Ctrl+Z and
   Ctrl+Shift+Z.
+- New themes: Catppuccin (Latte, Frappé, Macchiato and Mocha), Rosé Pine (Main, Moon and Dawn),
+  Gruvbox (Dark, Dark Hard, Light and Light Hard), Solarized (Dark and Light), Nord and Dracula.
+  Pick one in Settings → Appearance.
+- Your own themes can come in variants. Put the theme files in a folder inside the themes
+  folder and they show up as one theme with a variant for each file.
 
 ### Changed
 
 - Active shuffle and repeat show a dot beneath their icons in the player bar and fullscreen,
   so their state is visible without relying on color alone.
+- The Midnight, Forest, Ocean, Rose, Lavender and Amber themes are no longer built in. If you
+  used one, Sonora saved it to your themes folder and keeps it selected, so nothing changes. The
+  others can be copied from `themes/legacy` in Sonora's repository.
 - Settings now open full-window with ten pages listed down the left side, and the search above
   them finds any setting by name and takes you to it. Themes, icon packs, corners, the
   visualizer and streaming quality are picked from cards that show what you get.
