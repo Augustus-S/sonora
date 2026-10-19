@@ -8,20 +8,26 @@ use music::{Codec, Encoding, Offer, Quality, Transcode};
 use state::{CdmState, Sleep};
 use ui::{ActiveTheme as _, Button, MenuItem, OptionCard, Picker, Scrubber, Switch, Text};
 
-use super::rows::grid;
+use super::rows::{grid, segmented};
 use super::{Group, SettingsView, Slot};
 use crate::shared::confirm::{Confirm, Kind};
 
-const SLEEP: &str = "sleep";
 /// How many quality cards a row is laid out for, however few levels a service has.
 const QUALITY_COLUMNS: usize = 4;
-const STREAM_FORMATS: &str = "stream-formats";
 const STREAM_BITRATES: &str = "stream-bitrates";
+/// How wide the sleep slider and the time beside it stand, in covers.
+const SLEEP_WIDTH: f32 = 1.5;
+const SLEEP_LABEL: f32 = 0.7;
+/// The shortest and longest timer the slider sets, in minutes.
+const SLEEP_MIN_MINUTES: u64 = 15;
 const SLEEP_MAX_MINUTES: u64 = 120;
 const SLEEP_MAGNETS: [u64; 4] = [15, 30, 45, 60];
 const SLEEP_MAGNET_WEIGHT: usize = 4;
-const SLEEP_LAST: usize =
-    SLEEP_MAX_MINUTES as usize + SLEEP_MAGNETS.len() * (SLEEP_MAGNET_WEIGHT - 1) + 1;
+/// The slot at the far right of the slider, end of track. Off is slot 0 and every minute
+/// between takes one slot, or `SLEEP_MAGNET_WEIGHT` for a magnet.
+const SLEEP_LAST: usize = (SLEEP_MAX_MINUTES - SLEEP_MIN_MINUTES + 1) as usize
+    + SLEEP_MAGNETS.len() * (SLEEP_MAGNET_WEIGHT - 1)
+    + 1;
 
 impl SettingsView {
     pub(super) fn playback_groups(&self, cx: &App) -> Vec<Group> {
@@ -144,40 +150,24 @@ impl SettingsView {
     }
 
     pub(super) fn stream_format_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = *cx.theme();
         let transcode = self.playback.read(cx).transcode();
 
-        let picker = Picker::new(
-            STREAM_FORMATS,
-            &self.popovers,
-            i18n::lookup(codec_key(transcode.codec), None),
-        )
-        .width(Picker::WIDE)
-        .items(
+        let formats = segmented(
+            "stream-formats",
             std::iter::once(None)
                 .chain(Codec::ALL.map(Some))
-                .map(|codec| {
-                    MenuItem::new(
-                        codec.map_or("original", Codec::id),
-                        i18n::lookup(codec_key(codec), None),
-                    )
-                    .selected(codec == transcode.codec)
-                    .detail(
-                        div()
-                            .text_color(theme.muted_foreground)
-                            .text_size(theme.text(Text::Small))
-                            .child(i18n::lookup(codec_detail_key(codec), None)),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.playback.update(cx, |playback, cx| {
-                            playback.set_transcode(Transcode { codec, ..transcode }, cx)
-                        });
-                        cx.notify();
-                    }))
-                }),
+                .map(|codec| (codec, i18n::lookup(codec_key(codec), None))),
+            transcode.codec,
+            cx.listener(move |this, codec: &Option<Codec>, _, cx| {
+                let codec = *codec;
+                this.playback.update(cx, |playback, cx| {
+                    playback.set_transcode(Transcode { codec, ..transcode }, cx)
+                });
+                cx.notify();
+            }),
         );
 
-        self.row(t!("settings-stream-format"), picker.into_any_element())
+        self.row(t!("settings-stream-format"), formats.into_any_element())
     }
 
     pub(super) fn stream_bitrate_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -235,93 +225,55 @@ impl SettingsView {
         )
     }
 
+    /// The sleep timer as a slider in its row with the time it is set to beside it: off at the
+    /// left, end of track at the right, minutes in between with the quarter hours widened. The
+    /// label follows a drag at once, and the timer is armed when the drag lets go.
     pub(super) fn sleep_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let on = self.settings.read(cx).sleep_timer();
-
-        let picker = Picker::plain(SLEEP, &self.popovers, t!("settings-sleep-configure"))
-            .width(Picker::REGULAR)
-            .selected(self.playback.read(cx).sleep().is_some())
-            .items(match self.popovers.shows(SLEEP) {
-                true => vec![self.sleep_dial(cx)],
-                false => Vec::new(),
-            });
-        let action = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .when(on, |this| this.child(picker))
-            .child(
-                Switch::new("sleep-timer", on).on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings
-                        .update(cx, |settings, cx| settings.set_sleep_timer(!on, cx));
-                    if on {
-                        this.popovers.close();
-                        this.playback
-                            .update(cx, |playback, cx| playback.set_sleep(None, cx));
-                    }
-                })),
-            );
-
-        self.row(t!("settings-sleep"), action.into_any_element())
-    }
-
-    /// The slider that arms the timer: off at the left, end of track at the right, minutes in
-    /// between, with the quarter hours widened.
-    pub(super) fn sleep_dial(&self, cx: &mut Context<Self>) -> MenuItem {
         let theme = *cx.theme();
         let current = self
             .pending_sleep
             .unwrap_or_else(|| self.playback.read(cx).sleep());
 
-        let dial = div()
+        let control = div()
             .flex()
-            .flex_col()
-            .w_full()
-            .gap_2()
-            .py_1()
+            .items_center()
+            .gap_3()
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .text_size(theme.text(Text::Small))
-                    .child(
-                        div()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("settings-sleep")),
-                    )
-                    .child(sleep_label(current)),
+                div().w(theme.metrics.cover * SLEEP_WIDTH).child(
+                    Scrubber::new(&self.sleep, sleep_slot(current) as f32 / SLEEP_LAST as f32)
+                        .colors(theme.progress_bar, theme.muted, theme.foreground)
+                        .on_move(cx.listener(|this, fraction: &f32, _, cx| {
+                            this.pending_sleep = Some(sleep_at_fraction(*fraction));
+                            cx.notify();
+                        }))
+                        .on_release(cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            let Some(sleep) = this.pending_sleep.take() else {
+                                return;
+                            };
+                            this.playback
+                                .update(cx, |playback, cx| playback.set_sleep(sleep, cx));
+                        })),
+                ),
             )
             .child(
-                Scrubber::new(&self.sleep, sleep_slot(current) as f32 / SLEEP_LAST as f32)
-                    .colors(
-                        theme.progress_bar,
-                        theme.muted_foreground.opacity(0.3),
-                        theme.foreground,
-                    )
-                    .on_move(cx.listener(|this, fraction: &f32, _, cx| {
-                        this.pending_sleep = Some(sleep_at_fraction(*fraction));
-                        cx.notify();
-                    }))
-                    .on_release(cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                        let Some(sleep) = this.pending_sleep.take() else {
-                            return;
-                        };
-                        this.playback
-                            .update(cx, |playback, cx| playback.set_sleep(sleep, cx));
-                    })),
+                div()
+                    .flex_none()
+                    .w(theme.metrics.cover * SLEEP_LABEL)
+                    .whitespace_nowrap()
+                    .text_right()
+                    .child(sleep_label(current)),
             );
 
-        MenuItem::new("sleep-dial", "").content(dial)
+        self.row(t!("settings-sleep"), control.into_any_element())
     }
 
     /// The Widevine module row, which only appears while the current provider is one whose
     /// tracks need the module and this build has a host for one. Sonora uses a browser's copy
     /// when one is here and otherwise offers Google's download, so the row says where that
     /// stands. The download is offered by hand whenever Google's copy is not the one in use,
-    /// because a browser's copy can be one this host cannot open. The explanation wraps below
-    /// the row as the one description the settings keep, since it asks for consent.
+    /// because a browser's copy can be one this host cannot open. While the download is on
+    /// offer the explanation wraps below the row, the one description the settings keep, since
+    /// pressing Download is the consent to fetching Google's module.
     pub(super) fn widevine_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let state = self.drm.read(cx).state().clone();
@@ -373,13 +325,15 @@ impl SettingsView {
             .flex()
             .flex_col()
             .child(self.row(t!("settings-widevine"), action.into_any_element()))
-            .child(
-                div()
-                    .pb_5()
-                    .text_color(theme.muted_foreground)
-                    .text_size(theme.text(Text::Label))
-                    .child(detail),
-            )
+            .when(offerable, |row| {
+                row.child(
+                    div()
+                        .pb_5()
+                        .text_color(theme.muted_foreground)
+                        .text_size(theme.text(Text::Label))
+                        .child(detail),
+                )
+            })
             .into_any_element()
     }
 }
@@ -409,7 +363,7 @@ pub(super) fn widevine_copy(state: &CdmState) -> (&'static str, &'static str) {
     }
 }
 
-pub(super) fn sleep_slot(sleep: Option<Sleep>) -> usize {
+fn sleep_slot(sleep: Option<Sleep>) -> usize {
     match sleep {
         None => 0,
         Some(Sleep::EndOfTrack) => SLEEP_LAST,
@@ -417,7 +371,7 @@ pub(super) fn sleep_slot(sleep: Option<Sleep>) -> usize {
     }
 }
 
-pub(super) fn sleep_at_fraction(fraction: f32) -> Option<Sleep> {
+fn sleep_at_fraction(fraction: f32) -> Option<Sleep> {
     let slot = (fraction.clamp(0., 1.) * SLEEP_LAST as f32).round() as usize;
     match slot {
         0 => None,
@@ -426,8 +380,8 @@ pub(super) fn sleep_at_fraction(fraction: f32) -> Option<Sleep> {
     }
 }
 
-pub(super) fn minute_slot(minutes: u64) -> usize {
-    let minutes = minutes.clamp(1, SLEEP_MAX_MINUTES);
+fn minute_slot(minutes: u64) -> usize {
+    let minutes = minutes.clamp(SLEEP_MIN_MINUTES, SLEEP_MAX_MINUTES);
     let earlier_magnets = SLEEP_MAGNETS
         .iter()
         .filter(|magnet| **magnet < minutes)
@@ -436,12 +390,14 @@ pub(super) fn minute_slot(minutes: u64) -> usize {
         true => SLEEP_MAGNET_WEIGHT,
         false => 1,
     };
-    minutes as usize + earlier_magnets * (SLEEP_MAGNET_WEIGHT - 1) + (width - 1) / 2
+    (minutes - SLEEP_MIN_MINUTES + 1) as usize
+        + earlier_magnets * (SLEEP_MAGNET_WEIGHT - 1)
+        + (width - 1) / 2
 }
 
-pub(super) fn slot_minute(slot: usize) -> u64 {
+fn slot_minute(slot: usize) -> u64 {
     let mut first = 1;
-    for minute in 1..=SLEEP_MAX_MINUTES {
+    for minute in SLEEP_MIN_MINUTES..=SLEEP_MAX_MINUTES {
         let width = match SLEEP_MAGNETS.contains(&minute) {
             true => SLEEP_MAGNET_WEIGHT,
             false => 1,
@@ -454,7 +410,7 @@ pub(super) fn slot_minute(slot: usize) -> u64 {
     SLEEP_MAX_MINUTES
 }
 
-pub(super) fn sleep_label(sleep: Option<Sleep>) -> SharedString {
+fn sleep_label(sleep: Option<Sleep>) -> SharedString {
     match sleep {
         Some(Sleep::EndOfTrack) => t!("settings-sleep-end-of-track"),
         Some(Sleep::After(after)) => t!("settings-sleep-minutes", count = after.as_secs() / 60),
@@ -524,16 +480,6 @@ pub(super) fn codec_key(codec: Option<Codec>) -> &'static str {
         Some(Codec::Mp3) => "settings-stream-format-mp3",
         Some(Codec::Opus) => "settings-stream-format-opus",
         Some(Codec::Aac) => "settings-stream-format-aac",
-    }
-}
-
-/// What choosing a format does, said under it in the picker.
-pub(super) fn codec_detail_key(codec: Option<Codec>) -> &'static str {
-    match codec {
-        None => "settings-stream-format-original-detail",
-        Some(Codec::Mp3) => "settings-stream-format-mp3-detail",
-        Some(Codec::Opus) => "settings-stream-format-opus-detail",
-        Some(Codec::Aac) => "settings-stream-format-aac-detail",
     }
 }
 
