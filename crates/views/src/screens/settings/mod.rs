@@ -37,7 +37,7 @@ mod scrobbling;
 mod sound;
 mod themes;
 
-pub(crate) use layout::{Layout, SIDEBAR, frame};
+pub(crate) use layout::{Layout, SIDEBAR, frame, framed};
 pub(crate) use rows::Row;
 
 /// The space between two groups of a page.
@@ -445,13 +445,17 @@ impl SettingsView {
             return None;
         }
         let previews = &self.previews;
+        // the signal path stands on the page itself, the others sit in a frame
         match self.page {
             SettingsPage::NowPlaying => {
                 preview::now_playing::preview(&previews.now_playing, self, window, cx)
+                    .map(|preview| framed(preview, cx))
             }
-            SettingsPage::Lyrics => preview::lyrics::preview(&previews.lyrics, self, window, cx),
+            SettingsPage::Lyrics => preview::lyrics::preview(&previews.lyrics, self, window, cx)
+                .map(|preview| framed(preview, cx)),
             SettingsPage::Sound => preview::sound::preview(&previews.sound, self, window, cx),
-            SettingsPage::Discord => preview::discord::preview(&previews.discord, self, window, cx),
+            SettingsPage::Discord => preview::discord::preview(&previews.discord, self, window, cx)
+                .map(|preview| framed(preview, cx)),
             _ => None,
         }
     }

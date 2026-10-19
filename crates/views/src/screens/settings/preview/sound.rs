@@ -6,10 +6,11 @@ use std::cell::RefCell;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Div, FontWeight, Hsla, Pixels, SharedString, Window, div, px, svg,
+    AnyElement, Context, Div, FontWeight, Hsla, Pixels, SharedString, Window, div, px, relative,
+    svg,
 };
 use i18n::t;
-use music::Normalisation;
+use music::{Encoding, Normalisation};
 use state::{Following, SignalPath};
 use ui::{ActiveTheme as _, Text, tabular};
 
@@ -20,10 +21,8 @@ use crate::shared::{provider_brand, provider_logo};
 /// How large a step's icon draws, and the chevron between two steps.
 const ICON: Pixels = px(16.);
 const CHEVRON: Pixels = px(14.);
-/// How strong the chevrons between steps are against the muted text, and the panel behind the
-/// steps against the secondary fill.
+/// How strong the chevrons between steps are against the muted text.
 const CHEVRON_STRENGTH: f32 = 0.6;
-const PANEL: f32 = 0.4;
 
 /// What the Sound page's preview keeps between frames.
 pub(in crate::screens::settings) struct SoundPreview {
@@ -106,7 +105,9 @@ pub(in crate::screens::settings) fn preview(
         icon: slug.map_or("icons/music.svg", provider_logo),
         tint: slug.map(|slug| provider_brand(slug, cx)),
         label: name.map_or_else(|| t!("settings-signal-source"), SharedString::from),
-        detail: track.as_ref().map(|track| rate(track.rate)),
+        detail: track
+            .as_ref()
+            .map(|track| source(track.rate, track.encoding)),
     });
     let normalised = match track.as_ref().map(|track| track.normalisation) {
         Some(Normalisation::Off) => None,
@@ -177,16 +178,15 @@ pub(in crate::screens::settings) fn preview(
         div()
             .relative()
             .w_full()
-            .px(theme.metrics.inset)
-            .py(theme.metrics.inset)
-            .bg(theme.secondary.opacity(PANEL))
             .child(row)
             .when(perfect, |this| {
                 this.child(
                     div()
                         .absolute()
-                        .top(theme.metrics.pad)
-                        .right(theme.metrics.pad)
+                        // under the device step, in the space before the first group
+                        .top(relative(1.))
+                        .mt(theme.metrics.pad)
+                        .right_0()
                         .flex()
                         .items_center()
                         .gap_1()
@@ -246,6 +246,32 @@ fn node(step: Step, cx: &gpui::App) -> Div {
                 .font_features(tabular())
                 .child(step.detail.unwrap_or_else(|| "\u{a0}".into())),
         )
+}
+
+/// What the source step says of the track playing: its rate, then the bit rate a lossy stream
+/// comes at or the bit depth of a lossless one, as "44.1 kHz · 256 kbps". The rate stands alone
+/// when the engine reports no encoding.
+fn source(rate_hz: u32, encoding: Option<Encoding>) -> SharedString {
+    let quality = match encoding {
+        Some(
+            Encoding::Aac { kbps }
+            | Encoding::Vorbis { kbps }
+            | Encoding::Mp3 { kbps }
+            | Encoding::Opus { kbps },
+        ) => Some(t!("settings-signal-kbps", kbps = i64::from(kbps))),
+        Some(Encoding::Flac { depth, .. } | Encoding::Alac { depth } | Encoding::Pcm { depth }) => {
+            Some(t!("settings-signal-bits", depth = i64::from(depth)))
+        }
+        Some(Encoding::Other) | None => None,
+    };
+    match quality {
+        Some(quality) => t!(
+            "settings-signal-source-detail",
+            rate = rate(rate_hz).to_string(),
+            quality = quality.to_string()
+        ),
+        None => rate(rate_hz),
+    }
 }
 
 /// A rate as the steps show it, 44.1 kHz.

@@ -102,7 +102,7 @@ fn title(destination: &Destination, named: Option<SharedString>, cx: &App) -> Di
         )
 }
 
-/// Lays a takeover page out in its column: the title, then `preview` framed across the column
+/// Lays a takeover page out in its column: the title, then `preview` across the column
 /// when the page has one, then `body`, all scrolling together. `destination` names the page for
 /// its title unless `named` gives one. The page fills the shell, which draws the sidebar and the
 /// close button over it.
@@ -125,16 +125,6 @@ pub(crate) fn frame(
     scrollbar.update(cx, |bar, cx| {
         bar.set_track_top(layout.top, cx);
     });
-    let preview = preview.map(|preview| {
-        div()
-            .w_full()
-            .overflow_hidden()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(theme.border)
-            .child(preview)
-    });
-
     div().relative().size_full().child(
         div().absolute().inset_0().child(
             layout.fade(Scroller::new(id, scrollbar)).child(
@@ -148,9 +138,25 @@ pub(crate) fn frame(
                     .when(titled(destination, named.is_some()), |column| {
                         column.child(title(destination, named, cx).mb(theme.metrics.inset))
                     })
-                    .children(preview.map(|preview| preview.mb(super::GROUPS)))
+                    .children(
+                        preview.map(|preview| div().w_full().mb(super::GROUPS).child(preview)),
+                    )
                     .child(body),
             ),
         ),
     )
+}
+
+/// A page's preview in the frame most previews sit in across the top of the column: clipped to
+/// the theme's corners inside a hairline border.
+pub(crate) fn framed(preview: impl IntoElement, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    div()
+        .w_full()
+        .overflow_hidden()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.border)
+        .child(preview)
+        .into_any_element()
 }
