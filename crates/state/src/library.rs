@@ -1125,6 +1125,18 @@ impl Library {
                     cx.notify();
                     return;
                 }
+                this.playlist_task = None;
+                this.pending.clear();
+                this.pending_albums.clear();
+                this.pending_artists.clear();
+                let favorite = |family: &Family| {
+                    matches!(
+                        family,
+                        Family::SavedTracks | Family::SavedAlbums | Family::SavedArtists
+                    )
+                };
+                this.sweeps.retain(|_, sweep| !favorite(&sweep.family));
+                this.gathering.retain(|family, _| !favorite(family));
                 this.pin_targets = None;
                 this.sync_pin_targets(cx);
                 this.prime(Shelf::Streaming, cx);
@@ -2539,27 +2551,14 @@ impl Library {
     /// Rows a snapshot primed stay on screen while this runs, each part until all of its own rows
     /// arrive; a shelf with nothing primed goes back to loading, as a refresh does. The
     /// favorites stay up either way until the new ones land, so a Favorites only filter shows
-    /// what it showed before rather than nothing.
+    /// what it showed before rather than nothing. Edits in flight carry on through a load; only a
+    /// new sign-in drops them.
     fn load(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let Some(client) = session.client_of(shelf) else {
             return;
         };
         let shape = session.shape_of(shelf);
-        if shelf == Shelf::Streaming {
-            self.playlist_task = None;
-            self.pending.clear();
-            self.pending_albums.clear();
-            self.pending_artists.clear();
-            let favorite = |family: &Family| {
-                matches!(
-                    family,
-                    Family::SavedTracks | Family::SavedAlbums | Family::SavedArtists
-                )
-            };
-            self.sweeps.retain(|_, sweep| !favorite(&sweep.family));
-            self.gathering.retain(|family, _| !favorite(family));
-        }
 
         let held = self.held_mut(shelf);
         held.shape = shape;
