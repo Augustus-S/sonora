@@ -4,7 +4,7 @@ use gpui::{
     SharedString, StyleRefinement, Task, Window, div,
 };
 use i18n::t;
-use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
+use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, TONE_RANGE, Tone};
 use music::output::{DeviceOption, OutputId, Port};
 use router::Destination;
 use state::{
@@ -12,7 +12,7 @@ use state::{
 };
 use ui::{
     ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, Input, Lazy, MenuItem, Modal, Picker,
-    Popovers, Room, Scrollbar, Submit, Switch, TabBar,
+    Popovers, Room, Scrollbar, Scrubber, ScrubberState, Submit, Switch, TabBar,
 };
 
 use crate::chrome::Chrome;
@@ -42,10 +42,16 @@ const SOUND_WIDTH: f32 = 2.2;
 /// The icons before the sound group's heading and the filter group's.
 const SOUND_ICON: &str = "icons/sliders-horizontal.svg";
 const FILTERS_ICON: &str = "icons/funnel.svg";
+/// How wide the bass and treble sliders are, and the gain beside each, in cover sizes.
+const TONE_SLIDER: f32 = 1.6;
+const TONE_VALUE: f32 = 0.6;
+/// The step the bass and treble move in, and how near 0 dB a drag snaps to it.
+const TONE_STEP: f64 = 0.5;
+const TONE_REST: f64 = 0.75;
 
-/// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
-/// and advanced mode adds the preamp and a group each for the filters, the device rules and
-/// Equalizer APO text in and out.
+/// The equalizer's own screen. Simple mode shows the sound picker, undo, the response graph
+/// and the bass and treble sliders, and advanced mode trades the sliders for the preamp and a
+/// group each for the filters, the device rules and Equalizer APO text in and out.
 pub(crate) struct EqualizerView {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -55,6 +61,9 @@ pub(crate) struct EqualizerView {
     scrollbar: Entity<Scrollbar>,
     preamp: Entity<Input>,
     rows: Vec<Fields>,
+    /// The bass and treble sliders Simple mode shows under the graph.
+    bass: ScrubberState,
+    treble: ScrubberState,
     name: Entity<Input>,
     /// What the name dialog is open for, while it is.
     naming: Option<Naming>,
@@ -95,6 +104,7 @@ enum Naming {
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
+    tone: Tone,
     on: bool,
     history: (bool, bool),
     preamp: f64,
@@ -102,6 +112,30 @@ struct Drawn {
     port: Option<Port>,
     /// What the device rules' menu offers.
     devices: Vec<DeviceOption>,
+}
+
+/// One of the two shelves of the tone.
+#[derive(Clone, Copy)]
+enum Shelf {
+    Bass,
+    Treble,
+}
+
+impl Shelf {
+    fn gain(self, tone: Tone) -> f64 {
+        match self {
+            Self::Bass => tone.bass(),
+            Self::Treble => tone.treble(),
+        }
+    }
+
+    /// `tone` with this shelf at `gain` and the other as it was.
+    fn with(self, tone: Tone, gain: f64) -> Tone {
+        match self {
+            Self::Bass => Tone::new(gain, tone.treble()),
+            Self::Treble => Tone::new(tone.bass(), gain),
+        }
+    }
 }
 
 impl EqualizerView {
@@ -153,6 +187,8 @@ impl EqualizerView {
             scrollbar: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(id)),
             preamp,
             rows,
+            bass: ScrubberState::new("equalizer-bass"),
+            treble: ScrubberState::new("equalizer-treble"),
             name: cx.new(|cx| Input::new("equalizer-profile-name-hint", cx)),
             naming: None,
             rule_device: None,
@@ -185,6 +221,7 @@ impl EqualizerView {
         let outputs = self.outputs.read(cx);
         Drawn {
             curve: equalizer.curve().clone(),
+            tone: equalizer.tone(),
             on: equalizer.enabled(),
             history: equalizer.history(),
             preamp: equalizer.preamp_db(),
@@ -243,12 +280,12 @@ impl EqualizerView {
         let Some(curve) = self.shown.clone() else {
             return;
         };
-        let preamp = self.equalizer.read(cx).preamp_db();
+        let preamp = curve.preamp_db();
         if auto == (curve.preamp() == Preamp::Auto) {
             return;
         }
-        // A manual preamp starts where the automatic one was, rounded down so switching never
-        // raises the level.
+        // A manual preamp starts where the sound's automatic one was, rounded down so switching
+        // never raises the level. The tone lowers both alike.
         let preamp = match auto {
             true => Preamp::Auto,
             false => Preamp::Manual(
@@ -472,6 +509,7 @@ impl EqualizerView {
         });
         let mode = self.mode(advanced, cx);
         let preamp = advanced.then(|| self.preamp_row(cx));
+        let tone = (!advanced).then(|| self.tone_rows(cx));
 
         div()
             .flex()
@@ -503,16 +541,82 @@ impl EqualizerView {
                     .child(meter),
             )
             .children(preamp)
+            .children(tone)
             .into_any_element()
+    }
+
+    /// The bass and treble rows Simple mode shows under the graph, which tilt whatever sound
+    /// plays without editing it.
+    fn tone_rows(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .mt_2()
+            .child(self.tone_row(Shelf::Bass, cx))
+            .child(self.tone_row(Shelf::Treble, cx))
+            .into_any_element()
+    }
+
+    /// One shelf's row: its name, a slider from -12 to +12 dB, and the gain it is at. Pressing
+    /// the gain puts the shelf back to 0 dB.
+    fn tone_row(&self, shelf: Shelf, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
+        let tone = self.equalizer.read(cx).tone();
+        let gain = shelf.gain(tone);
+        let (low, high) = (*TONE_RANGE.start(), *TONE_RANGE.end());
+        let (title, state, reset) = match shelf {
+            Shelf::Bass => (t!("equalizer-bass"), &self.bass, "equalizer-bass-reset"),
+            Shelf::Treble => (
+                t!("equalizer-treble"),
+                &self.treble,
+                "equalizer-treble-reset",
+            ),
+        };
+        let signed = match gain > 0. {
+            true => format!("+{}", figure(gain, 1)),
+            false => figure(gain, 1),
+        };
+
+        let slider = div().w(theme.metrics.cover * TONE_SLIDER).child(
+            Scrubber::new(state, ((gain - low) / (high - low)) as f32)
+                .colors(theme.muted, theme.muted, theme.foreground)
+                .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
+                    let gain = tone_gain(*fraction);
+                    let tone = shelf.with(this.equalizer.read(cx).tone(), gain);
+                    this.equalizer
+                        .update(cx, |equalizer, cx| equalizer.glide_tone(tone, cx));
+                })),
+        );
+        let value = Button::new(reset)
+            .small()
+            .w(theme.metrics.cover * TONE_VALUE)
+            .label(t!("equalizer-decibels-value", db = signed))
+            .tooltip("equalizer-tone-reset")
+            .disabled(gain == 0.)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let tone = shelf.with(this.equalizer.read(cx).tone(), 0.);
+                this.equalizer
+                    .update(cx, |equalizer, cx| equalizer.set_tone(tone, cx));
+            }));
+        let controls = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(slider)
+            .child(value)
+            .into_any_element();
+
+        Row::new(title, controls).into_any_element()
     }
 
     /// The preamp's row: whether it follows the filters on its own or holds a level, and that
     /// level, in a field while it is held and as a figure in the field's place while automatic.
+    /// It is the sound's own preamp, before the tone lowers it further.
     fn preamp_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let curve = self.equalizer.read(cx).curve();
         let auto = curve.preamp() == Preamp::Auto;
-        let resolved = self.equalizer.read(cx).preamp_db();
+        let resolved = curve.preamp_db();
         let mode = Picker::new(
             PREAMP,
             &self.popovers,
@@ -681,4 +785,15 @@ fn card(
     Lazy::new(id, move |window, cx| {
         view.update(cx, |this, cx| build(this, window, cx))
     })
+}
+
+/// The gain a bass or treble slider at `fraction` of its travel stands for, in `TONE_STEP`s,
+/// resting at 0 dB when it comes within `TONE_REST` of it.
+fn tone_gain(fraction: f32) -> f64 {
+    let (low, high) = (*TONE_RANGE.start(), *TONE_RANGE.end());
+    let gain = low + f64::from(fraction) * (high - low);
+    match gain.abs() < TONE_REST {
+        true => 0.,
+        false => (gain / TONE_STEP).round() * TONE_STEP,
+    }
 }

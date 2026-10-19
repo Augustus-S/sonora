@@ -67,6 +67,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each equalizer filter sits on one line with its switch, type, frequency, gain and Q. Point at
   a filter and its dot lights up on the graph, and the filter you pick on the graph is marked
   in the list.
+- Bass and Treble sliders in the equalizer's Simple mode turn the low or high end up or down by
+  as much as 12 dB on top of any preset or profile, without changing it. Sonora lowers the level
+  to make room, so a boost never clips.
 - New themes: Catppuccin (Latte, Frappé, Macchiato and Mocha), Rosé Pine (Main, Moon and Dawn),
   Gruvbox (Dark, Dark Hard, Light and Light Hard), Solarized (Dark and Light), Nord and Dracula.
   Pick one in Settings → Appearance.

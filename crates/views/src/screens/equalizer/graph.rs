@@ -6,7 +6,7 @@ use i18n::t;
 use music::Level;
 use music::equalizer::{
     Curve, FREQUENCY_RANGE, Filter, GAIN_RANGE, Invalid, Kind, OCTAVES_RANGE, Q_RANGE, Response,
-    Width,
+    Tone, Width,
 };
 use state::{AppSettings, Equalizer, Outputs, Signal};
 use ui::{
@@ -69,6 +69,7 @@ impl EventEmitter<Selected> for EqualizerGraph {}
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
+    tone: Tone,
     on: bool,
     preamp: f64,
     rate: u32,
@@ -253,6 +254,7 @@ impl EqualizerGraph {
         let equalizer = self.equalizer.read(cx);
         let drawn = Drawn {
             curve: equalizer.curve().clone(),
+            tone: equalizer.tone(),
             on: equalizer.enabled(),
             preamp: equalizer.preamp_db(),
             rate: rate(&self.outputs, cx),
@@ -333,9 +335,15 @@ impl EqualizerGraph {
 
     /// Carries out what was done on the graph. A drag or a wheel step glides the filter it
     /// moves, and adding and removing cross-fade like the list's own buttons. A dragged or added
-    /// gain stays within the axis shown, a shelf's whole step included.
+    /// gain stays within the axis shown, a shelf's whole step included. A node stands raised by the
+    /// tone, so the tone at its frequency comes off the gain it is dragged or added to.
     fn graph_edit(&mut self, edit: &GraphEdit, cx: &mut Context<Self>) {
         let curve = self.equalizer.read(cx).curve().clone();
+        let tone = self
+            .equalizer
+            .read(cx)
+            .tone()
+            .response(rate(&self.outputs, cx));
         let span = self.graph.span;
         let glided = match *edit {
             GraphEdit::Select(id) => {
@@ -354,9 +362,13 @@ impl EqualizerGraph {
                     false => placed_frequency(position.frequency_hz),
                 };
                 let lift = lift(filter.kind());
-                let moved = position.gain_db != plotted_db(filter.gain() * lift);
+                let shown = filter.gain() * lift + tone.db(filter.frequency());
+                let moved = position.gain_db != plotted_db(shown);
                 let gain = match filter.kind().has_gain() && moved {
-                    true => placed_gain(position.gain_db / lift as f32, span),
+                    true => {
+                        let own = f64::from(position.gain_db) - tone.db(frequency);
+                        placed_gain((own / lift) as f32, span)
+                    }
                     false => filter.gain(),
                 };
                 Filter::new(
@@ -390,7 +402,8 @@ impl EqualizerGraph {
             GraphEdit::Add(position) => {
                 let (kind, _, _, q) = NEW_FILTER;
                 let frequency = placed_frequency(position.frequency_hz);
-                let gain = placed_gain(position.gain_db, span);
+                let own = f64::from(position.gain_db) - tone.db(frequency);
+                let gain = placed_gain(own as f32, span);
                 if let Ok(filter) = Filter::new(kind, frequency, gain, Width::Q(q), true) {
                     self.add_filter(filter, cx);
                 }
@@ -410,16 +423,18 @@ impl EqualizerGraph {
     }
 }
 
-/// The live response of the filters, a node per filter on it, and the preamp as a level across
-/// it. A node sits on its own filter's curve at its frequency. The graph fills the bounds the
-/// screen lays it out at.
+/// The live response heard, the tone's bass and treble included, a node per filter of the sound,
+/// and the preamp as a level across it. A node sits on its own filter's curve at its frequency,
+/// raised or lowered by the tone there. The graph fills the bounds the screen lays it out at.
 impl Render for EqualizerGraph {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let equalizer = self.equalizer.read(cx);
         let on = equalizer.enabled();
         let advanced = self.settings.read(cx).equalizer_advanced();
         let curve = equalizer.curve().clone();
+        let played = equalizer.played().clone();
         let rate = rate(&self.outputs, cx);
+        let tone = equalizer.tone().response(rate);
         let preamp = equalizer.preamp_db();
         let levels = self.signal.read(cx).levels().unwrap_or_default();
         // The spectrum comes in the way sound fades in: a gain that climbs from below the plot's
@@ -444,21 +459,27 @@ impl Render for EqualizerGraph {
             })
             .collect();
         let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
-        let plotted = self.graph.plotted(&curve, rate);
+        let plotted = self.graph.plotted(&played, rate);
         let nodes: Vec<_> = curve
             .filters()
             .iter()
             .zip(ids)
             .map(|(filter, id)| {
-                let gain = match filter.kind().has_gain() {
-                    true => filter.gain(),
-                    false => plotted.response.db(filter.frequency()),
+                let (gain, position) = match filter.kind().has_gain() {
+                    true => (
+                        filter.gain(),
+                        filter.gain() * lift(filter.kind()) + tone.db(filter.frequency()),
+                    ),
+                    false => {
+                        let gain = plotted.response.db(filter.frequency());
+                        (gain, gain)
+                    }
                 };
                 ResponseNode {
                     id,
                     position: ResponsePoint {
                         frequency_hz: filter.frequency() as f32,
-                        gain_db: plotted_db(gain * lift(filter.kind())),
+                        gain_db: plotted_db(position),
                     },
                     readout_db: plotted_db(gain),
                     gain_adjustable: filter.kind().has_gain(),
