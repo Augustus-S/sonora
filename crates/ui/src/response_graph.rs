@@ -989,7 +989,7 @@ fn readout(
 }
 
 /// Strokes the polyline through `points`, which needs two of them at least.
-fn line(points: &[Point<Pixels>], width: Pixels, color: Hsla, window: &mut Window) {
+pub(crate) fn line(points: &[Point<Pixels>], width: Pixels, color: Hsla, window: &mut Window) {
     if points.len() < 2 {
         return;
     }

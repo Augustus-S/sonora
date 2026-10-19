@@ -33,6 +33,7 @@ mod popup;
 mod radio;
 mod rail;
 mod response_graph;
+mod response_sketch;
 mod scrollbar;
 mod scroller;
 mod scrubber;
@@ -106,6 +107,7 @@ pub use rail::Rail;
 pub use response_graph::{
     GraphEdit, ResponseAxes, ResponseGraph, ResponseGraphState, ResponseNode, ResponsePoint,
 };
+pub use response_sketch::ResponseSketch;
 pub use scrollbar::{
     Scrollbar, cancel_middle_scroll, quantize, release_middle_scroll, scrolled,
     update_middle_scroll,

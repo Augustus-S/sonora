@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    App, ClickEvent, Div, ElementId, Hsla, Interactivity, MouseButton, Pixels, SharedString,
-    Stateful, StyleRefinement, Window, div, px, relative, svg,
+    AnyElement, App, ClickEvent, Div, ElementId, Hsla, Interactivity, MouseButton, Pixels,
+    SharedString, Stateful, StyleRefinement, Window, div, px, relative, svg,
 };
 
 use crate::glass::{blurring, frost};
@@ -33,6 +33,8 @@ pub struct Button {
     base: Stateful<Div>,
     label: Option<SharedString>,
     icon: Option<SharedString>,
+    /// A small element drawn after the icon and before the label, as a picker's curve sketch.
+    leading: Option<AnyElement>,
     detail: Option<SharedString>,
     trailing: Option<SharedString>,
     variant: Variant,
@@ -58,6 +60,7 @@ impl Button {
             base: div().id(id),
             label: None,
             icon: None,
+            leading: None,
             detail: None,
             trailing: None,
             variant: Variant::Ghost,
@@ -84,6 +87,11 @@ impl Button {
 
     pub fn icon(mut self, path: impl Into<SharedString>) -> Self {
         self.icon = Some(path.into());
+        self
+    }
+
+    pub fn leading(mut self, leading: impl IntoElement) -> Self {
+        self.leading = Some(leading.into_any_element());
         self
     }
 
@@ -238,6 +246,7 @@ impl RenderOnce for Button {
             mut base,
             label,
             icon,
+            leading,
             detail,
             trailing,
             variant,
@@ -377,6 +386,7 @@ impl RenderOnce for Button {
                         .text_color(foreground),
                 )
             })
+            .children(leading)
             .when_some(label, |this, label| {
                 this.child(
                     div()

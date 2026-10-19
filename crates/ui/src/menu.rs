@@ -759,6 +759,7 @@ impl RenderOnce for Menu {
             let press = press.map(|press| releasing(press, &row_searches));
             let submenu_state = submenu.as_ref().map(|submenu| submenu.state.clone());
             let has_artwork = artwork.is_some();
+            let leading = leading.filter(|_| !has_artwork && icon.is_none());
             let detailed = detail.is_some();
 
             div()
