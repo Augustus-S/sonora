@@ -527,9 +527,8 @@ impl SettingsView {
         };
         let look = self.look(cx);
 
-        self.hinted(
+        self.row(
             t!("settings-adaptive"),
-            "settings-adaptive-detail",
             Switch::new("adaptive-theme", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let adaptive = !on;
@@ -634,7 +633,7 @@ fn swatch(palette: &Theme, cx: &App) -> Div {
 
 /// The top left corner of a surface drawn at `rounding`'s radius, the rest of it cut off by
 /// the thumbnail.
-fn corner(rounding: Rounding, cx: &App) -> Div {
+pub(super) fn corner(rounding: Rounding, cx: &App) -> Div {
     let theme = cx.theme();
 
     div().size_full().relative().child(

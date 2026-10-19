@@ -2,14 +2,11 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, Pixels, Window, div, px, svg};
 use i18n::t;
 use state::FullscreenControlsAutohide;
-use ui::{
-    ActiveTheme as _, Levels, MenuItem, OptionCard, Picker, Switch, Visualizer, VisualizerStyle,
-};
+use ui::{ActiveTheme as _, Levels, OptionCard, Switch, Visualizer, VisualizerStyle};
 
-use super::rows::grid;
+use super::rows::{grid, segmented};
 use super::{Group, SettingsView, Slot};
 
-const FULLSCREEN_CONTROLS_AUTOHIDE: &str = "fullscreen-controls-autohide";
 /// How large the cross on the Off card draws.
 const GLYPH: Pixels = px(18.);
 /// How much of a visualizer card's height its spectrum takes.
@@ -116,9 +113,8 @@ impl SettingsView {
     pub(super) fn visualizer_absolute_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).visualizer_absolute();
 
-        self.hinted(
+        self.row(
             t!("settings-visualizer-absolute"),
-            "settings-visualizer-absolute-detail",
             Switch::new("visualizer-absolute", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
@@ -131,22 +127,18 @@ impl SettingsView {
     pub(super) fn fullscreen_controls_autohide_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).fullscreen_controls_autohide();
 
-        let picker = Picker::new(
-            FULLSCREEN_CONTROLS_AUTOHIDE,
-            &self.popovers,
-            i18n::lookup(chosen.key(), None),
-        )
-        .width(Picker::NARROW)
-        .items(FullscreenControlsAutohide::ALL.map(|fca| {
-            MenuItem::new(fca.id(), i18n::lookup(fca.key(), None))
-                .selected(fca == chosen)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings.update(cx, |settings, cx| {
-                        settings.set_fullscreen_controls_autohide(fca, cx)
-                    });
-                    cx.notify();
-                }))
-        }));
+        let picker = segmented(
+            "fullscreen-controls-autohide",
+            FullscreenControlsAutohide::ALL.map(|fca| (fca, i18n::lookup(fca.key(), None))),
+            chosen,
+            cx.listener(|this, fca: &FullscreenControlsAutohide, _, cx| {
+                let fca = *fca;
+                this.settings.update(cx, |settings, cx| {
+                    settings.set_fullscreen_controls_autohide(fca, cx)
+                });
+                cx.notify();
+            }),
+        );
 
         self.row(
             t!("settings-fullscreen-controls-autohide"),

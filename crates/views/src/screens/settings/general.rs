@@ -1,24 +1,16 @@
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, SharedString};
+use gpui::{AnyElement, App, Context, SharedString, Window};
 use i18n::{Language, t};
 use router::{NavEntry, Screen};
-use ui::{Button, MenuItem, Pace, Picker, Rounding, Saver, Stillness, Switch};
+use ui::{MenuItem, OptionCard, Pace, Picker, Rounding, Saver, Stillness, Switch};
 
+use super::appearance::corner;
+use super::rows::{grid, segmented};
 use super::{Group, LANGUAGES, SettingsView, Slot};
 use crate::shared::popups::matches_query;
 
 const STARTUP: &str = "startup";
 const ENTRIES: &str = "entries";
-const MOTION: &str = "motion";
-const PACE: &str = "pace";
-const SAVER: &str = "saver";
-#[cfg(any(
-    target_os = "windows",
-    target_os = "linux",
-    target_os = "freebsd",
-    target_os = "macos"
-))]
-const WINDOW_ROUNDING: &str = "window-rounding";
 
 impl SettingsView {
     pub(super) fn general_groups(&self, cx: &App) -> Vec<Group> {
@@ -215,37 +207,40 @@ impl SettingsView {
         )
     }
 
+    /// The window's corners as one card per rounding, each showing a corner at that radius.
+    /// AppKit has no square window, so macOS offers only the corners it can draw.
     #[cfg(any(
         target_os = "windows",
         target_os = "linux",
         target_os = "freebsd",
         target_os = "macos"
     ))]
-    pub(super) fn window_rounding_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn window_rounding_row(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let current = self.settings.read(cx).window_rounding();
+        let offered = Rounding::ALL
+            .into_iter()
+            .filter(|rounding| cfg!(not(target_os = "macos")) || *rounding != Rounding::Square)
+            .collect::<Vec<_>>();
 
-        let picker = Picker::new(WINDOW_ROUNDING, &self.popovers, current.label())
-            .width(Picker::NARROW)
-            // AppKit has no square window, so macOS offers only the corners it can draw.
-            .items(
-                Rounding::ALL
-                    .into_iter()
-                    .filter(|rounding| {
-                        cfg!(not(target_os = "macos")) || *rounding != Rounding::Square
-                    })
-                    .map(|rounding| {
-                        MenuItem::new(rounding.id(), rounding.label())
-                            .selected(current == rounding)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.settings.update(cx, |settings, cx| {
-                                    settings.set_window_rounding(rounding, cx)
-                                });
-                                cx.notify();
-                            }))
-                    }),
-            );
+        let cards =
+            grid(offered.len() as u16, window, cx).children(offered.into_iter().map(|rounding| {
+                OptionCard::new(SharedString::from(format!("window-{}", rounding.id())))
+                    .thumb(corner(rounding, cx))
+                    .label(rounding.label())
+                    .selected(current == rounding)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings.update(cx, |settings, cx| {
+                            settings.set_window_rounding(rounding, cx)
+                        });
+                        cx.notify();
+                    }))
+            }));
 
-        self.row(t!("settings-window-rounding"), picker.into_any_element())
+        self.stacked(t!("settings-window-rounding"), cards)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -257,89 +252,83 @@ impl SettingsView {
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let shown = settings.window_controls();
 
-        self.row(
-            t!("settings-controls-side"),
-            Button::new("controls-side")
-                .label(match left {
-                    true => t!("common-left"),
-                    false => t!("common-right"),
-                })
-                .small()
-                .outline()
-                .disabled(!shown)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.settings
-                        .update(cx, |settings, cx| settings.set_controls_on_left(!left, cx));
-                }))
-                .into_any_element(),
+        let sides = segmented(
+            "controls-side",
+            [(true, t!("common-left")), (false, t!("common-right"))],
+            left,
+            cx.listener(move |this, left: &bool, _, cx| {
+                if !shown {
+                    return;
+                }
+                let left = *left;
+                this.settings
+                    .update(cx, |settings, cx| settings.set_controls_on_left(left, cx));
+            }),
         )
+        .when(!shown, |bar| bar.opacity(0.4));
+
+        self.row(t!("settings-controls-side"), sides.into_any_element())
     }
 
     pub(super) fn motion_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).stillness();
 
-        let picker = Picker::new(MOTION, &self.popovers, current.label())
-            .width(Picker::NARROW)
-            .items(Stillness::ALL.into_iter().map(|stillness| {
-                MenuItem::new(stillness.id(), stillness.label())
-                    .selected(current == stillness)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings.update(cx, |settings, cx| {
-                            settings.set_stillness(stillness, cx);
-                        });
-                        cx.notify();
-                    }))
-            }));
+        let choices = segmented(
+            "motion",
+            Stillness::ALL.map(|choice| (choice, choice.label())),
+            current,
+            cx.listener(|this, choice: &Stillness, _, cx| {
+                let choice = *choice;
+                this.settings
+                    .update(cx, |settings, cx| settings.set_stillness(choice, cx));
+                cx.notify();
+            }),
+        );
 
-        self.row(t!("settings-motion"), picker.into_any_element())
+        self.row(t!("settings-motion"), choices.into_any_element())
     }
 
     pub(super) fn pace_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).pace();
 
-        let picker = Picker::new(PACE, &self.popovers, current.label())
-            .width(Picker::NARROW)
-            .items(Pace::ALL.into_iter().map(|pace| {
-                MenuItem::new(pace.id(), pace.label())
-                    .selected(current == pace)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings
-                            .update(cx, |settings, cx| settings.set_pace(pace, cx));
-                        cx.notify();
-                    }))
-            }));
+        let choices = segmented(
+            "pace",
+            Pace::ALL.map(|choice| (choice, choice.label())),
+            current,
+            cx.listener(|this, choice: &Pace, _, cx| {
+                let choice = *choice;
+                this.settings
+                    .update(cx, |settings, cx| settings.set_pace(choice, cx));
+                cx.notify();
+            }),
+        );
 
-        self.row(t!("settings-pace"), picker.into_any_element())
+        self.row(t!("settings-pace"), choices.into_any_element())
     }
 
     pub(super) fn saver_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.settings.read(cx).saver();
 
-        let picker = Picker::new(SAVER, &self.popovers, current.label())
-            .width(Picker::NARROW)
-            .items(Saver::ALL.into_iter().map(|saver| {
-                MenuItem::new(saver.id(), saver.label())
-                    .selected(current == saver)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings
-                            .update(cx, |settings, cx| settings.set_saver(saver, cx));
-                        cx.notify();
-                    }))
-            }));
+        let choices = segmented(
+            "saver",
+            Saver::ALL.map(|choice| (choice, choice.label())),
+            current,
+            cx.listener(|this, choice: &Saver, _, cx| {
+                let choice = *choice;
+                this.settings
+                    .update(cx, |settings, cx| settings.set_saver(choice, cx));
+                cx.notify();
+            }),
+        );
 
-        self.hinted(
-            t!("settings-saver"),
-            "settings-saver-detail",
-            picker.into_any_element(),
-        )
+        self.row(t!("settings-saver"), choices.into_any_element())
     }
 
     pub(super) fn adaptive_menu_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).adaptive_menu();
 
-        self.hinted(
+        self.row(
             t!("settings-adaptive-menu"),
-            "settings-adaptive-menu-detail",
             Switch::new("adaptive-menu", on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings

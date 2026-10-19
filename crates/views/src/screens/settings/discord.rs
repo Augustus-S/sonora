@@ -2,12 +2,11 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, Context};
 use i18n::t;
 use state::DiscordName;
-use ui::{MenuItem, Picker, Switch};
+use ui::{Button, MenuItem, Picker, Switch, TabBar};
 
 use super::{Group, SettingsView, Slot};
 
 const DISCORD_NAME: &str = "discord-name";
-const DISCORD_BUTTONS: &str = "discord-buttons";
 
 impl SettingsView {
     /// The Discord page. While the status is off only the master switch and the local files
@@ -129,33 +128,28 @@ impl SettingsView {
         )
     }
 
+    /// The buttons under the status, each a segment that turns on and off by itself.
     pub(super) fn discord_buttons_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let settings = self.settings.read(cx);
         let sonora = settings.discord_sonora_button();
         let provider = settings.discord_provider_button();
 
-        let picker = Picker::new(
-            DISCORD_BUTTONS,
-            &self.popovers,
-            t!("settings-discord-buttons-pick"),
-        )
-        .width(Picker::NARROW)
-        .sticky()
-        .item(
-            MenuItem::new(
-                "discord-button-provider",
-                t!("settings-discord-name-provider"),
-            )
-            .selected(provider)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.settings.update(cx, |settings, cx| {
-                    settings.set_discord_provider_button(!provider, cx)
-                });
-                cx.notify();
-            })),
-        )
-        .item(
-            MenuItem::new("discord-button-sonora", t!("settings-discord-name-sonora"))
+        let buttons = TabBar::new("discord-buttons").flex_none().items([
+            Button::new("discord-button-provider")
+                .label(t!("settings-discord-name-provider"))
+                .small()
+                .ghost()
+                .selected(provider)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.update(cx, |settings, cx| {
+                        settings.set_discord_provider_button(!provider, cx)
+                    });
+                    cx.notify();
+                })),
+            Button::new("discord-button-sonora")
+                .label(t!("settings-discord-name-sonora"))
+                .small()
+                .ghost()
                 .selected(sonora)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
@@ -163,8 +157,8 @@ impl SettingsView {
                     });
                     cx.notify();
                 })),
-        );
+        ]);
 
-        self.row(t!("settings-discord-buttons"), picker.into_any_element())
+        self.row(t!("settings-discord-buttons"), buttons.into_any_element())
     }
 }

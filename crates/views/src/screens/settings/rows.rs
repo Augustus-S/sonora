@@ -1,46 +1,33 @@
+use std::rc::Rc;
+
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Div, ElementId, SharedString, Window, div, px, svg};
-use ui::{ActiveTheme as _, Button, Perch, Room, Tipped as _};
+use gpui::{AnyElement, App, Div, ElementId, SharedString, Window, div};
+use ui::{ActiveTheme as _, Button, Room, TabBar};
 
 use super::SettingsView;
 use crate::chrome::Chrome;
 
-/// How large the info mark beside a hinted label draws.
-const HINT: gpui::Pixels = px(14.);
+/// What a segmented control does with the option picked in it.
+type Pick<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
 
-/// One row of a group: the label at the start, an info mark beside it when the setting needs a
-/// word of explanation, and the control at the end. It stands one list row tall with no inset of
-/// its own, so its label lines up with the group's heading and rows stack with nothing between.
+/// One row of a group: the label at the start and the control at the end. It stands one list
+/// row tall with no inset of its own, so its label lines up with the group's heading and rows
+/// stack with nothing between.
 #[derive(IntoElement)]
 pub(super) struct Row {
     title: SharedString,
-    hint: Option<&'static str>,
     control: AnyElement,
 }
 
 impl Row {
     pub(super) fn new(title: SharedString, control: AnyElement) -> Self {
-        Self {
-            title,
-            hint: None,
-            control,
-        }
-    }
-
-    /// Puts an info mark beside the label that shows the Fluent string `key` when hovered.
-    pub(super) fn hint(mut self, key: &'static str) -> Self {
-        self.hint = Some(key);
-        self
+        Self { title, control }
     }
 }
 
 impl RenderOnce for Row {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self {
-            title,
-            hint,
-            control,
-        } = self;
+        let Self { title, control } = self;
         let theme = *cx.theme();
 
         div()
@@ -49,27 +36,7 @@ impl RenderOnce for Row {
             .justify_between()
             .gap_4()
             .min_h(theme.metrics.list_row)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .gap_1p5()
-                    .child(div().min_w_0().truncate().child(title))
-                    .children(hint.map(|key| {
-                        div()
-                            .id(ElementId::Name(SharedString::from(key)))
-                            .flex_none()
-                            .tip(key, Perch::Pointer)
-                            .child(
-                                svg()
-                                    .path(icons::path("icons/info.svg"))
-                                    .size(HINT)
-                                    .text_color(theme.muted_foreground),
-                            )
-                    })),
-            )
+            .child(div().flex_1().min_w_0().truncate().child(title))
             .child(div().flex_none().child(control))
     }
 }
@@ -80,15 +47,45 @@ impl SettingsView {
         Row::new(title, control).into_any_element()
     }
 
-    /// A row with an info mark beside its label, showing the Fluent string `hint` when hovered.
-    pub(super) fn hinted(
-        &self,
-        title: SharedString,
-        hint: &'static str,
-        control: AnyElement,
-    ) -> AnyElement {
-        Row::new(title, control).hint(hint).into_any_element()
+    /// A row whose choice is drawn as option cards: the label on a row of its own, then the
+    /// cards across the column under it.
+    pub(super) fn stacked(&self, title: SharedString, cards: impl IntoElement) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .pb_3()
+            .child(Row::new(title, div().into_any_element()))
+            .child(cards)
+            .into_any_element()
     }
+}
+
+/// A choice between a few options as one segmented control, each option a segment with its
+/// label and the `chosen` one lit. `pick` hears the option a click lands on.
+pub(super) fn segmented<T: Copy + PartialEq + 'static>(
+    id: &'static str,
+    options: impl IntoIterator<Item = (T, SharedString)>,
+    chosen: T,
+    pick: impl Fn(&T, &mut Window, &mut App) + 'static,
+) -> TabBar {
+    let pick: Pick<T> = Rc::new(pick);
+
+    TabBar::new(id)
+        .flex_none()
+        .items(
+            options
+                .into_iter()
+                .enumerate()
+                .map(|(index, (option, label))| {
+                    let pick = pick.clone();
+                    Button::new((id, index))
+                        .label(label)
+                        .small()
+                        .ghost()
+                        .selected(option == chosen)
+                        .on_click(move |_, window, cx| pick(&option, window, cx))
+                }),
+        )
 }
 
 /// A row that opens a page of its own: the label, the value chosen there in muted text, and a

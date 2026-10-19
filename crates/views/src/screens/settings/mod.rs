@@ -681,7 +681,7 @@ impl SettingsView {
     }
 
     /// Builds the slot's row or cards. Asked only for the page on show, every frame it is.
-    fn slot_element(&self, slot: Slot, cx: &mut Context<Self>) -> AnyElement {
+    fn slot_element(&self, slot: Slot, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         match slot {
             Slot::Startup => self.startup_row(cx),
             Slot::Entries => self.entries_row(cx),
@@ -724,7 +724,7 @@ impl SettingsView {
                 target_os = "freebsd",
                 target_os = "macos"
             ))]
-            Slot::WindowRounding => self.window_rounding_row(cx),
+            Slot::WindowRounding => self.window_rounding_row(window, cx),
             Slot::AdaptiveMenu => self.adaptive_menu_row(cx),
             Slot::Normalisation => self.playback_row(cx),
             Slot::Gapless => self.gapless_row(cx),
@@ -773,7 +773,7 @@ impl SettingsView {
             Slot::Corners => self.corner_cards(window, cx),
             Slot::Visualizer => self.visualizer_cards(window, cx),
             Slot::StreamQuality => self.quality_cards(window, cx),
-            slot => self.slot_element(slot, cx),
+            slot => self.slot_element(slot, window, cx),
         }
     }
 
@@ -795,7 +795,7 @@ impl SettingsView {
         let rows = rows
             .into_iter()
             .map(|slot| {
-                let row = self.slot_element(slot, cx);
+                let row = self.slot_element(slot, window, cx);
                 self.revealing(slot, row, cx)
             })
             .collect::<Vec<_>>();
