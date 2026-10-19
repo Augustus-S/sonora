@@ -42,7 +42,7 @@ type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type Art = Box<dyn FnOnce(Hover, &mut Window, &mut App) -> AnyElement + 'static>;
 
 /// What a tile's art is told about the hover on every frame it draws.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hover {
     /// How far the lift has gone, from 0 at rest to 1 hovered. It overshoots a little on the
     /// way, as springs do.
@@ -53,6 +53,22 @@ pub struct Hover {
     pub clock: f32,
     /// Whether the pointer is over the tile.
     pub hovered: bool,
+    /// How much larger than the tile the art is laid out. It is 1 at rest and while the lift
+    /// moves, when the compositor scales the art instead, and the full lift once it has settled.
+    /// Art that sizes its parts in pixels multiplies them by this, so the settled frame matches
+    /// the moving one.
+    pub scale: f32,
+}
+
+impl Default for Hover {
+    fn default() -> Self {
+        Self {
+            lift: 0.,
+            clock: 0.,
+            hovered: false,
+            scale: 1.,
+        }
+    }
 }
 
 /// A large tile that is an illustration and a title and nothing else, for a grid of places to
@@ -144,6 +160,7 @@ impl Showing {
                 lift: self.lift.at(),
                 clock: self.clock,
                 hovered: self.hovered,
+                scale: 1.,
             },
             glow: css_ease_out(self.glow),
             press: self.press.at(),
@@ -228,6 +245,7 @@ impl RenderOnce for Showcase {
                     lift: 1.,
                     clock,
                     hovered: true,
+                    scale: 1.,
                 },
                 glow: 1.,
                 press: 0.,
@@ -243,10 +261,17 @@ impl RenderOnce for Showcase {
             window.request_animation_frame();
         }
 
-        let art = art.map(|art| art(frame.hover, window, cx));
         // While the lift moves the art scales as one layer. At rest it is laid out at its size,
         // so a hovered tile's art sits on whole pixels instead of being resampled.
         let grown = frame.hover.lift >= 1. && !frame.lifting;
+        let hover = Hover {
+            scale: match grown {
+                true => 1. + LIFT,
+                false => 1.,
+            },
+            ..frame.hover
+        };
+        let art = art.map(|art| art(hover, window, cx));
         let art = div()
             .absolute()
             .map(|layer| match (frame.lifting, grown) {
