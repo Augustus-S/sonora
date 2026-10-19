@@ -223,7 +223,7 @@ impl SettingsView {
                             );
                             cx.notify();
                         }));
-                match picked.filter(|_| !adaptive) {
+                match picked {
                     Some((picked, _)) => self.with_variants(card, &family, &picked, cx),
                     None => card,
                 }

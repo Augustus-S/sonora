@@ -219,6 +219,17 @@ impl RenderOnce for OptionCard {
                     .bg(mix(rest, theme.secondary_hover, lit))
                     .children(thumb),
             )
+            // a disabled card is dimmed by a veil of the page colour rather than by opacity,
+            // which would let overlapping parts of the thumb show through one another
+            .when(disabled, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(theme.radius)
+                        .bg(theme.background.opacity(1. - FADED)),
+                )
+            })
             .when(selected, |this| {
                 this.child(
                     div()
@@ -229,7 +240,10 @@ impl RenderOnce for OptionCard {
                         .bottom(-reach)
                         .rounded(theme.radius + reach)
                         .border_2()
-                        .border_color(theme.foreground),
+                        .border_color(match disabled {
+                            true => theme.foreground.opacity(FADED),
+                            false => theme.foreground,
+                        }),
                 )
             });
 
@@ -239,7 +253,6 @@ impl RenderOnce for OptionCard {
             .items_center()
             .gap_2()
             .min_w_0()
-            .when(disabled, |this| this.opacity(FADED))
             .when(interactive, |this| this.cursor_pointer())
             .on_hover(move |hovered, window, cx| {
                 fade.update(cx, |fade, _| fade.set(*hovered));
@@ -253,6 +266,7 @@ impl RenderOnce for OptionCard {
                     .flex_col()
                     .items_center()
                     .gap_0p5()
+                    .when(disabled, |this| this.opacity(FADED))
                     .max_w_full()
                     .when_some(label, |this, label| {
                         let color = match selected {
@@ -279,6 +293,7 @@ impl RenderOnce for OptionCard {
                             });
                         this.child(match variants {
                             None => line.into_any_element(),
+                            Some(_) if disabled => line.into_any_element(),
                             Some(Variants::Menu { key, group, menu }) => Popover::new(key, group)
                                 .max_w_full()
                                 .face(line)
