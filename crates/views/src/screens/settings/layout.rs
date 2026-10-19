@@ -59,6 +59,12 @@ impl Layout {
     }
 }
 
+/// Whether a page draws its title. About opens on the app's mark and name instead, unless a
+/// search puts its results there.
+fn titled(destination: &Destination, named: bool) -> bool {
+    named || *destination != Destination::Settings(SettingsPage::About)
+}
+
 /// The top of a page: the back link to the page a drill-in opened from, and the page's title or
 /// `named` in its place, standing as tall as the sidebar's search field so the two share a
 /// centre line.
@@ -139,7 +145,9 @@ pub(crate) fn frame(
                     .w(layout.width)
                     .pt(layout.top)
                     .pb(theme.metrics.inset * 2.)
-                    .child(title(destination, named, cx).mb(theme.metrics.inset))
+                    .when(titled(destination, named.is_some()), |column| {
+                        column.child(title(destination, named, cx).mb(theme.metrics.inset))
+                    })
                     .children(preview.map(|preview| preview.mb(super::GROUPS)))
                     .child(body),
             ),

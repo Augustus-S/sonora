@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, SharedString, div, svg};
 use i18n::t;
-use ui::{ActiveTheme as _, Avatar, Switch, Text, faint};
+use ui::{ActiveTheme as _, Avatar, Switch, Text};
 
 use super::rows::outward;
-use super::{Group, SettingsView, Slot};
+use super::{Group, SettingsView, Slot, group_heading};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How large the tile under the app mark stands, in covers, and how much of it the mark fills.
@@ -129,7 +129,8 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// What the About page opens with: the app mark and the name, centred over the column.
+    /// What the About page opens with: the app mark and the name, centred over the column. The
+    /// mark takes the theme's accent, the adaptive tint while one is laid over it.
     pub(super) fn mark(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let tile = theme.metrics.cover * MARK_TILE;
@@ -153,7 +154,7 @@ impl SettingsView {
                         svg()
                             .path(icons::path("icons/sonora.svg"))
                             .size(tile * MARK)
-                            .text_color(theme.foreground),
+                            .text_color(theme.tint.unwrap_or(theme.primary)),
                     ),
             )
             .child(
@@ -180,7 +181,11 @@ impl SettingsView {
         div()
             .flex()
             .flex_col()
-            .child(faint(cx).mb(theme.metrics.pad).child(t!("settings-team")))
+            .child(group_heading(
+                t!("settings-team"),
+                Some("icons/user-round.svg"),
+                cx,
+            ))
             .children(MEMBERS.into_iter().enumerate().map(|(index, member)| {
                 div()
                     .id(("team-member", index))
