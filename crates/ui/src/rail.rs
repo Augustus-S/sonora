@@ -177,7 +177,9 @@ fn arrow(
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme();
-    let hover = theme.secondary_active;
+    // the active wash is translucent, so it is laid over the button's own fill to keep the
+    // cards under the arrow hidden
+    let hover = theme.secondary.blend(theme.secondary_active);
     let (side, icon) = match forward {
         true => ("forward", "icons/chevron-right.svg"),
         false => ("back", "icons/chevron-left.svg"),
