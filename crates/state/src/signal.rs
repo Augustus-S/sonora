@@ -260,7 +260,7 @@ impl Signal {
                 preamp_db: eq.preamp_db(),
                 passes_through: stream
                     .as_ref()
-                    .is_some_and(|stream| eq.curve().passes_through(stream.format.rate)),
+                    .is_some_and(|stream| eq.played().passes_through(stream.format.rate)),
             });
             SignalPath {
                 track: track.cloned(),

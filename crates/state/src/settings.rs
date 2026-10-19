@@ -315,6 +315,12 @@ struct Values {
     /// Whether the equalizer screen shows its advanced controls, off so a first look shows only
     /// the switch, the curve and the presets.
     equalizer_advanced: bool,
+    /// The bass and treble shelves laid over whichever sound plays, in decibels, read leniently
+    /// like the profiles.
+    #[serde(deserialize_with = "equalizer::read_tone")]
+    equalizer_bass: f64,
+    #[serde(deserialize_with = "equalizer::read_tone")]
+    equalizer_treble: f64,
     sleep_timer: bool,
     discord_presence: bool,
     discord_name: DiscordName,
@@ -478,6 +484,8 @@ impl Default for Values {
             equalizer_profile: 0,
             equalizer_rules: Vec::new(),
             equalizer_advanced: false,
+            equalizer_bass: 0.,
+            equalizer_treble: 0.,
             sleep_timer: false,
             discord_presence: false,
             discord_name: DiscordName::Sonora,
