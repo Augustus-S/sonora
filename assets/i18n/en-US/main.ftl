@@ -490,9 +490,6 @@ month-12 = Dec
 # settings
 settings-search = Search settings
 settings-search-results = Search results
-settings-close = Close settings
-# the key that closes settings, written small under the close button
-settings-close-key = ESC
 # where a search result lives: a drill-in page under the page it opens from
 settings-result-place = { $parent } › { $page }
 settings-page-providers = Providers
@@ -521,11 +518,6 @@ settings-group-output = Output
 settings-group-status = Status
 settings-group-startup = Startup
 settings-group-context-menus = Context menus
-settings-group-you = You
-settings-group-look = Look
-settings-group-listen = Listen
-settings-group-share = Share
-settings-group-sonora = Sonora
 key-ctrl = Ctrl
 key-super = Super
 key-alt = Alt

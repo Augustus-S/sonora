@@ -89,24 +89,6 @@ impl Navigation {
         self.go(destination, cx);
     }
 
-    /// Drops the run of settings pages that ends at the current one, and the history after it,
-    /// landing on the page the run was opened from. A run with nothing before it lands on Home.
-    pub fn leave_settings(&mut self, cx: &mut Context<Self>) {
-        if !self.current().in_settings() {
-            return;
-        }
-        let start = self.trail[..=self.at]
-            .iter()
-            .rposition(|destination| !destination.in_settings())
-            .map_or(0, |before| before + 1);
-        self.trail.truncate(start);
-        if self.trail.is_empty() {
-            self.trail.push(Destination::Home);
-        }
-        self.at = self.trail.len() - 1;
-        self.arrive(cx);
-    }
-
     pub fn forward(&mut self, cx: &mut Context<Self>) {
         if !self.can_go_forward() {
             return;

@@ -263,8 +263,7 @@ impl EqualizerView {
         None
     }
 
-    /// Closes an open menu on escape. Returns false when none was open, so the escape can close
-    /// settings instead.
+    /// Closes an open menu on escape. Returns false when none was open.
     pub(crate) fn escape(&mut self) -> bool {
         let open = self.popovers.any();
         self.popovers.close();
@@ -706,7 +705,7 @@ impl EqualizerView {
 
 impl Render for EqualizerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let room = Chrome::room(window, cx);
+        let room = settings::Layout::of(window, cx).room();
         let advanced = self.settings.read(cx).equalizer_advanced();
         let sound = self.sound(room, advanced, cx);
 
@@ -719,7 +718,7 @@ impl Render for EqualizerView {
             .child(sound)
             .when(advanced, |this| {
                 this.child(card(&view, "equalizer-filters", |this, window, cx| {
-                    let row = Room::of(settings::Layout::of(window, cx).width);
+                    let row = settings::Layout::of(window, cx).room();
                     let filters = this.filters(row.fits(Room::Roomy), cx);
                     form(filters, cx).into_any_element()
                 }))

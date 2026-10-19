@@ -43,9 +43,6 @@ actions!(
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 pub const SEARCH_CONTEXT: &str = "Search";
-/// The context the settings takeover adds beside the workspace's, so playback keys stay quiet
-/// while it is up.
-pub const SETTINGS_CONTEXT: &str = "Settings";
 
 /// Every key binding, in precedence order: GPUI prefers the deepest matching context and,
 /// within one, the binding registered last, so the macOS set at the end overrides the shared one.
@@ -61,7 +58,6 @@ pub fn bindings() -> Vec<KeyBinding> {
 fn shared() -> Vec<KeyBinding> {
     let editing = Some(INPUT_CONTEXT);
     let away_from_text = format!("{WORKSPACE_CONTEXT} && !{INPUT_CONTEXT}");
-    let listening = format!("{WORKSPACE_CONTEXT} && !{INPUT_CONTEXT} && !{SETTINGS_CONTEXT}");
     let table = Some(TABLE_CONTEXT);
     let form = Some(FORM_CONTEXT);
     let menu = Some(MENU_CONTEXT);
@@ -117,10 +113,10 @@ fn shared() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl--", DecreaseFontSize, None),
         KeyBinding::new("cmd-0", ResetFontSize, None),
         KeyBinding::new("ctrl-0", ResetFontSize, None),
-        KeyBinding::new("space", TogglePlayback, Some(&listening)),
-        KeyBinding::new("ctrl-left", SongPrevious, Some(&listening)),
-        KeyBinding::new("ctrl-right", SongNext, Some(&listening)),
-        KeyBinding::new("f", ToggleFullscreen, Some(&listening)),
+        KeyBinding::new("space", TogglePlayback, Some(&away_from_text)),
+        KeyBinding::new("ctrl-left", SongPrevious, Some(&away_from_text)),
+        KeyBinding::new("ctrl-right", SongNext, Some(&away_from_text)),
+        KeyBinding::new("f", ToggleFullscreen, Some(&away_from_text)),
         KeyBinding::new("f11", ToggleWindowFullscreen, None),
         KeyBinding::new("cmd-z", Undo, Some(&away_from_text)),
         KeyBinding::new("ctrl-z", Undo, Some(&away_from_text)),

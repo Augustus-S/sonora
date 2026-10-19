@@ -1,59 +1,81 @@
-//! Where the settings takeover puts things. The sidebar stands against the window's left edge,
-//! one content column is centred in the room right of it, and the close button waits beside the
-//! column's top right corner. The shell draws the sidebar and the close button and the page draws
-//! the column, so both work the places out here from the same window and land on the same pixels.
+//! Where settings put things inside the workspace's content area. The header with the search
+//! field and the page tabs floats over the top of the area, and one content column is centred
+//! under it. The header measures itself and every page starts below what it measured, so the
+//! header, the pages and the equalizer all work the places out here from the same numbers.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Div, Entity, Pixels, SharedString, Window, div, px};
+use gpui::{AnyElement, App, Div, Entity, Global, Pixels, SharedString, Window, div, px};
 use router::{Destination, SettingsPage};
-use ui::{ActiveTheme as _, Button, Scrollbar, Scroller, effects, heading};
+use ui::{ActiveTheme as _, Button, Room, Scrollbar, Scroller, effects, heading};
 
-/// How wide the sidebar stands, its padding included.
-pub(crate) const SIDEBAR: Pixels = px(248.);
+use crate::chrome::Chrome;
+
 /// How wide the content column grows at most.
 const COLUMN: Pixels = px(640.);
+/// How far past the header the rows keep dissolving, so the handoff under its blur has no hard
+/// edge where sharp content comes out of the haze.
+const FADE_TAIL: Pixels = px(48.);
 
-/// The places of the takeover's parts in a window, as distances from its left and top edges.
+/// The places of the settings parts in the content area.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Layout {
-    /// Where the content column starts and how wide it is.
-    pub(crate) column: Pixels,
+    /// How far the content column and the header keep from the area's sides.
+    pub(crate) margin: Pixels,
+    /// How wide the content column is.
     pub(crate) width: Pixels,
-    /// Where the close button starts.
-    pub(crate) close: Pixels,
-    /// How far down the sidebar's search field, the page title and the close button start.
+    /// How tall the header measured last, which is where a page's title starts.
     pub(crate) top: Pixels,
+    /// Whether the header has measured itself yet. Until it has, `top` is a guess.
+    pub(crate) measured: bool,
 }
 
+/// The header's height as it last measured itself.
+#[derive(Default)]
+struct HeaderHeight(Option<Pixels>);
+
+impl Global for HeaderHeight {}
+
 impl Layout {
-    /// The places for the window. The column is centred in the room right of the sidebar
-    /// unless that would push the close button off the window, and then it moves left as far
-    /// as the sidebar's margin allows before it narrows.
+    /// The places for the content area as the workspace last published it. The column is as
+    /// wide as the area leaves after the margins, up to `COLUMN`.
     pub(crate) fn of(window: &Window, cx: &App) -> Self {
         let metrics = cx.theme().metrics;
-        let margin = metrics.inset;
-        let gap = metrics.inset;
-        let viewport = window.viewport_size().width;
-        // the room the close button keeps on the right of the column
-        let tools = gap + metrics.control + margin;
-        let room = (viewport - SIDEBAR - margin - tools).max(Pixels::ZERO);
-        let width = room.min(COLUMN);
-        let centred = SIDEBAR + ((viewport - SIDEBAR - width) / 2.).round();
-        let column = centred.min(viewport - tools - width).max(SIDEBAR + margin);
+        let margin = match Chrome::room(window, cx) {
+            Room::Tight | Room::Snug => metrics.pad * 2.,
+            Room::Roomy | Room::Wide | Room::Vast => metrics.inset,
+        };
+        let content = Chrome::content(window, cx);
+        let header = cx.try_global::<HeaderHeight>().and_then(|height| height.0);
 
         Self {
-            column,
-            width,
-            close: column + width + gap,
-            top: metrics.inset * 1.5,
+            margin,
+            width: (content - margin * 2.).clamp(Pixels::ZERO, COLUMN),
+            top: header.unwrap_or(Pixels::ZERO),
+            measured: header.is_some(),
         }
     }
 
-    /// Fades the scrolling content out across the band above the title, so rows rising past it
-    /// dissolve rather than meet the window's edge at a line.
+    /// The ladder step of the content column, which the pages lay their rows and cards out by.
+    pub(crate) fn room(&self) -> Room {
+        Room::of(self.width)
+    }
+
+    /// Takes the header's measured height. Returns true when it changed, so the caller knows to
+    /// redraw the pages that start below it.
+    pub(crate) fn set_header(height: Pixels, cx: &mut App) -> bool {
+        let next = Some(height);
+        if cx.try_global::<HeaderHeight>().map(|header| header.0) == Some(next) {
+            return false;
+        }
+        cx.set_global(HeaderHeight(next));
+        true
+    }
+
+    /// Fades the scrolling content out across the header and a little past it, so rows rising
+    /// under the header dissolve rather than meet its blur at a line.
     pub(crate) fn fade<E: Styled>(&self, element: E) -> E {
         match effects() {
-            true => element.fade_edges(self.top, Pixels::ZERO),
+            true => element.fade_edges(self.top + FADE_TAIL, Pixels::ZERO),
             false => element,
         }
     }
@@ -66,8 +88,7 @@ fn titled(destination: &Destination, named: bool) -> bool {
 }
 
 /// The top of a page: the back link to the page a drill-in opened from, and the page's title or
-/// `named` in its place, standing as tall as the sidebar's search field so the two share a
-/// centre line.
+/// `named` in its place.
 fn title(destination: &Destination, named: Option<SharedString>, cx: &App) -> Div {
     let theme = cx.theme();
     let (parent, page) = match destination {
@@ -102,10 +123,10 @@ fn title(destination: &Destination, named: Option<SharedString>, cx: &App) -> Di
         )
 }
 
-/// Lays a takeover page out in its column: the title, then `preview` across the column
-/// when the page has one, then `body`, all scrolling together. `destination` names the page for
-/// its title unless `named` gives one. The page fills the shell, which draws the sidebar and the
-/// close button over it.
+/// Lays a settings page out in its column, centred in the content area: the title, then
+/// `preview` across the column when the page has one, then `body`, all scrolling together under
+/// the floating header. `destination` names the page for its title unless `named` gives one.
+/// The page sits out the frames before the header has measured itself, so it never jumps.
 #[allow(
     clippy::too_many_arguments,
     reason = "every page hands its whole frame over at once"
@@ -125,24 +146,34 @@ pub(crate) fn frame(
     scrollbar.update(cx, |bar, cx| {
         bar.set_track_top(layout.top, cx);
     });
-    div().relative().size_full().child(
-        div().absolute().inset_0().child(
-            layout.fade(Scroller::new(id, scrollbar)).child(
-                div()
+    div()
+        .relative()
+        .size_full()
+        .when(!layout.measured, |page| page.invisible())
+        .child(
+            div().absolute().inset_0().child(
+                layout
+                    .fade(Scroller::new(id, scrollbar))
                     .flex()
                     .flex_col()
-                    .ml(layout.column)
-                    .w(layout.width)
-                    .pt(layout.top)
-                    .pb(theme.metrics.inset * 2.)
-                    .when(titled(destination, named.is_some()), |column| {
-                        column.child(title(destination, named, cx).mb(theme.metrics.inset))
-                    })
-                    .children(
-                        preview.map(|preview| div().w_full().mb(super::GROUPS).child(preview)),
-                    )
-                    .child(body),
+                    .items_center()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_none()
+                            .w(layout.width)
+                            .pt(layout.top)
+                            .pb(theme.metrics.inset * 2.)
+                            .when(titled(destination, named.is_some()), |column| {
+                                column.child(title(destination, named, cx).mb(theme.metrics.inset))
+                            })
+                            .children(
+                                preview
+                                    .map(|preview| div().w_full().mb(super::GROUPS).child(preview)),
+                            )
+                            .child(body),
+                    ),
             ),
-        ),
-    )
+        )
 }

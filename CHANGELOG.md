@@ -84,11 +84,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The Midnight, Forest, Ocean, Rose, Lavender and Amber themes are no longer built in. If you
   used one, Sonora saved it to your themes folder and keeps it selected, so nothing changes. The
   others can be copied from `themes/legacy` in Sonora's repository.
-- Settings now open full-window with ten pages listed down the left side, and the search above
-  them finds any setting by name and takes you to it. Themes, icon packs, corners, the
-  visualizer and streaming quality are picked from cards that show what you get.
+- Settings are split into ten pages in the tabs under the search field, and the search finds
+  any setting by name and takes you to it. Themes, icon packs, corners, the visualizer and
+  streaming quality are picked from cards that show what you get.
 - The equalizer, lyrics sources and music folders each have a page of their own inside
-  settings, and Esc or the close button takes you back to where you were before settings.
+  settings, with a link back to the page they open from.
 - With YouTube Music Premium, songs stream at 256 kbps instead of 128 kbps.
 - An equalizer preset that boosts no longer distorts loud passages. Sonora lowers the level by
   the curve's highest boost, so the balance you chose is what you hear.

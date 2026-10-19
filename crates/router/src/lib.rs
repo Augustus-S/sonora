@@ -141,7 +141,7 @@ impl Screen {
     }
 }
 
-/// One page of the settings takeover. The first ten stand in its sidebar, and the last two are
+/// One page of settings. The first ten stand in the settings header's tabs, and the last two are
 /// drill-ins that open from a row on their parent page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsPage {
@@ -160,7 +160,7 @@ pub enum SettingsPage {
 }
 
 impl SettingsPage {
-    /// Every page, the sidebar's first and the drill-ins after them.
+    /// Every page, the tabbed ones first and the drill-ins after them.
     pub const ALL: [Self; 12] = [
         Self::Providers,
         Self::General,
@@ -228,7 +228,7 @@ impl SettingsPage {
         }
     }
 
-    /// The page a drill-in returns to, or `None` for a page the sidebar lists.
+    /// The page a drill-in returns to, or `None` for a page the tabs list.
     pub fn parent(self) -> Option<Self> {
         match self {
             Self::LyricsSources => Some(Self::Lyrics),
@@ -256,7 +256,7 @@ pub enum Destination {
     Genre(SharedString),
     Search,
     Settings(SettingsPage),
-    /// The equalizer's own page in the settings takeover, opened from Sound.
+    /// The equalizer's own settings page, opened from Sound.
     Equalizer,
     Fullscreen,
 }
@@ -283,7 +283,7 @@ impl Destination {
         }
     }
 
-    /// Whether the settings takeover draws this destination rather than the workspace.
+    /// Whether this destination is a settings page, the equalizer included.
     pub fn in_settings(&self) -> bool {
         matches!(self, Destination::Settings(_) | Destination::Equalizer)
     }
@@ -297,7 +297,7 @@ impl Destination {
         }
     }
 
-    /// The sidebar page this destination belongs to: the page itself, or a drill-in's parent.
+    /// The tabbed page this destination belongs to: the page itself, or a drill-in's parent.
     pub fn settings_page(&self) -> Option<SettingsPage> {
         match self {
             Destination::Equalizer => Some(SettingsPage::Sound),
@@ -344,13 +344,7 @@ pub fn up(parent: Destination, cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.up(parent, cx));
 }
 
-/// Opens the settings takeover on the page it last showed, or on Providers the first time.
+/// Opens settings on the page they last showed, or on Providers the first time.
 pub fn open_settings(cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.open_settings(cx));
-}
-
-/// Leaves the settings takeover for where the user was before opening it, however many
-/// settings pages were visited in between.
-pub fn close_settings(cx: &mut App) {
-    trail(cx).update(cx, |navigation, cx| navigation.leave_settings(cx));
 }

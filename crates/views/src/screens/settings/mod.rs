@@ -18,7 +18,7 @@ use ui::{
     faint, snapped, upper,
 };
 
-use crate::chrome::OutputPicker;
+use crate::chrome::{Chrome, OutputPicker};
 use crate::shared::popups::SearchPopup;
 use crate::shared::text;
 
@@ -27,6 +27,7 @@ mod accounts;
 mod appearance;
 mod discord;
 mod general;
+mod header;
 mod layout;
 mod lyrics;
 mod now_playing;
@@ -37,7 +38,8 @@ mod scrobbling;
 mod sound;
 mod themes;
 
-pub(crate) use layout::{Layout, SIDEBAR, frame};
+pub use header::SettingsHeader;
+pub(crate) use layout::{Layout, frame};
 pub(crate) use rows::Row;
 
 /// The space between two groups of a page.
@@ -258,6 +260,8 @@ impl SettingsView {
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
         cx.observe(&Scan::global(cx), |_, _, cx| cx.notify())
             .detach();
+        let chrome = Chrome::entity(cx);
+        cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
         let me = cx.entity_id();
         let focus = cx.focus_handle();
         let languages = SearchPopup::new("settings-language-search", me, focus.clone(), cx);
@@ -368,7 +372,7 @@ impl SettingsView {
         !self.query.is_empty()
     }
 
-    /// The search field, which the rail draws.
+    /// The search field, which the header draws.
     pub(crate) fn search(&self) -> Entity<Input> {
         self.search.clone()
     }
@@ -1078,7 +1082,7 @@ impl Render for SettingsView {
         )
         .track_focus(&self.focus)
         // an action stops where it is handled unless told to go on, so an escape with nothing
-        // to close here goes on to the shell, which closes settings
+        // to close here goes on to the workspace
         .on_action(cx.listener(|this, _: &Dismiss, _, cx| {
             if !this.escape(cx) {
                 cx.propagate();

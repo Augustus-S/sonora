@@ -5,7 +5,6 @@ use gpui::{AnyElement, App, Div, ElementId, SharedString, Window, div};
 use ui::{ActiveTheme as _, Button, Room, TabBar};
 
 use super::SettingsView;
-use crate::chrome::Chrome;
 
 /// What a segmented control does with the option picked in it.
 type Pick<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
@@ -133,7 +132,7 @@ fn whole(
 
 /// The grid option cards stand in: `columns` across where the page is wide, fewer as it narrows.
 pub(super) fn grid(columns: u16, window: &Window, cx: &App) -> Div {
-    let columns = match Chrome::room(window, cx) {
+    let columns = match super::Layout::of(window, cx).room() {
         Room::Tight => columns.min(2),
         Room::Snug => columns.min(3),
         Room::Roomy => columns.min(4),

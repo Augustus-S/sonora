@@ -17,10 +17,10 @@ use ui::{ActiveTheme as _, Dismiss, Entrance, Look, Stillness, Theme, ThemeKind,
 
 use crate::chrome::{TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
 use crate::screens::search::SearchView;
+use crate::screens::settings::SettingsHeader;
 use crate::shared::ambient::{self, Ambient};
 use crate::shared::tracks::{LIBRARY_COLUMNS, album_columns};
 use crate::shells::Shell;
-use crate::shells::settings::SettingsShell;
 use crate::shells::workspace::Workspace;
 use crate::{
     Adaptive, ArtistView, DetailView, EqualizerView, FullscreenView, GenreView, HistoryView,
@@ -46,14 +46,19 @@ struct Screens {
     genres: Entity<Genres>,
     genre: Option<Entity<GenreView>>,
     genre_detail: Option<Entity<GenreDetails>>,
-    /// The settings pages' view, whose search the takeover's sidebar draws.
+    /// The settings pages' view, whose search the settings header draws.
     settings: Entity<SettingsView>,
+    /// The search field and page tabs floating over every settings page.
+    settings_header: Entity<SettingsHeader>,
+    equalizer: Entity<EqualizerView>,
+    /// Whether a settings destination was on show after the last move, so the settings view
+    /// hears when settings open and close.
+    settings_open: bool,
 }
 
 struct Shells {
     workspace: Entity<Workspace>,
     fullscreen: Entity<FullscreenView>,
-    settings: Entity<SettingsShell>,
 }
 
 /// Which shell fills the window.
@@ -61,7 +66,6 @@ struct Shells {
 enum RootView {
     Workspace,
     Fullscreen,
-    Settings,
 }
 
 impl RootView {
@@ -69,7 +73,6 @@ impl RootView {
     fn of(destination: &Destination) -> Self {
         match destination {
             Destination::Fullscreen => Self::Fullscreen,
-            destination if destination.in_settings() => Self::Settings,
             _ => Self::Workspace,
         }
     }
@@ -79,7 +82,6 @@ enum Focus {
     Search,
     Workspace,
     Fullscreen,
-    Settings,
 }
 
 pub struct Root {
@@ -206,7 +208,8 @@ impl Root {
         let settings = cx.new(|cx| SettingsView::new(session.clone(), playback.clone(), cx));
         let equalizer = Sonora::global(cx).equalizer.clone();
         let equalizer = cx.new(|cx| EqualizerView::new(equalizer, window, cx));
-        let settings_shell = cx.new(|cx| SettingsShell::new(settings.clone(), equalizer, cx));
+        let settings_header =
+            cx.new(|cx| SettingsHeader::new(settings.clone(), equalizer.clone(), cx));
 
         let song_detail = cx.new(|cx| SongDetail::new(session.clone(), io.clone(), cx));
         let song = cx.new(|cx| SongView::new(song_detail.clone(), playback.clone(), cx));
@@ -301,7 +304,6 @@ impl Root {
             shells: Shells {
                 workspace: workspace.clone(),
                 fullscreen,
-                settings: settings_shell,
             },
             view: RootView::Workspace,
             signing_in: false,
@@ -331,6 +333,9 @@ impl Root {
                 genre: None,
                 genre_detail: None,
                 settings,
+                settings_header,
+                equalizer,
+                settings_open: false,
             },
             adaptive,
             ambient,
@@ -496,18 +501,30 @@ impl Root {
 
     fn toggle_fullscreen(&mut self, cx: &mut Context<Self>) {
         match self.view {
-            RootView::Workspace | RootView::Settings => navigate(Destination::Fullscreen, cx),
+            RootView::Workspace => navigate(Destination::Fullscreen, cx),
             RootView::Fullscreen => back(cx),
         }
     }
 
-    /// Escape that nothing on the page took: it leaves fullscreen, or closes settings on where
-    /// the user was before opening them.
+    /// Escape that nothing on the page took: it leaves fullscreen, and on a settings page it
+    /// closes an open menu or dialog, then clears the search. It never leaves settings.
     fn dismiss(&mut self, cx: &mut Context<Self>) {
-        match self.view {
-            RootView::Fullscreen => back(cx),
-            RootView::Settings => router::close_settings(cx),
-            RootView::Workspace => {}
+        if let RootView::Fullscreen = self.view {
+            back(cx);
+            return;
+        }
+        match router::trail(cx).read(cx).current() {
+            Destination::Equalizer => {
+                self.screens.equalizer.update(cx, |view, cx| {
+                    if view.escape() {
+                        cx.notify();
+                    }
+                });
+            }
+            Destination::Settings(_) => {
+                self.screens.settings.update(cx, |view, cx| view.escape(cx));
+            }
+            _ => {}
         }
     }
 
@@ -517,21 +534,17 @@ impl Root {
         match self.view {
             RootView::Workspace => self.shells.workspace.read(cx).title_bar(content, cx),
             RootView::Fullscreen => self.shells.fullscreen.read(cx).title_bar(content, cx),
-            RootView::Settings => self.shells.settings.read(cx).title_bar(content, cx),
         }
     }
 
-    /// Opens settings on the page they last showed, or closes them when they are up.
+    /// Opens settings on the page they last showed, inside the workspace.
     fn open_settings(&mut self, cx: &mut Context<Self>) {
-        match self.view {
-            RootView::Settings => router::close_settings(cx),
-            RootView::Workspace | RootView::Fullscreen => router::open_settings(cx),
-        }
+        router::open_settings(cx);
     }
 
     /// Moves to `destination`. A move to another shell plays the entrance over the whole
-    /// window, a move within the workspace or within settings plays it over the page, and
-    /// reduced motion skips both.
+    /// window, a move within the workspace plays it over the page, and reduced motion skips
+    /// both.
     fn transition_to(&mut self, destination: Destination, cx: &mut Context<Self>) {
         self.navigation_transition = None;
         self.shell_entrance = None;
@@ -546,14 +559,6 @@ impl Root {
             if moving && !cx.reduce_motion() {
                 self.reveal_shell(cx);
             }
-            return;
-        }
-
-        if next == RootView::Settings {
-            self.show(destination, cx);
-            self.shells
-                .settings
-                .update(cx, |settings, cx| settings.reveal_page(cx));
             return;
         }
 
@@ -632,6 +637,29 @@ impl Root {
         self.pending = pending;
     }
 
+    /// Tells the settings views about a move. The equalizer reads its meters only while it is
+    /// the page on show and the previews run only while settings are open, so every move tells
+    /// them, settings or not.
+    fn follow_settings(&mut self, destination: &Destination, cx: &mut Context<Self>) {
+        let equalizer = matches!(destination, Destination::Equalizer);
+        self.screens
+            .equalizer
+            .update(cx, |view, cx| view.set_visible(equalizer, cx));
+        let open = destination.in_settings();
+        if open != self.screens.settings_open {
+            self.screens.settings_open = open;
+            self.screens
+                .settings
+                .update(cx, |view, _| view.set_open(open));
+        }
+        if let Destination::Settings(page) = destination {
+            let page = *page;
+            self.screens
+                .settings
+                .update(cx, |view, cx| view.select(page, cx));
+        }
+    }
+
     fn show(&mut self, destination: Destination, cx: &mut Context<Self>) {
         clear_listing(cx);
         let opening = matches!(destination, Destination::Fullscreen);
@@ -645,9 +673,7 @@ impl Root {
         self.screens
             .home
             .update(cx, |view, cx| view.set_visible(home, cx));
-        self.shells
-            .settings
-            .update(cx, |shell, cx| shell.show(&destination, cx));
+        self.follow_settings(&destination, cx);
         if let Destination::Fullscreen = destination {
             self.view = RootView::Fullscreen;
             self.announce_fullscreen(true, cx);
@@ -656,13 +682,6 @@ impl Root {
             return;
         }
         self.announce_fullscreen(false, cx);
-        if settings {
-            self.view = RootView::Settings;
-            self.toolbar = None;
-            self.pending = Some(Focus::Settings);
-            cx.notify();
-            return;
-        }
         self.view = RootView::Workspace;
         self.pending = Some(match destination {
             Destination::Search => Focus::Search,
@@ -670,9 +689,10 @@ impl Root {
         });
 
         let mut toolbar = None;
+        let mut header = None;
 
         let content: AnyView = match destination {
-            Destination::Fullscreen | Destination::Settings(_) | Destination::Equalizer => return,
+            Destination::Fullscreen => return,
             Destination::Home => self.screens.home.clone().into(),
             Destination::History => {
                 let history = self.screens.history.clone();
@@ -731,13 +751,21 @@ impl Root {
                 genre.into()
             }
             Destination::Search => self.screens.search.clone().into(),
+            Destination::Equalizer => {
+                header = Some(self.screens.settings_header.clone().into());
+                self.screens.equalizer.clone().into()
+            }
+            Destination::Settings(_) => {
+                header = Some(self.screens.settings_header.clone().into());
+                self.screens.settings.clone().into()
+            }
         };
 
         self.toolbar = toolbar;
 
-        self.shells
-            .workspace
-            .update(cx, |workspace, cx| workspace.set_content(content, cx));
+        self.shells.workspace.update(cx, |workspace, cx| {
+            workspace.set_content(content, header, cx)
+        });
         cx.notify();
     }
 }
@@ -822,10 +850,6 @@ impl Render for Root {
                 .shells
                 .fullscreen
                 .update(cx, |fullscreen, cx| fullscreen.focus(window, cx)),
-            Some(Focus::Settings) => self
-                .shells
-                .settings
-                .update(cx, |settings, cx| settings.focus(window, cx)),
             None => {}
         }
         self.follow_os_fullscreen(window, cx);
@@ -920,7 +944,6 @@ impl Render for Root {
         let shell = match self.view {
             RootView::Workspace => self.shells.workspace.clone().into_any_element(),
             RootView::Fullscreen => self.shells.fullscreen.clone().into_any_element(),
-            RootView::Settings => self.shells.settings.clone().into_any_element(),
         };
         let shell = div()
             .relative()

@@ -32,6 +32,9 @@ pub(crate) struct Workspace {
     toasts: Entity<ToastStack>,
     notice: Entity<AppNotice>,
     content: AnyView,
+    /// A screen's own header, floated over the top of the page and outside its transition.
+    /// The page pads itself to start beneath it.
+    header: Option<AnyView>,
     transition: Option<Entrance>,
     focus: FocusHandle,
 }
@@ -59,6 +62,7 @@ impl Workspace {
             toasts: cx.new(ToastStack::new),
             notice: cx.new(AppNotice::new),
             content,
+            header: None,
             transition: None,
             focus: cx.focus_handle(),
         }
@@ -86,8 +90,16 @@ impl Workspace {
         &self.content
     }
 
-    pub fn set_content(&mut self, content: AnyView, cx: &mut Context<Self>) {
+    /// Shows a page, with the header it wants above it or none. The two arrive together so
+    /// a header can never outlive its screen.
+    pub fn set_content(
+        &mut self,
+        content: AnyView,
+        header: Option<AnyView>,
+        cx: &mut Context<Self>,
+    ) {
         self.content = content;
+        self.header = header;
         cx.notify();
     }
 
@@ -209,7 +221,7 @@ impl Render for Workspace {
             .w_full()
             .flex_1()
             .min_h_0()
-            .key_context(super::shell_context(&[WORKSPACE_CONTEXT]))
+            .key_context(super::shell_context(WORKSPACE_CONTEXT))
             .track_focus(&self.focus)
             .on_action(|_: &SelectNext, window, cx| {
                 if let Some(table) = shown_listing(cx) {
@@ -292,6 +304,19 @@ impl Render for Workspace {
                                                 .bottom_0()
                                                 .bg(backdrop)
                                                 .opacity(scrim),
+                                        )
+                                    })
+                                    // The header comes last, so it paints over the page and
+                                    // the scrim, and spans the same width the page does
+                                    // beneath an overlaid sidebar.
+                                    .when_some(self.header.clone(), |this, header| {
+                                        this.child(
+                                            div()
+                                                .absolute()
+                                                .left(-overlay_width)
+                                                .right_0()
+                                                .top_0()
+                                                .child(header),
                                         )
                                     }),
                             ),
