@@ -31,6 +31,12 @@ impl Popovers {
         self.open.get() == Some(key)
     }
 
+    /// Opens the popover `key` names and closes any other of the group, for a trigger drawn
+    /// apart from the popover itself.
+    pub fn open(&self, key: &'static str) {
+        self.open.set(Some(key));
+    }
+
     fn toggle(&self, key: &'static str) {
         let next = match self.shows(key) {
             true => None,
