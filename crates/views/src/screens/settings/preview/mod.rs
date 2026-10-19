@@ -1,6 +1,6 @@
 //! The previews at the top of the pages where seeing a setting beats reading it. Each page with
-//! one has a file here holding the preview's own state and the function that draws it. The page
-//! frames whatever that function returns across its column, above its first group.
+//! one has a file here holding the preview's own state and the function that draws it, framed by
+//! `framed`. The page lays it across its column, above its first group.
 
 use std::cell::{Cell, RefCell};
 use std::hash::{BuildHasher as _, RandomState};
@@ -8,9 +8,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, SharedString, Task, Window};
+use gpui::{App, Context, Div, EdgesRefinement, Entity, Pixels, SharedString, Task, Window, div};
 use i18n::t;
 use state::Sonora;
+use ui::ActiveTheme as _;
 
 use super::SettingsView;
 use crate::shared::ambient::Ambient;
@@ -22,6 +23,9 @@ pub(super) mod sound;
 
 /// How long the placeholder track runs.
 const PLACEHOLDER_LENGTH: Duration = Duration::from_secs(214);
+/// How far past a frame its corner ring reaches, as a share of the radius. It has to pass
+/// the square root of two less one for the ring to cover the corners.
+const CORNER_REACH: f32 = 0.5;
 
 /// The state every preview keeps between frames, one field per preview, each owned by its file,
 /// and what they share.
@@ -189,6 +193,51 @@ impl Tick {
             this.update(cx, |_, cx| cx.notify()).ok();
         })));
     }
+}
+
+/// Frames a preview in the theme's radius with the border around it. GPUI clips only to a
+/// rectangle, so a ring in the page colour, reaching a little past the frame, hides whatever
+/// `content` paints into the corners outside the rounding. The ring paints over the frame's
+/// neighbours by `CORNER_REACH` of the radius, which only ever lands on empty page.
+pub(super) fn framed(content: impl IntoElement, cx: &App) -> Div {
+    let theme = cx.theme();
+    // a ring whose inner edge is the frame's rounded outline covers each corner once its outer
+    // corner, rounded by the radius plus the reach, starts past the frame's own corner
+    let reach = theme.radius * CORNER_REACH;
+    let mut ring = div()
+        .absolute()
+        .top(-reach)
+        .left(-reach)
+        .right(-reach)
+        .bottom(-reach)
+        .rounded(theme.radius + reach)
+        .border_color(theme.background);
+    ring.style().border_widths = EdgesRefinement {
+        top: Some(reach.into()),
+        right: Some(reach.into()),
+        bottom: Some(reach.into()),
+        left: Some(reach.into()),
+    };
+
+    div()
+        .relative()
+        .w_full()
+        .child(
+            div()
+                .w_full()
+                .overflow_hidden()
+                .rounded(theme.radius)
+                .child(content),
+        )
+        .when(reach > Pixels::ZERO, |this| this.child(ring))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border),
+        )
 }
 
 /// A fresh random number from the standard library's own seeding.

@@ -243,14 +243,17 @@ pub(in crate::screens::settings) fn preview(
         });
 
     Some(
-        div()
-            .w_full()
-            .flex()
-            .justify_center()
-            .p(SURFACE_PAD)
-            .bg(rgb(SURFACE))
-            .child(card.when(!on, |card| card.opacity(DIMMED)))
-            .into_any_element(),
+        super::framed(
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .p(SURFACE_PAD)
+                .bg(rgb(SURFACE))
+                .child(card.when(!on, |card| card.opacity(DIMMED))),
+            cx,
+        )
+        .into_any_element(),
     )
 }
 

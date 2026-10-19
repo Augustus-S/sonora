@@ -180,98 +180,101 @@ pub(in crate::screens::settings) fn preview(
     let corner = (theme.radius - px(1.)).max(Pixels::ZERO);
 
     Some(
-        div()
-            .id("now-playing-preview")
-            .relative()
-            .w_full()
-            .h(height)
-            .overflow_hidden()
-            .bg(theme.background)
-            .on_hover(cx.listener(|this, over: &bool, _, cx| {
-                let preview = &this.previews.now_playing;
-                if preview.hovered.replace(*over) != *over {
-                    preview.hovered_at.set(Some(Instant::now()));
-                    cx.notify();
-                }
-            }))
-            .children(field)
-            .when(style.shown(), |this| {
-                this.child(
-                    Visualizer::new(levels, (height * SPECTRUM).round())
-                        .style_kind(style)
-                        .when_some(tint, |this, tint| this.tint(tint))
-                        .corner_radius(corner)
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom_0(),
-                )
-            })
-            .when(style.shown() && shown > 0., |this| {
-                let band = (height * VEIL).round();
-                this.child(
+        super::framed(
+            div()
+                .id("now-playing-preview")
+                .relative()
+                .w_full()
+                .h(height)
+                .overflow_hidden()
+                .bg(theme.background)
+                .on_hover(cx.listener(|this, over: &bool, _, cx| {
+                    let preview = &this.previews.now_playing;
+                    if preview.hovered.replace(*over) != *over {
+                        preview.hovered_at.set(Some(Instant::now()));
+                        cx.notify();
+                    }
+                }))
+                .children(field)
+                .when(style.shown(), |this| {
+                    this.child(
+                        Visualizer::new(levels, (height * SPECTRUM).round())
+                            .style_kind(style)
+                            .when_some(tint, |this, tint| this.tint(tint))
+                            .corner_radius(corner)
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0(),
+                    )
+                })
+                .when(style.shown() && shown > 0., |this| {
+                    let band = (height * VEIL).round();
+                    this.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(band)
+                            .when(shown < 1., |this| this.opacity(shown))
+                            .rounded_b(corner)
+                            .bg(linear_gradient(
+                                0.,
+                                linear_color_stop(theme.background.opacity(VEIL_STRENGTH), 0.),
+                                linear_color_stop(theme.background.opacity(0.), 1.),
+                            )),
+                    )
+                })
+                .child(
                     div()
                         .absolute()
+                        .inset_0()
+                        .pb(height * SPECTRUM * LIFT)
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .child(Artwork::new(cover).size(side).corner_radius(theme.radius))
+                        .child(
+                            div()
+                                .mt_2()
+                                .max_w(width * META)
+                                .truncate()
+                                .text_size(theme.text(Text::Body))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(sample.title.clone()),
+                        )
+                        .child(
+                            div()
+                                .max_w(width * META)
+                                .truncate()
+                                .text_size(theme.text(Text::Small))
+                                .text_color(theme.muted_foreground)
+                                .child(sample.artist.clone()),
+                        ),
+                )
+                .when(shown > 0., |this| {
+                    this.child(
+                        controls(
+                            position,
+                            sample.duration,
+                            playing,
+                            side * SEEK,
+                            tint.unwrap_or(theme.primary),
+                            cx,
+                        )
+                        .absolute()
                         .left_0()
                         .right_0()
-                        .bottom_0()
-                        .h(band)
-                        .when(shown < 1., |this| this.opacity(shown))
-                        .rounded_b(corner)
-                        .bg(linear_gradient(
-                            0.,
-                            linear_color_stop(theme.background.opacity(VEIL_STRENGTH), 0.),
-                            linear_color_stop(theme.background.opacity(0.), 1.),
-                        )),
-                )
-            })
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .pb(height * SPECTRUM * LIFT)
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap_1()
-                    .child(Artwork::new(cover).size(side).corner_radius(theme.radius))
-                    .child(
-                        div()
-                            .mt_2()
-                            .max_w(width * META)
-                            .truncate()
-                            .text_size(theme.text(Text::Body))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(sample.title.clone()),
+                        .bottom(theme.metrics.pad * 1.5)
+                        .when(shown < 1., |this| this.opacity(shown)),
                     )
-                    .child(
-                        div()
-                            .max_w(width * META)
-                            .truncate()
-                            .text_size(theme.text(Text::Small))
-                            .text_color(theme.muted_foreground)
-                            .child(sample.artist.clone()),
-                    ),
-            )
-            .when(shown > 0., |this| {
-                this.child(
-                    controls(
-                        position,
-                        sample.duration,
-                        playing,
-                        side * SEEK,
-                        tint.unwrap_or(theme.primary),
-                        cx,
-                    )
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom(theme.metrics.pad * 1.5)
-                    .when(shown < 1., |this| this.opacity(shown)),
-                )
-            })
-            .into_any_element(),
+                }),
+            cx,
+        )
+        .into_any_element(),
     )
 }
 

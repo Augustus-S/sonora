@@ -1,29 +1,26 @@
 //! A few lines of lyrics drawn by the lyrics sheet's own renderer: the synced lyrics of the
-//! track playing, or sample lines with one in Japanese while there are none. A switch in the
-//! corner picks whether they show as the side panel draws them or as Now playing does, which
-//! is also which of the two text sizes they take.
+//! track playing, or sample lines with one in Japanese while there are none. They show twice
+//! side by side, as the side panel draws them and as Now playing does, each at its own text size.
 
-use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, Window, div};
-use i18n::t;
+use gpui::{AnyElement, App, Context, Div, Entity, Hsla, Pixels, Window, div};
 use music::{LyricsLine, LyricsWord, RomanizedText, Voice, WritingSystem};
-use state::{LyricsState, PlaybackState, Sonora};
-use ui::{ActiveTheme as _, Button, TabBar};
+use state::{LyricsState, PlaybackState, RomanizationScripts, Sonora};
+use ui::{ActiveTheme as _, Text, Theme};
 
 use super::Tick;
 use crate::chrome::{VerseLook, verse, verse_sizes};
 use crate::screens::settings::{Layout, SettingsView};
+use crate::shared::ambient::Ambient;
 
-/// How tall the preview stands for its width.
-const ASPECT: f32 = 0.5;
+/// How tall the two halves stand for the width of the whole preview.
+const ASPECT: f32 = 0.4;
 /// How many lines show either side of the one being sung.
 const AROUND: usize = 2;
-/// How much of the preview's width the lines take from its left, about the share the side
-/// panel and Now playing's lyrics column take of a window, which keeps them clear of the switch.
-const REACH: f32 = 0.64;
+/// How far down the preview the line being sung starts, as a share of its height.
+const ANCHOR: f32 = 0.36;
 /// The haze curve of the sheet, from a line's distance to the one being sung.
 const HAZE: f32 = 0.45;
 /// How often the sheet is redrawn while a word sweeps, as the side panel does it.
@@ -52,26 +49,50 @@ const ROMANIZED: &str = "settings-lyrics-sample-romanized";
 
 /// What the Lyrics page's preview keeps between frames.
 pub(in crate::screens::settings) struct LyricsPreview {
-    /// Whether the lines show as the side panel draws them, or as Now playing does.
-    panel: Cell<bool>,
     /// When the sample's sweep started.
     started: Instant,
     /// Redraws the lines as they are sung.
     tick: Tick,
 }
 
+/// The lyrics settings both halves of the preview follow.
+#[derive(Clone, Copy)]
+struct Look {
+    karaoke: bool,
+    blur: bool,
+    scripts: Option<RomanizationScripts>,
+}
+
+/// One half of the preview: the verse and lane sizes it sets, the colour behind its lines, the
+/// ambient field over that colour if any, and the Fluent key that names it.
+struct Half {
+    sizes: (Pixels, Pixels),
+    behind: Hsla,
+    field: Option<Entity<Ambient>>,
+    key: &'static str,
+}
+
+/// The lines on show and where the track stands in them.
+struct Shown<'a> {
+    lines: &'a [LyricsLine],
+    /// The line being sung, if any.
+    active: Option<usize>,
+    /// The line the few on show gather around.
+    center: usize,
+    position: Duration,
+}
+
 impl LyricsPreview {
     pub(in crate::screens::settings) fn new(_cx: &mut Context<SettingsView>) -> Self {
         Self {
-            panel: Cell::new(true),
             started: Instant::now(),
             tick: Tick::default(),
         }
     }
 }
 
-/// The Lyrics page's preview, a few lines around the one being sung as the panel or Now playing
-/// draws them, with the switch between the two in the corner.
+/// The Lyrics page's preview: the lines as the side panel draws them beside the lines as Now
+/// playing draws them, each at its own text size and each named underneath.
 pub(in crate::screens::settings) fn preview(
     state: &LyricsPreview,
     view: &SettingsView,
@@ -81,21 +102,21 @@ pub(in crate::screens::settings) fn preview(
     let theme = *cx.theme();
     let width = Layout::of(window, cx).width;
     let height = (width * ASPECT).round();
-    let panel = state.panel.get();
     let animates = ui::motion::animates(cx);
 
     let settings = view.settings.read(cx);
-    let karaoke = settings.karaoke_lyrics();
-    let blur = settings.blur_lyrics();
-    let scripts = settings
-        .romanized_lyrics()
-        .then(|| settings.romanization_scripts());
-    let scale = match panel {
-        true => settings.panel_lyrics_scale(),
-        false => settings.fullscreen_lyrics_scale(),
+    let look = Look {
+        karaoke: settings.karaoke_lyrics(),
+        blur: settings.blur_lyrics(),
+        scripts: settings
+            .romanized_lyrics()
+            .then(|| settings.romanization_scripts()),
     };
+    let scales = (
+        settings.panel_lyrics_scale(),
+        settings.fullscreen_lyrics_scale(),
+    );
     let ambient = settings.ambient();
-    let (size, lane) = verse_sizes(panel, scale, &theme);
 
     let playback = view.playback.read(cx);
     let playing = matches!(playback.state(), PlaybackState::Playing);
@@ -114,7 +135,7 @@ pub(in crate::screens::settings) fn preview(
         }
         None => {
             let lines = sample();
-            let sweep = match animates && karaoke {
+            let sweep = match animates && look.karaoke {
                 true => {
                     let cycle = (SUNG + REST).as_secs_f32();
                     Duration::from_secs_f32(state.started.elapsed().as_secs_f32() % cycle)
@@ -122,106 +143,151 @@ pub(in crate::screens::settings) fn preview(
                 false => SUNG.mul_f32(STILL),
             };
             let position = lines[SUNG_LINE].start + sweep;
-            (lines.into(), Some(SUNG_LINE), position, animates && karaoke)
+            (
+                lines.into(),
+                Some(SUNG_LINE),
+                position,
+                animates && look.karaoke,
+            )
         }
     };
     if moving {
         let sweeping = active.is_some_and(|index| lines[index].worded());
-        let wait = match karaoke && animates && sweeping {
+        let wait = match look.karaoke && animates && sweeping {
             true => SWEEP,
             false => FOLLOW,
         };
         state.tick.after(wait, window, cx);
     }
-
     let center = active.unwrap_or_else(|| {
         lines
             .iter()
             .position(|line| line.start > position)
             .unwrap_or(lines.len() - 1)
     });
-    let first = center.saturating_sub(AROUND);
-    let last = (center + AROUND + 1).min(lines.len());
-    let shown = (first..last).map(|index| {
-        let distance = index.abs_diff(center) as f32;
-        let haze = match blur && Some(index) != active {
+    let shown = Shown {
+        lines: &lines,
+        active,
+        center,
+        position,
+    };
+
+    let field = ambient.then(|| {
+        let cover = view.previews.playing_or_picked(cx).large_cover(cx);
+        view.previews.ambient(cover, cx)
+    });
+    let panel = Half {
+        sizes: verse_sizes(true, scales.0, &theme),
+        behind: theme.sidebar,
+        field: None,
+        key: "settings-lyrics-preview-panel",
+    };
+    let now_playing = Half {
+        sizes: verse_sizes(false, scales.1, &theme),
+        behind: theme.background,
+        field,
+        key: "settings-lyrics-preview-now-playing",
+    };
+
+    Some(
+        div()
+            .w_full()
+            .flex()
+            .gap_3()
+            .child(half(panel, &shown, look, height, cx))
+            .child(half(now_playing, &shown, look, height, cx))
+            .into_any_element(),
+    )
+}
+
+/// One half of the preview, as `half` describes it, framed at `height` and named under its frame.
+fn half(half: Half, shown: &Shown, look: Look, height: Pixels, cx: &App) -> Div {
+    let theme = *cx.theme();
+    let sheet = div()
+        .relative()
+        .w_full()
+        .h(height)
+        .bg(half.behind)
+        .children(half.field)
+        .child(lines(shown, look, half.sizes, height, theme));
+
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_2()
+        .child(super::framed(sheet, cx))
+        .child(
+            div()
+                .max_w_full()
+                .truncate()
+                .text_size(theme.text(Text::Label))
+                .text_color(theme.muted_foreground)
+                .child(i18n::lookup(half.key, None)),
+        )
+}
+
+/// A few lines around the one being sung, drawn the way the sheet draws them at the verse and
+/// lane sizes in `sizes`, over the whole of a parent `height` tall. The one being sung starts at
+/// `ANCHOR` of the height whatever the sizes, so a large text size never pushes it out of view.
+fn lines(shown: &Shown, look: Look, sizes: (Pixels, Pixels), height: Pixels, theme: Theme) -> Div {
+    let (size, lane) = sizes;
+    let first = shown.center.saturating_sub(AROUND);
+    let last = (shown.center + AROUND + 1).min(shown.lines.len());
+    let verse_at = |index: usize| {
+        let distance = index.abs_diff(shown.center) as f32;
+        let haze = match look.blur && Some(index) != shown.active {
             true => (distance / AROUND as f32).min(1.).powf(HAZE),
             false => 0.,
         };
         verse(
-            &lines[index],
+            &shown.lines[index],
             VerseLook {
-                active: Some(index) == active,
+                active: Some(index) == shown.active,
                 size,
                 lane,
-                karaoke,
-                scripts,
+                karaoke: look.karaoke,
+                scripts: look.scripts,
                 haze,
             },
-            position,
+            shown.position,
             theme,
         )
-    });
-
-    let field = (!panel && ambient).then(|| {
-        let cover = view.previews.playing_or_picked(cx).large_cover(cx);
-        view.previews.ambient(cover, cx)
-    });
+    };
     let fade = size * VERSE_FADE;
-    let switch = TabBar::new("lyrics-preview-mode").items([
-        Button::new("lyrics-preview-panel")
-            .label(t!("settings-lyrics-preview-panel"))
-            .small()
-            .ghost()
-            .selected(panel)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.previews.lyrics.panel.set(true);
-                cx.notify();
-            })),
-        Button::new("lyrics-preview-now-playing")
-            .label(t!("settings-lyrics-preview-now-playing"))
-            .small()
-            .ghost()
-            .selected(!panel)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.previews.lyrics.panel.set(false);
-                cx.notify();
-            })),
-    ]);
+    let anchor = height * ANCHOR;
 
-    Some(
-        div()
-            .relative()
-            .w_full()
-            .h(height)
-            .overflow_hidden()
-            .bg(match panel {
-                true => theme.sidebar,
-                false => theme.background,
-            })
-            .children(field)
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .px(theme.metrics.inset)
-                    .pr(width * (1. - REACH))
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .gap_4()
-                    .when(ui::effects(), |this| this.fade_edges(fade, fade))
-                    .children(shown),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top(theme.metrics.pad)
-                    .right(theme.metrics.pad)
-                    .child(switch),
-            )
-            .into_any_element(),
-    )
+    div()
+        .absolute()
+        .inset_0()
+        .when(ui::effects(), |this| this.fade_edges(fade, fade))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(height - anchor)
+                .pb_4()
+                .px(theme.metrics.inset)
+                .flex()
+                .flex_col()
+                .gap_4()
+                .children((first..shown.center).map(verse_at)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(anchor)
+                .px(theme.metrics.inset)
+                .flex()
+                .flex_col()
+                .gap_4()
+                .children((shown.center..last).map(verse_at)),
+        )
 }
 
 /// The sample lines, timed so the third is being sung and the ones before it are over.
