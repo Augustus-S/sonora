@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, Div, ElementId, Hsla, Interactivity, MouseButton, Pixels, SharedString,
-    Stateful, StyleRefinement, Window, div, px, svg,
+    Stateful, StyleRefinement, Window, div, px, relative, svg,
 };
 
 use crate::glass::{blurring, frost};
@@ -38,6 +38,7 @@ pub struct Button {
     small: bool,
     disabled: bool,
     selected: bool,
+    indicator: bool,
     backgroundless: bool,
     hoverless: bool,
     frosted: bool,
@@ -61,6 +62,7 @@ impl Button {
             small: false,
             disabled: false,
             selected: false,
+            indicator: false,
             backgroundless: false,
             hoverless: false,
             frosted: false,
@@ -145,6 +147,12 @@ impl Button {
         self
     }
 
+    /// Paints an active-state dot below the icon without changing the button's layout or hit area.
+    pub fn indicator(mut self, indicator: bool) -> Self {
+        self.indicator = indicator;
+        self
+    }
+
     pub fn backgroundless(mut self) -> Self {
         self.backgroundless = true;
         self
@@ -226,6 +234,7 @@ impl RenderOnce for Button {
             small,
             disabled,
             selected,
+            indicator,
             backgroundless,
             hoverless,
             frosted,
@@ -374,6 +383,19 @@ impl RenderOnce for Button {
                         .size(px(16.))
                         .flex_none()
                         .text_color(foreground),
+                )
+            })
+            .when(indicator, |this| {
+                let diameter = theme.metrics.pad * 0.375;
+                this.relative().child(
+                    div()
+                        .absolute()
+                        .left(relative(0.5))
+                        .ml(-diameter / 2.)
+                        .bottom(theme.metrics.pad * 0.125)
+                        .size(diameter)
+                        .rounded_full()
+                        .bg(foreground),
                 )
             })
             .when(interactive, |this| {
