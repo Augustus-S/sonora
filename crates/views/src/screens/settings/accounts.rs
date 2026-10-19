@@ -3,16 +3,16 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, ElementId, FontWeight, Hsla, Pixels, SharedString, Window, div, px,
-    relative, svg,
+    AnyElement, App, ClickEvent, Context, ElementId, FontWeight, Hsla, Pixels, SharedString,
+    Window, div, px, relative, svg,
 };
 use i18n::t;
 use music::{AccountChoice, SignIn, SignInPrompt};
 use router::{Destination, SettingsPage, navigate};
 use state::{Failure, Scan, SessionState, Sonora};
 use ui::{
-    ActiveTheme as _, Avatar, Button, HoverFade, Initials, LEADING, Modal, Skeleton, Text, Theme,
-    mix,
+    ActiveTheme as _, Avatar, Button, HoverFade, Initials, LEADING, Modal, Radio, Skeleton, Text,
+    Theme, mix,
 };
 
 use super::rows::drill;
@@ -26,12 +26,20 @@ use crate::shared::text;
 const ERROR_ICON: Pixels = px(14.);
 /// How large a provider's mark draws, and how long it takes to turn to its brand colour under
 /// the pointer.
-const MARK: Pixels = px(20.);
+const MARK: Pixels = px(22.);
 const MARK_FADE: Duration = Duration::from_millis(160);
+/// How far the brand-coloured glow behind the mark in use spreads past it, how soft it is and
+/// how strong.
+const GLOW_SPREAD: Pixels = px(4.);
+const GLOW_BLUR: Pixels = px(12.);
+const GLOW_ALPHA: f32 = 0.6;
 /// How many buttons tall the sign-in choice stands, however few it lists.
 const CHOICES: f32 = 3.;
 /// What the guest row answers to, where a provider row answers to its slug.
 const GUEST: &str = "guest";
+
+/// What a row does when it is clicked.
+type Press = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 pub(super) struct Account {
     slug: &'static str,
@@ -344,7 +352,8 @@ impl SettingsView {
         names.join(" ")
     }
 
-    /// One row per provider, then the guest row when a provider offers guest mode.
+    /// One row per provider, then the guest row when a provider offers guest mode, with a
+    /// small gap between them so each row's fill stands on its own.
     pub(super) fn accounts_rows(&self, cx: &mut Context<Self>) -> AnyElement {
         let pending = self.session.read(cx).is_pending();
         let mut rows = Vec::new();
@@ -355,11 +364,16 @@ impl SettingsView {
             rows.push(self.guest_row(guest, pending, cx));
         }
 
-        div().flex().flex_col().children(rows).into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(rows)
+            .into_any_element()
     }
 
-    /// A provider's row. A provider signed in but not in use offers to switch to it, one signed
-    /// out offers to sign in, and one being signed in offers to stop.
+    /// A provider's row. Clicking a provider that is signed in but not in use switches to it,
+    /// clicking one signed out starts its sign-in, and one being signed in offers to stop.
     pub(super) fn account_row(
         &self,
         account: Account,
@@ -376,59 +390,44 @@ impl SettingsView {
             cancel,
             error,
         } = account;
-        let status = match (active, stored) {
-            (true, _) => Some(t!("settings-provider-current")),
-            (false, true) => Some(t!("settings-provider-connected")),
-            (false, false) => None,
+        let status = active.then(|| t!("settings-provider-current"));
+        let offer = match (cancel, stored) {
+            (true, _) => Offer::Cancel(self.cancel_button(slug, cx)),
+            (false, true) => Offer::Choice {
+                leave: Some(self.sign_out_button(slug, slug, pending, cx)),
+            },
+            (false, false) => Offer::SignIn,
         };
-        let id = |what: &str| SharedString::from(format!("{what}-{slug}"));
-        let action = match (cancel, stored, active) {
-            (true, ..) => Some(self.cancel_button(slug, cx)),
-            (false, true, false) => Some(
-                Button::new(id("use"))
-                    .label(t!("settings-provider-use"))
-                    .small()
-                    .outline()
-                    .disabled(pending)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.chosen = Some(slug);
-                        this.session
-                            .update(cx, |session, cx| session.switch(slug, cx));
-                    }))
-                    .into_any_element(),
-            ),
-            (false, false, _) => Some(
-                Button::new(id("sign-in"))
-                    .label(t!("settings-provider-sign-in"))
-                    .small()
-                    .outline()
-                    .disabled(pending)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.chosen = None;
-                        this.start_sign_in(slug, name, &options, web_sign_in, cx);
-                    }))
-                    .into_any_element(),
-            ),
-            (false, true, true) => None,
+        let press: Option<Press> = match (cancel, stored, active) {
+            (true, ..) | (false, true, true) => None,
+            (false, true, false) => Some(Box::new(cx.listener(move |this, _, _, cx| {
+                this.chosen = Some(slug);
+                this.session
+                    .update(cx, |session, cx| session.switch(slug, cx));
+            }))),
+            (false, false, _) => Some(Box::new(cx.listener(move |this, _, _, cx| {
+                this.chosen = None;
+                this.start_sign_in(slug, name, &options, web_sign_in, cx);
+            }))),
         };
-        let leave = (stored && !cancel).then(|| self.sign_out_button(slug, slug, pending, cx));
 
         ProviderRow {
-            id: id("account"),
+            id: SharedString::from(format!("account-{slug}")),
             logo: crate::shared::provider_logo(slug),
             brand: crate::shared::provider_brand(slug, cx),
-            lit: stored,
+            active,
             name: name.into(),
             status,
-            action,
-            leave,
+            offer,
+            press: press.filter(|_| !pending),
             error,
         }
         .into_any_element()
     }
 
-    /// The guest row. Its buttons drive the provider the anonymous session belongs to, so they
-    /// carry ids of their own rather than that provider's, which has a row too.
+    /// The guest row. It is always a choice, since guest mode needs no account, and its sign
+    /// out button drives the provider the anonymous session belongs to, so it carries an id of
+    /// its own rather than that provider's, which has a row too.
     pub(super) fn guest_row(
         &self,
         guest: Guest,
@@ -442,35 +441,29 @@ impl SettingsView {
         } = guest;
         let status = active.then(|| t!("settings-provider-current"));
         let leave = active.then(|| self.sign_out_button(GUEST, slug, pending, cx));
-        let action = (!active).then(|| {
-            Button::new("use-guest")
-                .label(t!("settings-provider-use"))
-                .small()
-                .outline()
-                .disabled(pending)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.chosen = Some(GUEST);
-                    match stored {
-                        true => this
-                            .session
-                            .update(cx, |session, cx| session.switch(slug, cx)),
-                        false => this.session.update(cx, |session, cx| {
-                            session.sign_in(slug, SignIn::Anonymous, cx)
-                        }),
-                    }
-                }))
-                .into_any_element()
+        let press: Option<Press> = (!active).then(|| -> Press {
+            Box::new(cx.listener(move |this, _, _, cx| {
+                this.chosen = Some(GUEST);
+                match stored {
+                    true => this
+                        .session
+                        .update(cx, |session, cx| session.switch(slug, cx)),
+                    false => this.session.update(cx, |session, cx| {
+                        session.sign_in(slug, SignIn::Anonymous, cx)
+                    }),
+                }
+            }))
         });
 
         ProviderRow {
             id: SharedString::from("account-guest"),
             logo: "icons/hat-glasses.svg",
             brand: cx.theme().foreground,
-            lit: active,
+            active,
             name: t!("login-guest-title"),
             status,
-            action,
-            leave,
+            offer: Offer::Choice { leave },
+            press: press.filter(|_| !pending),
             error: None,
         }
         .into_any_element()
@@ -864,20 +857,33 @@ fn line(theme: &Theme, step: Text) -> Pixels {
     px((theme.text(step) / px(1.) * LEADING).round())
 }
 
-/// One provider as a plain row: its mark, muted until the provider is signed in (`lit`) and
-/// turning to its `brand` colour while the pointer is on the row, then the name, the status in
-/// muted text, the `action` it offers, and the sign out button in a slot of its own that every
-/// row keeps so the actions line up. A sign-in error wraps under it on a line of its own.
+/// What a provider row ends with.
+pub(super) enum Offer {
+    /// The radio saying whether the row is the one in use, with the sign out button before it
+    /// when there is an account to leave.
+    Choice { leave: Option<AnyElement> },
+    /// A quiet "Sign in" for a provider with no account yet. The row's own click answers it.
+    SignIn,
+    /// The button that stops a sign-in in flight.
+    Cancel(AnyElement),
+}
+
+/// One provider as a soft borderless row: its mark, the name over a muted status, and the
+/// `offer` at the end. Only the provider in use (`active`) sits on a fill and shows its `brand`
+/// colour, with a faint glow behind a coloured mark. The others are muted and warm to their
+/// colour and a lighter fill under the pointer. The sign out button keeps a slot of its own on
+/// every row, shown on hover and always on the active row, so nothing moves as it comes and
+/// goes. A sign-in error wraps under the name on a line of its own.
 #[derive(IntoElement)]
 pub(super) struct ProviderRow {
     id: SharedString,
     logo: &'static str,
     brand: Hsla,
-    lit: bool,
+    active: bool,
     name: SharedString,
     status: Option<SharedString>,
-    action: Option<AnyElement>,
-    leave: Option<AnyElement>,
+    offer: Offer,
+    press: Option<Press>,
     error: Option<Failure>,
 }
 
@@ -887,11 +893,11 @@ impl RenderOnce for ProviderRow {
             id,
             logo,
             brand,
-            lit,
+            active,
             name,
             status,
-            action,
-            leave,
+            offer,
+            press,
             error,
         } = self;
         let theme = *cx.theme();
@@ -899,60 +905,130 @@ impl RenderOnce for ProviderRow {
             HoverFade::new(MARK_FADE)
         });
         let hover = fade.update(cx, |fade, cx| fade.level(window, cx));
-        let mark = match lit {
+        let mark = match active {
             true => brand,
             false => mix(theme.muted_foreground, brand, hover),
         };
+        let fill = match (active, press.is_some()) {
+            (true, _) => theme.secondary_active,
+            (false, true) => theme.secondary_hover.opacity(hover),
+            (false, false) => theme.secondary_hover.opacity(0.),
+        };
+        // a mark in the plain foreground colour glows as a grey smudge, so only a real brand
+        // colour gets one
+        let glow = (active && brand != theme.foreground && ui::effects()).then(|| {
+            svg()
+                .path(icons::path(logo))
+                .absolute()
+                .top(-GLOW_SPREAD)
+                .left(-GLOW_SPREAD)
+                .size(MARK + GLOW_SPREAD * 2.)
+                .text_color(brand.opacity(GLOW_ALPHA))
+                .blur(GLOW_BLUR)
+        });
+        let trailing = match offer {
+            Offer::Choice { leave } => {
+                let shown = active || hover > 0.;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .justify_center()
+                            .w(theme.metrics.control_small)
+                            .opacity(match active {
+                                true => 1.,
+                                false => hover,
+                            })
+                            .children(leave.filter(|_| shown)),
+                    )
+                    .child(Radio::new(
+                        SharedString::from(format!("{id}-radio")),
+                        active,
+                    ))
+                    .into_any_element()
+            }
+            Offer::SignIn => div()
+                .text_size(theme.text(Text::Label))
+                .text_color(mix(theme.muted_foreground, theme.foreground, hover))
+                .child(t!("settings-provider-sign-in"))
+                .into_any_element(),
+            Offer::Cancel(cancel) => cancel,
+        };
 
         div()
+            .id(id)
             .flex()
             .flex_col()
+            .mx_neg_3()
+            .px_3()
+            .rounded(theme.radius)
+            .bg(fill)
+            .on_hover(move |hovered, window, cx| {
+                fade.update(cx, |fade, _| fade.set(*hovered));
+                window.refresh();
+            })
+            .when_some(press, |this, press| {
+                this.cursor_pointer()
+                    .on_click(move |event, window, cx| press(event, window, cx))
+            })
             .child(
                 div()
-                    .id(id)
                     .flex()
                     .items_center()
                     .gap_3()
                     .h(theme.metrics.list_row)
-                    .on_hover(move |hovered, window, cx| {
-                        fade.update(cx, |fade, _| fade.set(*hovered));
-                        window.refresh();
-                    })
                     .child(
-                        svg()
-                            .path(icons::path(logo))
-                            .size(MARK)
-                            .flex_none()
-                            .text_color(mark),
-                    )
-                    .child(div().flex_none().child(name))
-                    .children(status.map(|status| {
                         div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(theme.text(Text::Label))
-                            .text_color(theme.muted_foreground)
-                            .child(status)
-                    }))
-                    .child(div().flex_1())
+                            .relative()
+                            .flex_none()
+                            .size(MARK)
+                            .children(glow)
+                            .child(
+                                svg()
+                                    .path(icons::path(logo))
+                                    .absolute()
+                                    .inset_0()
+                                    .size(MARK)
+                                    .text_color(mark),
+                            ),
+                    )
                     .child(
                         div()
                             .flex()
-                            .flex_none()
-                            .items_center()
-                            .gap_2()
-                            .children(action)
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
                             .child(
                                 div()
-                                    .flex()
-                                    .justify_end()
-                                    .w(theme.metrics.control_small)
-                                    .children(leave),
-                            ),
-                    ),
+                                    .truncate()
+                                    .line_height(relative(LEADING))
+                                    .text_size(theme.text(Text::Body))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(name),
+                            )
+                            .children(status.map(|status| {
+                                div()
+                                    .truncate()
+                                    .line_height(relative(LEADING))
+                                    .text_size(theme.text(Text::Small))
+                                    .text_color(theme.muted_foreground)
+                                    .child(status)
+                            })),
+                    )
+                    .child(div().flex().flex_none().items_center().child(trailing)),
             )
             .when_some(error, |this, error| {
-                this.child(div().pb_3().child(account_error(&error, cx)))
+                this.child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .pb_3()
+                        .child(div().flex_none().w(MARK))
+                        .child(div().flex_1().min_w_0().child(account_error(&error, cx))),
+                )
             })
     }
 }
