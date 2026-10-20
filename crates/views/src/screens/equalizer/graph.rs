@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Window};
+use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Task, Window};
 use i18n::t;
 use music::Level;
 use music::equalizer::{
@@ -33,8 +33,11 @@ const SPECTRUM_SCALE: (f32, f32) = (-90., 0.);
 /// How long the spectrum takes to rise in once it arrives, as a fade-in of the sound would.
 const SPECTRUM_RISE: Duration = Duration::from_millis(700);
 /// About how far apart the spectrum's reads arrive. The levels glide from one read to the next
-/// over this long, so they move at the screen's own rate rather than the reads'.
+/// over this long, by the clock, so a read that comes late does not jolt them.
 const SPECTRUM_GLIDE: Duration = Duration::from_millis(16);
+/// How often the spectrum redraws at most, sixty times a second whatever the screen's rate, since
+/// each redraw rebuilds the page around it.
+const SPECTRUM_FRAME: Duration = Duration::from_micros(16_667);
 /// How tall the graph is in cover sizes, with the room of a wide window, and with less.
 const GRAPH_TALL: f32 = 2.8;
 const GRAPH_SHORT: f32 = 2.;
@@ -490,8 +493,8 @@ impl Render for EqualizerGraph {
 }
 
 /// The spectrum of what plays, a view of its own that the screen lays under the graph. It redraws
-/// on every frame while a read is gliding in, which leaves the graph over it and the rest of the
-/// page cached.
+/// at most every `SPECTRUM_FRAME` while it moves, which leaves the graph over it and the rest of
+/// the page cached.
 pub(super) struct EqualizerSpectrum {
     state: ResponseGraphState,
     levels: Vec<Level>,
@@ -501,6 +504,8 @@ pub(super) struct EqualizerSpectrum {
     arrived: Instant,
     /// When the spectrum last arrived after none, which its rise counts from.
     since: Option<Instant>,
+    /// The wait for the next redraw, while one is due.
+    frame: Option<Task<()>>,
 }
 
 impl EqualizerSpectrum {
@@ -511,7 +516,7 @@ impl EqualizerSpectrum {
                 this.from = this.shown(cx);
                 this.arrived = Instant::now();
                 this.levels = levels.to_vec();
-                cx.notify();
+                this.redraw(cx);
             }
         })
         .detach();
@@ -521,7 +526,23 @@ impl EqualizerSpectrum {
             from: Vec::new(),
             arrived: Instant::now(),
             since: None,
+            frame: None,
         }
+    }
+
+    /// Redraws once the current `SPECTRUM_FRAME` is over, unless a redraw is due already.
+    fn redraw(&mut self, cx: &mut Context<Self>) {
+        if self.frame.is_some() {
+            return;
+        }
+        self.frame = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SPECTRUM_FRAME).await;
+            this.update(cx, |this, cx| {
+                this.frame = None;
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// How far the latest read has glided in, from 0 as it arrives to 1. Reduced motion takes it
@@ -551,7 +572,7 @@ impl EqualizerSpectrum {
 /// in, a gain that climbs from below the plot's floor to none, so it rises from the bottom rather
 /// than appearing at once.
 impl Render for EqualizerSpectrum {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rise = match self.levels.is_empty() {
             true => {
                 self.since = None;
@@ -565,7 +586,7 @@ impl Render for EqualizerSpectrum {
         let (floor, ceiling) = SPECTRUM_SCALE;
         let fade = (floor - ceiling) * (1. - rise);
         if !self.levels.is_empty() && (rise < 1. || self.glided(cx) < 1.) {
-            window.request_animation_frame();
+            self.redraw(cx);
         }
         let points: Vec<_> = self
             .levels
