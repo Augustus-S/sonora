@@ -37,11 +37,6 @@ const BANNER_ICON: f32 = 14.;
 /// The width of a member's picture on the strip, and how many of them it shows before it counts
 /// the rest.
 const BANNER_FACE: f32 = 24.;
-/// How much of the popover colour a see-through bar and the strip over it keep, and how far they
-/// blur what is under them. Both are thicker than a menu's, since the bar sits over the page for
-/// good and its text has to read over whatever scrolls by.
-const BAR_FILL: f32 = 0.86;
-const BAR_BLUR: Pixels = px(18.);
 const BANNER_FACES: usize = 4;
 /// The space round the faces inside their pill, the same on every side so the pill's round ends
 /// stay concentric with the faces.
@@ -561,11 +556,7 @@ impl Render for PlayerBar {
             .when_some(radius, |this, radius| this.rounded_b(radius))
             .when_else(
                 transparent,
-                |this| {
-                    this.bg(theme.popover.opacity(BAR_FILL))
-                        .text_color(theme.popover_foreground)
-                        .backdrop_blur(BAR_BLUR)
-                },
+                |this| ui::bar_surface(this, cx).text_color(theme.popover_foreground),
                 |this| this.when(!theme.transparent, |this| this.bg(theme.secondary)),
             )
             .border_t_1()
@@ -698,10 +689,6 @@ impl Render for PlayerBar {
             window.use_keyed_state("jam-faces", cx, |_, _| HoverFade::new(Motion::Quick.span()));
         let spread = faces.update(cx, |faces, cx| faces.level(window, cx));
         let frosting = ui::blurring(cx);
-        let fill = match frosting {
-            true => theme.popover.opacity(BAR_FILL),
-            false => theme.popover,
-        };
         let devices = Sonora::global(cx).devices.read(cx);
         let strip = |id: &'static str| {
             div()
@@ -717,8 +704,11 @@ impl Render for PlayerBar {
                 .gap_2()
                 .text_size(theme.text(ui::Text::Small))
                 .text_color(theme.foreground)
-                .bg(fill)
-                .when(frosting, |this| this.backdrop_blur(BAR_BLUR))
+                .when_else(
+                    frosting,
+                    |this| ui::bar_surface(this, cx),
+                    |this| this.bg(theme.popover),
+                )
         };
         let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
             let text = match jam::host_name(jam) {

@@ -15,6 +15,7 @@ use gpui::{
 
 use crate::artwork::{PREFETCH_REACH, Prefetch};
 use crate::filters::FilterChange;
+use crate::glass::{bar_surface, blurring};
 use crate::menu::Menu;
 use crate::metrics::{snapped, text_width};
 use crate::pin::{Pin, Pinnable};
@@ -947,7 +948,11 @@ impl<S: TableSource> TableState<S> {
             .flex()
             .flex_none()
             .h(head)
-            .bg(theme.table_head)
+            .when_else(
+                blurring(cx),
+                |this| bar_surface(this, cx),
+                |this| this.bg(theme.table_head),
+            )
             .rounded_tl(top.top_left)
             .rounded_tr(top.top_right)
             .border_b_1()
@@ -1254,11 +1259,17 @@ impl<S: TableSource> Render for TableState<S> {
         let height = self.height(head, row, self.delegate.row_count().max(placeholders));
         let pinned = snapped(self.viewport.top.clamp(Pixels::ZERO, height - head), window);
         let top = unpinned(self.corners, pinned);
-        // Nothing passes behind the head, so it needs nothing behind it either: on a
-        // see-through window it is the page plus its own tint, the same glass as the
-        // rest. An opaque window keeps the page painted under it, which is what the
+        // With Blur UI on the rows pass behind the head and it frosts them as the player bar
+        // does. Without it nothing passes behind the head, so it needs nothing behind it
+        // either: on a see-through window it is the page plus its own tint, the same glass as
+        // the rest. An opaque window keeps the page painted under it, which is what the
         // head's own alpha has always been mixed against.
-        let backdrop = (!cx.theme().transparent).then(|| cx.theme().background);
+        let frosted = blurring(cx);
+        let backdrop = (!frosted && !cx.theme().transparent).then(|| cx.theme().background);
+        let masked = match frosted {
+            true => pinned,
+            false => pinned + head,
+        };
         let context_menu = self.context_menu.clone().and_then(|(rows, position)| {
             let visible = self.delegate.visible();
             self.delegate
@@ -1303,7 +1314,7 @@ impl<S: TableSource> Render for TableState<S> {
             .child(
                 div()
                     .absolute()
-                    .top(pinned + head)
+                    .top(masked)
                     .left_0()
                     .right_0()
                     .bottom_0()
@@ -1311,7 +1322,7 @@ impl<S: TableSource> Render for TableState<S> {
                     .child(
                         div()
                             .absolute()
-                            .top(-(pinned + head))
+                            .top(-masked)
                             .left_0()
                             .right_0()
                             .h(height)
