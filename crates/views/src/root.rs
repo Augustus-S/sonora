@@ -524,6 +524,14 @@ impl Root {
             Destination::Settings(_) => {
                 self.screens.settings.update(cx, |view, cx| view.escape(cx));
             }
+            Destination::Artist(_) => {
+                if let Some(artist) = self.screens.artist.clone() {
+                    artist.update(cx, |view, cx| view.escape(cx));
+                }
+            }
+            Destination::Song(_) => {
+                self.screens.song.update(cx, |view, cx| view.escape(cx));
+            }
             _ => {}
         }
     }

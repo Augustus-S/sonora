@@ -892,6 +892,16 @@ impl ArtistView {
         Some(div().pt_6().child(card).into_any_element())
     }
 
+    /// Closes the About the artist dialog when it is open, and says whether it was.
+    pub(crate) fn escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.about_open {
+            return false;
+        }
+        self.about_open = false;
+        cx.notify();
+        true
+    }
+
     fn about_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.about_open {
             return None;
