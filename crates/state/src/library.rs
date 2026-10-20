@@ -21,8 +21,9 @@ const FATAL: [LibraryPart; 3] = [
 ];
 const FATAL_LOCAL: [LibraryPart; 2] = [LibraryPart::Tracks, LibraryPart::Albums];
 
-/// Lets a few playlists have their contents read at a time. Each read holds every track of its
-/// playlist until it is cut down to ids, and a library asks for all of its playlists at once.
+/// Lets a few playlists have their contents or mosaic covers read at a time. A library asks for
+/// all of its playlists at once. Each read holds every track of its playlist until it is cut down,
+/// and unchecked reads would spend the provider's request budget before the liked songs load.
 static READS: Semaphore = Semaphore::const_new(4);
 
 /// Which provider a library page, an id or a playlist belongs to. The streaming shelf follows
@@ -2248,9 +2249,10 @@ impl Library {
             let asked = id.clone();
             let key = id.clone();
             let task = cx.spawn(async move |this, cx| {
-                let covers = join(
-                    io.spawn(async move { client.playlist_covers(&asked, mosaic::TILES).await }),
-                )
+                let covers = join(io.spawn(async move {
+                    let _turn = READS.acquire().await;
+                    client.playlist_covers(&asked, mosaic::TILES).await
+                }))
                 .await;
                 match covers {
                     Ok(covers) => {
