@@ -169,14 +169,17 @@ impl Render for UserView {
         }
 
         div().flex().flex_col().size_full().child(
-            Scroller::new("user-page", &self.scrollbar).p(pad).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_8()
-                    .child(self.header(cx))
-                    .child(self.playlists(cx)),
-            ),
+            Scroller::new("user-page", &self.scrollbar)
+                .bottom_inset(crate::chrome::Chrome::bottom(cx))
+                .p(pad)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_8()
+                        .child(self.header(cx))
+                        .child(self.playlists(cx)),
+                ),
         )
     }
 }

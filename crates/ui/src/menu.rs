@@ -12,7 +12,7 @@ use gpui::{
 
 use crate::Artwork;
 use crate::form::Submit;
-use crate::glass::{GLASS_BLUR, blurring};
+use crate::glass::{GLASS_BLUR, blurring, popover_fill};
 use crate::input::Input;
 use crate::metrics::snapped;
 use crate::motion::{Fading as _, Rising as _};
@@ -34,11 +34,6 @@ const SUBMENU_TOP: Pixels = px(-14.);
 const WINDOW_MARGIN: Pixels = px(8.);
 pub(crate) const TRIGGER_GAP: Pixels = px(4.);
 const PANEL_SLACK: Pixels = px(6.);
-/// How much of the popover colour the panel keeps over its own blur. A menu is raised to be
-/// read, so it holds far more of its fill than a glass control does: what the blur buys is the
-/// wash of whatever it covers, not see-through for its own sake. With blurring off there is no
-/// wash left to read through, so the panel takes the flat popover colour instead.
-const PANEL_FILL: f32 = 0.75;
 /// How far the pointer has to travel from where a context menu was opened before letting go of
 /// the button picks the item under it. A plain click never moves this far, so it only opens the
 /// menu, while a press held and dragged onto an item behaves the way a context menu is expected
@@ -1030,10 +1025,7 @@ impl RenderOnce for Menu {
                 (position, offset)
             });
         let frosting = blurring(cx);
-        let fill = match frosting {
-            true => theme.popover.opacity(PANEL_FILL),
-            false => theme.popover,
-        };
+        let fill = popover_fill(cx);
         let panel_looks = div()
             .on_children_prepainted({
                 let guard = hover_guard.clone();

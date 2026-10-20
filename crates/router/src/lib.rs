@@ -141,7 +141,7 @@ impl Screen {
     }
 }
 
-/// One page of settings. The first ten are sections of the six tabs, each tab showing its sections
+/// One page of settings. The first eleven are sections of the six tabs, each tab showing its sections
 /// one after another on one scrolling page, and the last two are drill-ins that open from a row
 /// on their parent page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +149,7 @@ pub enum SettingsPage {
     Providers,
     General,
     Appearance,
+    PlayerBar,
     NowPlaying,
     Lyrics,
     Playback,
@@ -162,10 +163,11 @@ pub enum SettingsPage {
 
 impl SettingsPage {
     /// Every page, the sections first and the drill-ins after them.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Providers,
         Self::General,
         Self::Appearance,
+        Self::PlayerBar,
         Self::NowPlaying,
         Self::Lyrics,
         Self::Playback,
@@ -182,6 +184,7 @@ impl SettingsPage {
             Self::Providers => "providers",
             Self::General => "general",
             Self::Appearance => "appearance",
+            Self::PlayerBar => "player-bar",
             Self::NowPlaying => "now-playing",
             Self::Lyrics => "lyrics",
             Self::Playback => "playback",
@@ -200,6 +203,7 @@ impl SettingsPage {
             Self::Providers => "settings-page-providers",
             Self::General => "settings-page-general",
             Self::Appearance => "settings-page-appearance",
+            Self::PlayerBar => "settings-page-player-bar",
             Self::NowPlaying => "settings-page-now-playing",
             Self::Lyrics => "settings-page-lyrics",
             Self::Playback => "settings-page-playback",
@@ -230,7 +234,7 @@ impl SettingsPage {
         match self {
             Self::General | Self::About => SettingsTab::General,
             Self::Providers | Self::MusicFolders => SettingsTab::Providers,
-            Self::Appearance | Self::NowPlaying => SettingsTab::Appearance,
+            Self::Appearance | Self::PlayerBar | Self::NowPlaying => SettingsTab::Appearance,
             Self::Lyrics | Self::LyricsSources => SettingsTab::Lyrics,
             Self::Playback | Self::Sound => SettingsTab::Playback,
             Self::Discord | Self::Scrobbling => SettingsTab::Integrations,
@@ -301,7 +305,11 @@ impl SettingsTab {
         match self {
             Self::General => &[SettingsPage::General, SettingsPage::About],
             Self::Providers => &[SettingsPage::Providers],
-            Self::Appearance => &[SettingsPage::Appearance, SettingsPage::NowPlaying],
+            Self::Appearance => &[
+                SettingsPage::Appearance,
+                SettingsPage::PlayerBar,
+                SettingsPage::NowPlaying,
+            ],
             Self::Lyrics => &[SettingsPage::Lyrics],
             Self::Playback => &[SettingsPage::Playback, SettingsPage::Sound],
             Self::Integrations => &[SettingsPage::Discord, SettingsPage::Scrobbling],

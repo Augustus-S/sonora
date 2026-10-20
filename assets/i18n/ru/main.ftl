@@ -501,6 +501,15 @@ month-12 = дек.
 # settings
 settings-search = Поиск по настройкам
 settings-theme = Тема
+settings-page-player-bar = Панель плеера
+settings-player-bar-layout = Раскладка
+settings-player-bar-layout-detail = Расположение информации о треке, кнопок воспроизведения и шкалы прогресса
+settings-player-bar-classic = Классическая
+settings-player-bar-compact = Компактная
+settings-player-bar-centered = По центру
+settings-player-bar-surface = Поверхность
+settings-player-bar-transparent = Прозрачная панель плеера
+settings-player-bar-transparent-detail = Страницы, текст песен и боковые панели прокручиваются под плеером с матовым материалом контекстных меню
 settings-theme-detail = Цветовая палитра приложения
 settings-opacity = Непрозрачность
 settings-opacity-detail = Настройте непрозрачность фона приложения

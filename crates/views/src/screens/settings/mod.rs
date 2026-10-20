@@ -32,6 +32,7 @@ mod layout;
 mod lyrics;
 mod now_playing;
 mod playback;
+mod player_bar;
 mod preview;
 mod rows;
 mod scrobbling;
@@ -71,6 +72,8 @@ enum Slot {
     AmbientMotion,
     Visualizer,
     VisualizerAbsolute,
+    PlayerBarLayout,
+    PlayerBarTransparent,
     FullscreenControlsAutohide,
     OsFullscreen,
     Karaoke,
@@ -448,6 +451,7 @@ impl SettingsView {
         match page {
             SettingsPage::Providers => self.accounts_groups(),
             SettingsPage::Appearance => self.appearance_groups(),
+            SettingsPage::PlayerBar => self.player_bar_groups(),
             SettingsPage::NowPlaying => self.now_playing_groups(cx),
             SettingsPage::Lyrics => self.lyrics_groups(),
             SettingsPage::Playback => self.playback_groups(cx),
@@ -625,6 +629,14 @@ impl SettingsView {
                 t!("settings-ambient-motion-detail"),
             ),
             Slot::Visualizer => (t!("settings-visualizer"), t!("settings-visualizer-detail")),
+            Slot::PlayerBarLayout => (
+                t!("settings-player-bar-layout"),
+                t!("settings-player-bar-layout-detail"),
+            ),
+            Slot::PlayerBarTransparent => (
+                t!("settings-player-bar-transparent"),
+                t!("settings-player-bar-transparent-detail"),
+            ),
             Slot::VisualizerAbsolute => (
                 t!("settings-visualizer-absolute"),
                 t!("settings-visualizer-absolute-detail"),
@@ -809,6 +821,8 @@ impl SettingsView {
             Slot::Ambient => self.ambient_row(cx),
             Slot::AmbientMotion => self.ambient_motion_row(cx),
             Slot::Visualizer => div().into_any_element(),
+            Slot::PlayerBarLayout => div().into_any_element(),
+            Slot::PlayerBarTransparent => self.player_bar_transparent_row(cx),
             Slot::VisualizerAbsolute => self.visualizer_absolute_row(cx),
             Slot::Opacity => self.opacity_row(cx),
             Slot::WindowBlur => self.blur_window_row(cx),
@@ -885,6 +899,7 @@ impl SettingsView {
             Slot::Icons => self.icon_cards(window, cx),
             Slot::Corners => self.corner_cards(window, cx),
             Slot::Visualizer => self.visualizer_cards(window, cx),
+            Slot::PlayerBarLayout => self.player_bar_cards(window, cx),
             Slot::StreamQuality => self.quality_cards(window, cx),
             slot => self.slot_element(slot, window, cx),
         }
