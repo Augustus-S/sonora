@@ -637,6 +637,7 @@ impl Render for SidebarLeft {
             .limits(MIN_WIDTH, MAX_WIDTH)
             .reach(self.ceiling(window, cx))
             .clears_scrollbar()
+            .grip_above(super::Chrome::bottom(cx))
             .on_resize(cx.listener(|this, width: &Pixels, _, cx| {
                 this.width = *width;
                 this.persist(cx);

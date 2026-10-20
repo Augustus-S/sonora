@@ -91,8 +91,7 @@ use serde::{Deserialize, Serialize};
 use crate::devices::{collection_of, mode_of};
 use crate::{
     AppSettings, Devices, Equalizer, Io, Network, Outcome, Session, SessionEvent, Sonora, Steered,
-    Target, Toast,
-    Toasts, join,
+    Target, Toast, Toasts, join,
 };
 
 const POSITION_INTERVAL: Duration = Duration::from_millis(500);

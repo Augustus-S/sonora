@@ -60,8 +60,10 @@ impl Workspace {
         let settings = Sonora::global(cx).settings.clone();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         let devices = Sonora::global(cx).devices.clone();
-        cx.observe(&devices, |this, _, cx| this.restrip(cx)).detach();
-        cx.observe(&playback, |this, _, cx| this.restrip(cx)).detach();
+        cx.observe(&devices, |this, _, cx| this.restrip(cx))
+            .detach();
+        cx.observe(&playback, |this, _, cx| this.restrip(cx))
+            .detach();
 
         Self {
             sidebar,
