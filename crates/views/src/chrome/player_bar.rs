@@ -37,9 +37,11 @@ const BANNER_ICON: f32 = 14.;
 /// The width of a member's picture on the strip, and how many of them it shows before it counts
 /// the rest.
 const BANNER_FACE: f32 = 24.;
-/// How much of the popover colour the strip keeps over its blur, as a menu does, so what it
-/// covers does not read through the text.
-const BANNER_FILL: f32 = 0.75;
+/// How much of the popover colour a see-through bar and the strip over it keep, and how far they
+/// blur what is under them. Both are thicker than a menu's, since the bar sits over the page for
+/// good and its text has to read over whatever scrolls by.
+const BAR_FILL: f32 = 0.9;
+const BAR_BLUR: Pixels = px(24.);
 const BANNER_FACES: usize = 4;
 /// The space round the faces inside their pill, the same on every side so the pill's round ends
 /// stay concentric with the faces.
@@ -481,7 +483,7 @@ impl Render for PlayerBar {
         let span = Chrome::window_room(window);
         let layout = self.settings.read(cx).player_bar_layout();
         let stacked = Self::stacked(window, layout);
-        let transparent = self.settings.read(cx).player_bar_transparent();
+        let transparent = self.settings.read(cx).player_bar_translucent();
         let height = Self::height(window, cx);
         let clock_text = theme.text(ui::Text::Tiny);
         // Equal wings keep the title centered while reserving the original volume slider width.
@@ -559,7 +561,11 @@ impl Render for PlayerBar {
             .when_some(radius, |this, radius| this.rounded_b(radius))
             .when_else(
                 transparent,
-                |this| ui::popover_surface(this, cx),
+                |this| {
+                    this.bg(theme.popover.opacity(BAR_FILL))
+                        .text_color(theme.popover_foreground)
+                        .backdrop_blur(BAR_BLUR)
+                },
                 |this| this.when(!theme.transparent, |this| this.bg(theme.secondary)),
             )
             .border_t_1()
@@ -693,7 +699,7 @@ impl Render for PlayerBar {
         let spread = faces.update(cx, |faces, cx| faces.level(window, cx));
         let frosting = ui::blurring(cx);
         let fill = match frosting {
-            true => theme.popover.opacity(BANNER_FILL),
+            true => theme.popover.opacity(BAR_FILL),
             false => theme.popover,
         };
         let devices = Sonora::global(cx).devices.read(cx);
@@ -712,7 +718,7 @@ impl Render for PlayerBar {
                 .text_size(theme.text(ui::Text::Small))
                 .text_color(theme.foreground)
                 .bg(fill)
-                .when(frosting, ui::frost)
+                .when(frosting, |this| this.backdrop_blur(BAR_BLUR))
         };
         let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
             let text = match jam::host_name(jam) {

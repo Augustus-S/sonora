@@ -21,7 +21,7 @@ impl SettingsView {
     /// Miniature layouts share the saved choice with the actual workspace player bar.
     pub(super) fn player_bar_cards(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let chosen = self.settings.read(cx).player_bar_layout();
-        let transparent = self.settings.read(cx).player_bar_transparent();
+        let transparent = self.settings.read(cx).player_bar_translucent();
         let height = cx.theme().metrics.list_row * 1.6;
         grid(PlayerBarLayout::ALL.len() as u16, window, cx)
             .children(PlayerBarLayout::ALL.map(|layout| {
@@ -39,12 +39,16 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// Explains that transparency also moves the page behind the player bar.
+    /// Explains that transparency also moves the page behind the player bar. The switch stands
+    /// off and held while Blur UI is off, since the bar cannot be see-through without it.
     pub(super) fn player_bar_transparent_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let on = self.settings.read(cx).player_bar_transparent();
+        let settings = self.settings.read(cx);
+        let on = settings.player_bar_transparent();
+        let blur = settings.blur();
         Row::new(
             t!("settings-player-bar-transparent"),
-            Switch::new("player-bar-transparent", on)
+            Switch::new("player-bar-transparent", on && blur)
+                .disabled(!blur)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
                         settings.set_player_bar_transparent(!on, cx);
@@ -52,7 +56,10 @@ impl SettingsView {
                 }))
                 .into_any_element(),
         )
-        .detail(t!("settings-player-bar-transparent-detail"))
+        .detail(match blur {
+            true => t!("settings-player-bar-transparent-detail"),
+            false => t!("settings-player-bar-transparent-needs-blur"),
+        })
         .into_any_element()
     }
 }

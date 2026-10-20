@@ -209,7 +209,7 @@ impl Render for Workspace {
         let covered = self.sidebar_right.read(cx).covers_content(window);
         let overlay = self.sidebar.read(cx).overlays();
         let bar_height = PlayerBar::height(window, cx);
-        let underlap = self.settings.read(cx).player_bar_transparent();
+        let underlap = self.settings.read(cx).player_bar_translucent();
         let bottom = match underlap {
             true => bar_height,
             false => Pixels::ZERO,

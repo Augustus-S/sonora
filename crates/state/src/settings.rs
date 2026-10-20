@@ -1219,9 +1219,16 @@ impl AppSettings {
         PlayerBarLayout::from_id(&self.values.appearance.player_bar_layout)
     }
 
-    /// Whether the player bar uses the context-menu material over the scrolling content.
+    /// Whether the listener asked for a see-through player bar. What the bar does is
+    /// `player_bar_translucent`, which also needs the blur.
     pub fn player_bar_transparent(&self) -> bool {
         self.values.appearance.player_bar_transparent
+    }
+
+    /// Whether the player bar is drawn see-through with pages scrolling under it. It takes Blur
+    /// UI as well, since without the blur the bar's text would sit on the bare page.
+    pub fn player_bar_translucent(&self) -> bool {
+        self.player_bar_transparent() && self.blur()
     }
 
     /// Whether fullscreen paints the ambient background sampled from the cover.
