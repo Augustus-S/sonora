@@ -3,6 +3,7 @@ mod layout;
 use std::cell::Cell as StdCell;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::ops::Range;
 
 use gpui::prelude::*;
 use gpui::{
@@ -12,6 +13,7 @@ use gpui::{
     Window, actions, div, point, px, svg,
 };
 
+use crate::artwork::{PREFETCH_REACH, Prefetch};
 use crate::filters::FilterChange;
 use crate::menu::Menu;
 use crate::metrics::{snapped, text_width};
@@ -1049,7 +1051,7 @@ impl<S: TableSource> TableState<S> {
         let bottom = self.corners.bottom_left.max(self.corners.bottom_right);
         let marked = &self.delegate.marked;
 
-        (first..last)
+        let mut rows: Vec<AnyElement> = (first..last)
             .map(|display| {
                 let row = self.delegate.row(display);
                 let tail = display + 1 == count;
@@ -1134,7 +1136,43 @@ impl<S: TableSource> TableState<S> {
                     .children(cells)
                     .into_any_element()
             })
-            .collect()
+            .collect();
+        rows.push(
+            self.upcoming(first..last, row_height, cx)
+                .into_any_element(),
+        );
+        rows
+    }
+
+    /// The thumbnail cells of the rows within `PREFETCH_REACH` of the drawn ones, laid out
+    /// unseen so their covers are loading before they scroll in.
+    fn upcoming(&self, drawn: Range<usize>, row_height: Pixels, cx: &mut App) -> Prefetch {
+        let count = self.delegate.order.len();
+        let reach = (self.viewport.height * PREFETCH_REACH / row_height)
+            .ceil()
+            .max(0.) as usize;
+        let before = drawn.start.saturating_sub(reach)..drawn.start;
+        let after = drawn.end..(drawn.end + reach).min(count);
+
+        let mut cells = Vec::new();
+        for display in before.chain(after) {
+            let row = self.delegate.row(display);
+            for (ix, column) in self.delegate.columns.iter().enumerate() {
+                if !matches!(column.spec.width, Width::Thumb) {
+                    continue;
+                }
+                let cell = Cell {
+                    field: column.spec.field,
+                    width: self.delegate.inner_width(ix),
+                    height: row_height,
+                    align: column.spec.align,
+                    display,
+                    row,
+                };
+                cells.push(self.delegate.source.cell(cell, cx));
+            }
+        }
+        Prefetch::new(cells)
     }
 }
 

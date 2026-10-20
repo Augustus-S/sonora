@@ -52,7 +52,7 @@ MAP = {
     "list-music": ("playlist", "playlist-linear", "play-list-line"),
     "list-plus": ("playlist-plus", "list-arrow-up-linear", "play-list-add-line"),
     "list-start": (None, None, None),
-    "loader-circle": (None, None, "loader-4-line"),
+    "loader-circle": ("refresh-circle", "loader-linear", "loader-4-line"),
     "lock": ("lock", "lock-linear", "lock-line"),
     "log-out": ("log-out", "logout-2-linear", "logout-box-r-line"),
     "maximize": ("expand", "maximize-square-3-linear", "fullscreen-line"),
@@ -76,6 +76,7 @@ MAP = {
     "play-filled": ("play-solid", "play-bold", "play-fill"),
     "play-off": (None, None, None),
     "plus": ("plus", None, "add-line"),
+    "qr-code": ("qr-code", "qr-code-linear", "qr-code-line"),
     "radio": ("antenna-signal", "radio-linear", "radio-line"),
     "refresh-cw": ("refresh", "refresh-linear", "refresh-line"),
     "repeat": ("repeat", "repeat-linear", "repeat-2-line"),
@@ -99,6 +100,7 @@ MAP = {
     "undo-2": ("undo", "undo-left-round-linear", "arrow-go-back-line"),
     "user": ("user", "user-linear", "user-line"),
     "user-round": ("profile-circle", "user-rounded-linear", "user-3-line"),
+    "users-round-collaboration": ("group", "users-group-rounded-linear", "group-line"),
     "volume": ("sound-min", "volume-small-linear", "volume-down-line"),
     "volume-1": ("sound-low", "volume-linear", "volume-down-line"),
     "volume-2": ("sound-high", "volume-loud-linear", "volume-up-line"),
@@ -111,6 +113,7 @@ MAP = {
 MIRROR = {
     "panel-right-close": "panel-left-close",
     "panel-right-open": "panel-left-open",
+    "redo-2": "undo-2",
 }
 
 SLASH = {

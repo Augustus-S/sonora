@@ -14,14 +14,17 @@ mod grain;
 mod info_card;
 mod inline_links;
 mod input;
+mod kbd;
 mod label;
 mod layout;
 mod lazy;
+mod level_meter;
 mod menu;
 mod metrics;
 mod modal;
 pub mod motion;
 mod notice;
+mod option_card;
 mod palette;
 mod panel;
 mod picker;
@@ -30,6 +33,9 @@ mod popover;
 mod popup;
 mod qr;
 mod radio;
+mod rail;
+mod response_graph;
+mod response_sketch;
 mod scrollbar;
 mod scroller;
 mod scrubber;
@@ -46,10 +52,13 @@ mod toast;
 mod tooltip;
 mod traffic_light_controls;
 mod vacancy;
+mod veil;
 mod view;
 mod visualizer;
 
-pub use artwork::{Artwork, Avatar, artwork_usage, cover_palette};
+pub use artwork::{
+    Artwork, Avatar, PREFETCH_REACH, Prefetch, artwork_usage, cover_palette, prefetch,
+};
 pub use button::{Button, SMALL_INSET};
 pub use card::CARD_GROUP;
 pub use card::Card;
@@ -58,13 +67,13 @@ pub use controls::WindowControls;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use controls::WindowFrame;
 pub use deck::Deck;
-pub use drag::{Edge, Ghost, drop_gap, drop_marker};
+pub use drag::{Edge, Ghost, drop_gap, drop_marker, grip};
 pub use explicit::ExplicitBadge;
 pub use filters::{
     Filter, FilterChange, FlagAxis, RangeAxis, RangeScrubber, RangeState, SortAxis, Unit,
 };
 pub use form::{FORM_CONTEXT, Submit};
-pub use glass::{GLASS_BLUR, GLASS_FILL, blurring, frost, glass};
+pub use glass::{GLASS_BLUR, GLASS_FILL, blurring, frost, glass, popover_fill, popover_surface};
 pub use glide::{Glide, ScrollPosition};
 pub use grain::grain;
 pub use info_card::{Fact, InfoCard};
@@ -75,18 +84,21 @@ pub use input::{
     SelectLeft, SelectRight, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Space,
     WordLeft, WordRight,
 };
+pub use kbd::Kbd;
 pub use label::{eyebrow, faint, heading, upper, vacant};
 pub use layout::{ALWAYS, MIN_CONTENT, ROOMY, Room, SNUG, VAST, WIDE};
 pub use lazy::Lazy;
+pub use level_meter::LevelMeter;
 pub use menu::{MENU_CONTEXT, Menu, MenuItem, MenuSearch, SubmenuState};
 pub use metrics::{LEADING, Metrics, Rounding, Text, snapped, tucked};
 pub use modal::Modal;
 pub use motion::{
-    Entrance, Fading, Motion, Motioned, Pace, Rising, Saver, Springs, Stillness, css_ease,
-    css_ease_out, ease_in_out_cubic, ease_in_out_expo, ease_out_cubic, ease_out_expo,
+    Entrance, Fading, HoverFade, Motion, Motioned, Pace, Rising, Saver, Springs, Stillness,
+    css_ease, css_ease_out, ease_in_out_cubic, ease_in_out_expo, ease_out_cubic, ease_out_expo,
     ease_out_quad, entering, entrance_span, mix, paced, veiled,
 };
 pub use notice::Notice;
+pub use option_card::OptionCard;
 pub use palette::{CoverPalette, palette, tint};
 pub use panel::{Panel, Side};
 pub use picker::Picker;
@@ -95,6 +107,11 @@ pub use popover::{Popover, Popovers};
 pub use popup::Popup;
 pub use qr::Qr;
 pub use radio::Radio;
+pub use rail::Rail;
+pub use response_graph::{
+    GraphEdit, ResponseAxes, ResponseGraph, ResponseGraphState, ResponseNode, ResponsePoint,
+};
+pub use response_sketch::ResponseSketch;
 pub use scrollbar::{
     Scrollbar, cancel_middle_scroll, quantize, release_middle_scroll, scrolled,
     update_middle_scroll,
@@ -122,5 +139,6 @@ pub use toast::Toast;
 pub use tooltip::{Perch, Tipped, Tooltip};
 pub use traffic_light_controls::TrafficLightControls;
 pub use vacancy::Vacancy;
+pub use veil::{VeilEdge, effects, veil};
 pub use view::Mode;
 pub use visualizer::{Levels, Visualizer, VisualizerStyle};

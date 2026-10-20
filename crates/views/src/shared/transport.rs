@@ -128,6 +128,7 @@ fn shuffle(playback: &Entity<Playback>, frosted: bool, cx: &App) -> Button {
         .when(frosted, Button::frosted)
         .small()
         .icon("icons/shuffle.svg")
+        .indicator(on)
         .tooltip_above("player-shuffle")
         .tint(match on {
             true => theme.primary,
@@ -151,6 +152,7 @@ fn repeat(playback: &Entity<Playback>, frosted: bool, cx: &App) -> Button {
             Repeat::One => "icons/repeat-one.svg",
             _ => "icons/repeat.svg",
         })
+        .indicator(repeat != Repeat::Off)
         .tooltip_above(match repeat {
             Repeat::Off => "player-repeat",
             Repeat::All => "player-repeat-all",

@@ -533,7 +533,10 @@ impl Worker {
         let owned = match Self::current_session(&self.session).await {
             Ok(Some(read)) if read.owner && is_path_id(&read.id, "_-") => Some(read.id),
             Ok(_) => None,
-            Err(error) => return log::warn!("connect: cannot read the jam to leave it: {error}"),
+            Err(error) => {
+                log::warn!("connect: cannot read the jam to leave it: {error}");
+                return self.leave_failed().await;
+            }
         };
         let answer = match owned {
             Some(id) => {
@@ -567,7 +570,19 @@ impl Worker {
             Ok(_) => {
                 self.out.send(Event::Jam(None)).ok();
             }
-            Err(error) => log::warn!("connect: cannot leave the jam: {error}"),
+            Err(error) => {
+                log::warn!("connect: cannot leave the jam: {error}");
+                self.leave_failed().await;
+            }
+        }
+    }
+
+    /// Says a leave did not go through, and then what the group session is now, since the app
+    /// takes the Jam off screen before it asks.
+    async fn leave_failed(&mut self) {
+        self.out.send(Event::LeaveFailed).ok();
+        if let Ok(jam) = Self::current_jam(&self.session).await {
+            self.out.send(Event::Jam(jam)).ok();
         }
     }
 

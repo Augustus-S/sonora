@@ -12,7 +12,7 @@ use gpui::{
 
 use crate::Artwork;
 use crate::form::Submit;
-use crate::glass::{GLASS_BLUR, blurring};
+use crate::glass::{GLASS_BLUR, blurring, popover_fill};
 use crate::input::Input;
 use crate::metrics::snapped;
 use crate::motion::{Fading as _, Rising as _};
@@ -34,11 +34,6 @@ const SUBMENU_TOP: Pixels = px(-14.);
 const WINDOW_MARGIN: Pixels = px(8.);
 pub(crate) const TRIGGER_GAP: Pixels = px(4.);
 const PANEL_SLACK: Pixels = px(6.);
-/// How much of the popover colour the panel keeps over its own blur. A menu is raised to be
-/// read, so it holds far more of its fill than a glass control does: what the blur buys is the
-/// wash of whatever it covers, not see-through for its own sake. With blurring off there is no
-/// wash left to read through, so the panel takes the flat popover colour instead.
-const PANEL_FILL: f32 = 0.75;
 /// How far the pointer has to travel from where a context menu was opened before letting go of
 /// the button picks the item under it. A plain click never moves this far, so it only opens the
 /// menu, while a press held and dragged onto an item behaves the way a context menu is expected
@@ -95,9 +90,22 @@ pub struct SubmenuState {
     /// Keeps the submenu open after the pointer leaves, set while its search holds a query so
     /// the list does not vanish mid-typing.
     held: Rc<Cell<bool>>,
+    /// Closes the submenu as soon as the pointer is off both its item and its panel, rather than
+    /// after `SUBMENU_CLOSE_DELAY`.
+    instant: bool,
 }
 
 impl SubmenuState {
+    /// A submenu that closes the moment the pointer leaves it, for a menu of sibling submenus
+    /// where the delay would show the last one over the next. The pointer cannot cut across
+    /// other items on its way to the panel.
+    pub fn instant() -> Self {
+        Self {
+            instant: true,
+            ..Self::default()
+        }
+    }
+
     fn is_open(&self) -> bool {
         self.open.get()
     }
@@ -125,8 +133,14 @@ impl SubmenuState {
         }
 
         let state = self.clone();
+        let delay = match self.instant {
+            true => Duration::ZERO,
+            false => SUBMENU_CLOSE_DELAY,
+        };
         cx.spawn(async move |cx| {
-            cx.background_executor().timer(SUBMENU_CLOSE_DELAY).await;
+            // even with no delay this waits a turn, so a pointer moving from the item onto the
+            // gap or the panel is seen there before the submenu closes
+            cx.background_executor().timer(delay).await;
             let inside = cx.update(|cx| {
                 cx.update_window(window, |_, window, _| state.covers(window.mouse_position()))
                     .unwrap_or(false)
@@ -262,7 +276,7 @@ impl MenuSearch {
         }
         match restore {
             Some(focus) => window.focus(&focus, cx),
-            None => window.blur(),
+            None => window.blur(cx),
         }
     }
 
@@ -367,6 +381,7 @@ pub struct MenuItem {
     content: Option<AnyElement>,
     face: Option<SharedString>,
     icon: Option<&'static str>,
+    leading: Option<AnyElement>,
     artwork: Option<Option<SharedString>>,
     tooltip: Option<SharedString>,
     press: Option<Action>,
@@ -388,6 +403,7 @@ impl MenuItem {
             separator: false,
             content: None,
             icon: None,
+            leading: None,
             artwork: None,
             tooltip: None,
             press: None,
@@ -417,6 +433,7 @@ impl MenuItem {
             content: None,
             face: None,
             icon: None,
+            leading: None,
             artwork: None,
             tooltip: None,
             press: None,
@@ -453,6 +470,12 @@ impl MenuItem {
 
     pub fn icon(mut self, path: &'static str) -> Self {
         self.icon = Some(path);
+        self
+    }
+
+    /// Draws `leading` before the label, such as a small picture of what the item chooses.
+    pub fn leading(mut self, leading: impl IntoElement) -> Self {
+        self.leading = Some(leading.into_any_element());
         self
     }
 
@@ -714,6 +737,7 @@ impl RenderOnce for Menu {
                 content,
                 face,
                 icon,
+                leading,
                 artwork,
                 tooltip,
                 press,
@@ -741,6 +765,7 @@ impl RenderOnce for Menu {
             let press = press.map(|press| releasing(press, &row_searches));
             let submenu_state = submenu.as_ref().map(|submenu| submenu.state.clone());
             let has_artwork = artwork.is_some();
+            let leading = leading.filter(|_| !has_artwork && icon.is_none());
             let detailed = detail.is_some();
 
             div()
@@ -768,14 +793,20 @@ impl RenderOnce for Menu {
                 .when(!disabled, |this| {
                     this.hover(move |this| this.bg(theme.secondary_hover))
                 })
+                // the label column fills the row, so a detail wraps at the menu's width rather
+                // than at the label's
                 .child(
                     div()
                         .flex()
+                        .flex_1()
                         .min_w_0()
                         .items_center()
                         .gap_2()
                         .when_some(artwork, |this, artwork| {
                             this.child(Artwork::new(artwork).size(px(20.)).flex_none())
+                        })
+                        .when_some(leading, |this, leading| {
+                            this.child(div().flex_none().child(leading))
                         })
                         .when_some(icon.filter(|_| !has_artwork), |this, icon| {
                             this.child(
@@ -794,6 +825,7 @@ impl RenderOnce for Menu {
                             div()
                                 .flex()
                                 .flex_col()
+                                .flex_1()
                                 .min_w_0()
                                 .gap_1()
                                 .child(
@@ -1006,10 +1038,7 @@ impl RenderOnce for Menu {
                 (position, offset)
             });
         let frosting = blurring(cx);
-        let fill = match frosting {
-            true => theme.popover.opacity(PANEL_FILL),
-            false => theme.popover,
-        };
+        let fill = popover_fill(cx);
         let panel_looks = div()
             .on_children_prepainted({
                 let guard = hover_guard.clone();

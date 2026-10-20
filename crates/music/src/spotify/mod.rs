@@ -7,6 +7,7 @@ mod collection;
 mod collection2;
 mod connect;
 mod lyrics;
+mod pace;
 mod pathfinder;
 mod pb;
 mod playback;
@@ -66,6 +67,7 @@ impl SpotifyProvider {
             authenticated: true,
             capabilities: Capabilities {
                 pins: true,
+                qualities: playback::QUALITIES,
                 ..Capabilities::ALL
             },
         })

@@ -22,6 +22,7 @@ const LIGHT: Hsla = gpui::white();
 pub struct Qr {
     text: SharedString,
     size: Pixels,
+    radius: Pixels,
 }
 
 impl Qr {
@@ -30,7 +31,15 @@ impl Qr {
         Self {
             text: text.into(),
             size: Pixels::ZERO,
+            radius: Pixels::ZERO,
         }
+    }
+
+    /// Rounds the white square's corners by `radius`. The quiet zone keeps the modules clear of
+    /// the curve for any radius up to a few modules.
+    pub fn rounded(mut self, radius: Pixels) -> Self {
+        self.radius = radius;
+        self
     }
 
     /// The side of the square, quiet zone included.
@@ -42,11 +51,11 @@ impl Qr {
 
 impl RenderOnce for Qr {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let Self { text, size } = self;
+        let Self { text, size, radius } = self;
 
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| paint(&text, bounds, window),
+            move |bounds, _, window, _| paint(&text, bounds, radius, window),
         )
         .flex_none()
         .w(size)
@@ -56,14 +65,17 @@ impl RenderOnce for Qr {
 
 /// Encodes `text` and paints it into the square at the top left of `bounds`. Each module edge is
 /// snapped to a whole device pixel, so a run never leaves a seam against the row beside it.
-fn paint(text: &str, bounds: Bounds<Pixels>, window: &mut Window) {
+fn paint(text: &str, bounds: Bounds<Pixels>, radius: Pixels, window: &mut Window) {
     let Ok(code) = QrCode::encode_text(text, QrCodeEcc::Medium) else {
         return;
     };
     let side = bounds.size.width.min(bounds.size.height);
     let module = side / (code.size() + QUIET * 2) as f32;
     let origin = bounds.origin;
-    window.paint_quad(fill(Bounds::new(origin, gpui::size(side, side)), LIGHT));
+    window.paint_quad(
+        fill(Bounds::new(origin, gpui::size(side, side)), LIGHT)
+            .corner_radii(radius.min(module * 3.)),
+    );
 
     for y in 0..code.size() {
         let top = edge(origin.y, module, y, window);

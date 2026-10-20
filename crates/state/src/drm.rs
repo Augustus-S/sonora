@@ -87,6 +87,12 @@ impl Drm {
         &self.state
     }
 
+    /// Whether the module in use is a browser's copy Sonora found on its own. That copy can be
+    /// too old for the license server, which is worth telling the user when tracks fail.
+    pub fn borrowed(&self) -> bool {
+        self.state == CdmState::Ready(Origin::Installed)
+    }
+
     /// Whether the download under way would replace a module already here, a browser's copy the
     /// user asked Google's to stand in for.
     pub fn replacing(&self) -> bool {

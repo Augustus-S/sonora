@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,10 +7,9 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::Result;
 use gpui::{App, Context, Entity, EventEmitter, SharedString, Task, WeakEntity};
 use music::connect::{self, Command};
-use music::equalizer::{Equalizer, Gains};
 use music::{
-    MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents, PlaybackFactory,
-    Player, Spectrum, Track,
+    Analyzer, Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
+    PlaybackFactory, Player, Quality, Spectrum, Track, TrackSignal, Transcode,
 };
 use ui::{Pin, PinKind};
 
@@ -91,8 +90,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::devices::{collection_of, mode_of};
 use crate::{
-    AppSettings, Devices, Io, Network, Outcome, Session, SessionEvent, Steered, Target, Toast,
-    Toasts, join,
+    AppSettings, Devices, Equalizer, Io, Network, Outcome, Session, SessionEvent, Sonora, Steered,
+    Target, Toast, Toasts, join,
 };
 
 const POSITION_INTERVAL: Duration = Duration::from_millis(500);
@@ -109,6 +108,10 @@ const PRELOAD_BEFORE_END: Duration = Duration::from_secs(10);
 const SKIP_DEBOUNCE: Duration = Duration::from_millis(250);
 const RESTART_WINDOW: Duration = Duration::from_secs(3);
 const KEY_COOLDOWN: Duration = Duration::from_secs(1);
+/// How long after a play or pause press an engine event saying the opposite is taken for the
+/// echo of an earlier press rather than news. Past it the engine is believed again, so a pause
+/// the engine makes on its own is not lost for good.
+const ECHO_WINDOW: Duration = Duration::from_secs(2);
 /// How many loads in a row may fail before the queue stops moving on by itself and waits for
 /// play.
 const FAILURE_LIMIT: u8 = 3;
@@ -138,6 +141,9 @@ const STATION_DRY_LIMIT: u8 = 3;
 
 /// How many unreadable files a toast names before it cuts the list short.
 const LISTED_FILES: usize = 5;
+/// How many tracks' signal reports are kept: the one playing, the one queued behind it, and
+/// room for a skip that has not been heard yet.
+const SIGNALS: usize = 4;
 
 /// A track the engine was asked to fetch ahead, and whether it was also lined up to follow the
 /// current one gaplessly.
@@ -396,8 +402,19 @@ pub struct Playback {
     level: f32,
     normalisation: bool,
     gapless: bool,
-    /// Shared with every engine started here, so a change reaches the output without a restart.
-    equalizer: Equalizer,
+    transcode: Transcode,
+    quality: Quality,
+    /// The `state::Equalizer`'s reader, shared with every engine started here, so a change
+    /// reaches the output without a restart.
+    equalizer: music::Equalizer,
+    /// Shared with every engine like the equalizer's reader, and read only while watched.
+    meter: Meter,
+    /// Shared with every engine like the meter, so the equalizer screen can hear the music ahead
+    /// of the equalizer.
+    analyzer: Analyzer,
+    /// What the engines reported about the sound of the last few tracks they opened, newest
+    /// last, for the signal path.
+    signals: VecDeque<(String, TrackSignal)>,
     repeat: Repeat,
     radio: bool,
     /// The track the current similar-tracks suggestions were drawn from.
@@ -446,6 +463,10 @@ pub struct Playback {
     /// Where the last seek asked to go, until the engine reports where it landed.
     seek_target: Option<Duration>,
     intent: Intent,
+    /// When the user last pressed play or pause, until the engine reports the state they asked
+    /// for. Engines answer each press in order, so a quick pause and play gets a late `Paused`
+    /// after the play, which must not overwrite `intent`.
+    pressed: Option<Instant>,
     /// Whether the engine holds the restored track paused at `resume_at`, so play is instant.
     resume_ready: bool,
     /// Whether playback stopped on a stale session and continues once it reconnects.
@@ -468,6 +489,7 @@ impl Playback {
         session: Entity<Session>,
         queue: Entity<Queue>,
         settings: Entity<AppSettings>,
+        equalizer: &Entity<Equalizer>,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&session, |this, session, event, cx| match event {
@@ -503,10 +525,9 @@ impl Playback {
         let level = settings.read(cx).volume();
         let normalisation = settings.read(cx).normalisation();
         let gapless = settings.read(cx).gapless();
-        let equalizer = Equalizer::new(
-            settings.read(cx).equalizer(),
-            &settings.read(cx).equalizer_gains(),
-        );
+        let transcode = settings.read(cx).transcode();
+        let quality = settings.read(cx).quality();
+        let (equalizer, meter) = (equalizer.read(cx).reader(), equalizer.read(cx).meter());
         let repeat = settings.read(cx).repeat();
         let radio = settings.read(cx).radio();
 
@@ -523,7 +544,12 @@ impl Playback {
             level,
             normalisation,
             gapless,
+            transcode,
+            quality,
             equalizer,
+            meter,
+            analyzer: Analyzer::default(),
+            signals: VecDeque::new(),
             repeat,
             radio,
             seeded: None,
@@ -549,6 +575,7 @@ impl Playback {
             stale_positions: 0,
             seek_target: None,
             intent: Intent::Pause,
+            pressed: None,
             resume_ready: false,
             awaiting_reconnect: false,
             stored: Duration::ZERO,
@@ -675,12 +702,42 @@ impl Playback {
         self.engine_for(id)
     }
 
+    /// The spectrum of the music on its way into the equalizer, on every output.
+    pub fn analyzer(&self) -> &Analyzer {
+        &self.analyzer
+    }
+
     /// The playing engine's spectrum, set to hear the track before or after the volume as the
     /// visualizer setting asks.
     pub fn spectrum(&self, cx: &App) -> Option<Spectrum> {
         let spectrum = self.active_engine()?.spectrum()?;
         spectrum.set_absolute(self.settings.read(cx).visualizer_absolute());
         Some(spectrum)
+    }
+
+    /// For the signal path, `None` while no engine is up for the track loaded now. Otherwise
+    /// what its engine reported about the track's sound, `None` inside until it opened it.
+    pub fn track_signal(&self) -> Option<Option<&TrackSignal>> {
+        let id = self.track.as_ref()?.id.as_deref()?;
+        self.engine_for(id)?;
+        Some(
+            self.signals
+                .iter()
+                .rev()
+                .find(|(known, _)| known == id)
+                .map(|(_, track)| track),
+        )
+    }
+
+    /// Keeps what an engine reported about the sound of track `id`, in place of any older
+    /// report for it.
+    fn learn_signal(&mut self, id: String, track: TrackSignal, cx: &mut Context<Self>) {
+        self.signals.retain(|(known, _)| *known != id);
+        if self.signals.len() == SIGNALS {
+            self.signals.pop_front();
+        }
+        self.signals.push_back((id, track));
+        cx.notify();
     }
 
     /// Pauses the engine the new track does not belong to, so the two never sound at once.
@@ -1882,6 +1939,7 @@ impl Playback {
             return;
         }
         self.intent = Intent::Play;
+        self.pressed = Some(Instant::now());
         if let Some(at) = self.resume_at {
             if !self.resume_ready {
                 return self.reload_and_seek(at, cx);
@@ -1993,6 +2051,7 @@ impl Playback {
             return;
         }
         self.intent = Intent::Pause;
+        self.pressed = Some(Instant::now());
         if let Some(engine) = self.active_engine() {
             engine.pause();
             cx.notify();
@@ -2080,6 +2139,14 @@ impl Playback {
 
     /// Whether the user wants the current track playing, whatever the engine has managed so
     /// far. A transport control reads this; anything that follows the sound reads `state`.
+    /// Whether the engine reporting `reported` answers a press the user has since reversed.
+    fn overtaken(&self, reported: Intent) -> bool {
+        reported != self.intent
+            && self
+                .pressed
+                .is_some_and(|pressed| pressed.elapsed() < ECHO_WINDOW)
+    }
+
     pub fn wants_playing(&self) -> bool {
         self.intent == Intent::Play && self.track.is_some()
     }
@@ -2236,6 +2303,11 @@ impl Playback {
         self.level
     }
 
+    /// The gain the volume applies, 1 at full volume.
+    pub fn volume_gain(&self) -> f32 {
+        gain(self.level)
+    }
+
     pub fn set_volume(&mut self, level: f32, cx: &mut Context<Self>) {
         if self.steer(|_| Command::Volume(level.clamp(0., 1.)), cx) {
             return;
@@ -2261,38 +2333,12 @@ impl Playback {
         self.gapless
     }
 
-    pub fn equalizer(&self) -> bool {
-        self.equalizer.enabled()
+    pub fn transcode(&self) -> Transcode {
+        self.transcode
     }
 
-    pub fn equalizer_gains(&self) -> Gains {
-        self.equalizer.gains()
-    }
-
-    /// Turns the equalizer on or off. The engines pick the change up on their next frame and
-    /// glide to it, so no restart and no click.
-    pub fn set_equalizer(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.equalizer.set_enabled(on);
-        self.settings
-            .update(cx, |settings, cx| settings.set_equalizer(on, cx));
-        cx.notify();
-    }
-
-    pub fn set_equalizer_gains(&mut self, gains: &Gains, cx: &mut Context<Self>) {
-        self.equalizer.set_gains(gains);
-        self.settings
-            .update(cx, |settings, cx| settings.set_equalizer_gains(gains, cx));
-        cx.notify();
-    }
-
-    /// Moves one band, leaving the rest of the curve as it is.
-    pub fn set_equalizer_gain(&mut self, band: usize, gain: f32, cx: &mut Context<Self>) {
-        let mut gains = self.equalizer.gains();
-        let Some(slot) = gains.get_mut(band) else {
-            return;
-        };
-        *slot = gain;
-        self.set_equalizer_gains(&gains, cx);
+    pub fn quality(&self) -> Quality {
+        self.quality
     }
 
     pub fn set_gapless(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -2302,6 +2348,30 @@ impl Playback {
         self.gapless = on;
         self.settings
             .update(cx, |settings, cx| settings.set_gapless(on, cx));
+        self.restart_engine(cx);
+    }
+
+    /// Changes how a converting server is asked to send tracks. The streaming engine restarts,
+    /// so the current track reloads in the new format where it was.
+    pub fn set_transcode(&mut self, transcode: Transcode, cx: &mut Context<Self>) {
+        if self.transcode == transcode {
+            return;
+        }
+        self.transcode = transcode;
+        self.settings
+            .update(cx, |settings, cx| settings.set_transcode(transcode, cx));
+        self.restart_engine(cx);
+    }
+
+    /// Changes the stream level asked of a streaming service. The streaming engine restarts, so
+    /// the current track reloads at the new level where it was.
+    pub fn set_quality(&mut self, quality: Quality, cx: &mut Context<Self>) {
+        if self.quality == quality {
+            return;
+        }
+        self.quality = quality;
+        self.settings
+            .update(cx, |settings, cx| settings.set_quality(quality, cx));
         self.restart_engine(cx);
     }
 
@@ -2340,17 +2410,26 @@ impl Playback {
         }
     }
 
-    /// Rebuilds the engine of the current track on the new default audio device and reloads
-    /// the track where the clock stood.
-    fn restart_output(&mut self, cx: &mut Context<Self>) {
-        let Some(track) = self.track.clone() else {
-            return;
+    /// Rebuilds every running engine on the audio device it should play on now, as when the
+    /// device is chosen in settings.
+    pub(crate) fn restart_outputs(&mut self, cx: &mut Context<Self>) {
+        self.restart_output(false, cx);
+        self.restart_output(true, cx);
+    }
+
+    /// Rebuilds the local or the streaming engine, if it is running, on the audio device it
+    /// should play on now. The engine of the current track reloads it where the clock stood,
+    /// playing if it was and held paused there if it was not; the other one, or one with nothing
+    /// loaded, comes back empty, so its stream still reopens at the device's new rate. A failed
+    /// track is left as it is.
+    fn restart_output(&mut self, local: bool, cx: &mut Context<Self>) {
+        let running = match local {
+            true => self.local_engine.is_some(),
+            false => self.engine.is_some(),
         };
-        let Some(id) = track.id.as_deref() else {
+        if !running {
             return;
-        };
-        let at = self.live_position();
-        let local = music::is_local_id(id);
+        }
         let playback = match local {
             true => self.session.read(cx).local_playback(),
             false => self.session.read(cx).playback(),
@@ -2358,21 +2437,40 @@ impl Playback {
         let Some(playback) = playback else {
             return;
         };
+        let current = self
+            .track
+            .clone()
+            .filter(|track| track.id.is_some() && local == self.local_active());
+        let at = self.live_position();
+        let playing = match self.state {
+            PlaybackState::Playing => Some(true),
+            PlaybackState::Loading => Some(self.intent == Intent::Play),
+            PlaybackState::Paused | PlaybackState::Idle => Some(false),
+            PlaybackState::Failed(_) => None,
+        };
+        // the engine holds a paused track where it stood as it starts, as it does a restored one
+        if current.is_some() && playing == Some(false) {
+            self.resume_at = Some(at);
+        }
 
         log::info!("playback: restarting after the audio output changed");
         match local {
             true => {
                 self.local_task = None;
-                self.local_engine = None;
+                retire(self.local_engine.take());
                 self.start_local_engine(playback, cx);
             }
             false => {
                 self.task = None;
-                self.engine = None;
+                retire(self.engine.take());
                 self.start_engine(playback, cx);
             }
         }
-        self.load_from(&track, at, Start::Pick, cx);
+        if let Some(track) = current
+            && playing == Some(true)
+        {
+            self.load_from(&track, at, Start::Pick, cx);
+        }
     }
 
     /// Whether a track's failure is the session having gone stale, in which case the session
@@ -2413,7 +2511,11 @@ impl Playback {
             gapless: self.gapless,
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
+            transcode: self.transcode,
+            quality: self.quality,
             equalizer: self.equalizer.clone(),
+            meter: self.meter.clone(),
+            analyzer: self.analyzer.clone(),
         };
         let (engine, events) = playback.start(config);
 
@@ -2435,7 +2537,11 @@ impl Playback {
             gapless: self.gapless,
             position_interval: POSITION_INTERVAL,
             gain: gain(self.level),
+            transcode: self.transcode,
+            quality: self.quality,
             equalizer: self.equalizer.clone(),
+            meter: self.meter.clone(),
+            analyzer: self.analyzer.clone(),
         };
         let (engine, events) = playback.start(config);
 
@@ -2466,6 +2572,17 @@ impl Playback {
     /// or about another track, are dropped, so a late event from a previous load cannot move
     /// the clock.
     fn on_backend_event(&mut self, event: BackendEvent, local: bool, cx: &mut Context<Self>) {
+        // an engine whose output has to reopen is rebuilt whether it plays the current track
+        // or sits idle, since a dead engine would take the next track and play nothing
+        if let BackendEvent::OutputChanged = event {
+            self.restart_output(local, cx);
+            return;
+        }
+        // kept for whichever track it names, since a queued track reports before it plays
+        if let BackendEvent::Signal { id, track } = event {
+            self.learn_signal(id, track, cx);
+            return;
+        }
         if local != self.local_active() {
             return;
         }
@@ -2481,8 +2598,7 @@ impl Playback {
             BackendEvent::Position { .. }
             | BackendEvent::Length { .. }
             | BackendEvent::Downloaded { .. }
-            | BackendEvent::Loading { .. }
-            | BackendEvent::OutputChanged => {}
+            | BackendEvent::Loading { .. } => {}
             BackendEvent::Playing { .. }
             | BackendEvent::Paused { .. }
             | BackendEvent::Seeked { .. } => {
@@ -2494,7 +2610,8 @@ impl Playback {
             }
         }
         match event {
-            BackendEvent::OutputChanged => self.restart_output(cx),
+            // rebuilt or kept before the filters above
+            BackendEvent::OutputChanged | BackendEvent::Signal { .. } => {}
             BackendEvent::Unavailable { .. }
             | BackendEvent::Throttled { .. }
             | BackendEvent::Refused
@@ -2503,6 +2620,12 @@ impl Playback {
                 self.resume_ready = false;
                 self.state = PlaybackState::Paused;
                 log::warn!("playback: cannot hold the restored track, waiting for play");
+            }
+            BackendEvent::Playing { .. } if self.overtaken(Intent::Play) => {
+                log::debug!("playback: ignoring a play the user has since paused");
+            }
+            BackendEvent::Paused { .. } if self.overtaken(Intent::Pause) => {
+                log::debug!("playback: ignoring a pause the user has since undone");
             }
             BackendEvent::Loading { at, .. } => {
                 self.state = PlaybackState::Loading;
@@ -2513,6 +2636,7 @@ impl Playback {
                 let at = self.landed(at);
                 let started = self.state != PlaybackState::Playing;
                 self.intent = Intent::Play;
+                self.pressed = None;
                 self.state = PlaybackState::Playing;
                 self.paused_at = None;
                 self.failures = 0;
@@ -2526,6 +2650,7 @@ impl Playback {
             }
             BackendEvent::Paused { at, .. } => {
                 self.intent = Intent::Pause;
+                self.pressed = None;
                 self.state = PlaybackState::Paused;
                 self.paused_at = Some(SystemTime::now());
                 self.position = at;
@@ -2609,7 +2734,16 @@ impl Playback {
                 match exhausted {
                     true => {
                         log::warn!("playback: {FAILURE_LIMIT} tracks failed in a row, stopping");
-                        Toasts::show(Outcome::Failed, "toast-playback-stopped", cx);
+                        match self.module_suspect(cx) {
+                            true => {
+                                let toast = Toast::new(Outcome::Failed, "toast-widevine-failed")
+                                    .note("toast-widevine-borrowed")
+                                    .open("toast-open-settings", Target::PlaybackSettings)
+                                    .lasting();
+                                Toasts::post(toast, cx);
+                            }
+                            false => Toasts::show(Outcome::Failed, "toast-playback-stopped", cx),
+                        }
                     }
                     false => {
                         Toasts::linked(Outcome::Failed, "toast-track-unplayable", name, target, cx)
@@ -2634,11 +2768,21 @@ impl Playback {
         cx.notify();
     }
 
+    /// Whether failing tracks point at the Widevine module: the current provider needs one,
+    /// and the one in use is a browser's copy rather than one the user downloaded.
+    fn module_suspect(&self, cx: &App) -> bool {
+        self.session.read(cx).wants_drm()
+            && cx
+                .try_global::<Sonora>()
+                .is_some_and(|sonora| sonora.drm.read(cx).borrowed())
+    }
+
     /// Drops the streaming engine and everything derived from its session on sign-out. A local
     /// track keeps playing.
     fn teardown(&mut self, cx: &mut Context<Self>) {
         self.task = None;
         self.engine = None;
+        self.signals.retain(|(id, _)| music::is_local_id(id));
 
         if !self.local_active() {
             self.load = None;
@@ -2852,6 +2996,21 @@ fn throttle_wait(throttles: u8) -> Duration {
     THROTTLE_WAIT
         .saturating_mul(1 << doublings)
         .min(THROTTLE_CAP)
+}
+
+/// Drops an engine on a thread of its own. Spotify's waits for its player thread to end, which
+/// sits out an output device that takes CoreAudio ten seconds to give up on, so dropping it here
+/// would hold the window for as long.
+fn retire(engine: Option<Box<dyn Player>>) {
+    let Some(engine) = engine else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("engine-retire".to_owned())
+        .spawn(move || drop(engine));
+    if let Err(error) = spawned {
+        log::warn!("playback: cannot retire the old engine off the main thread: {error}");
+    }
 }
 
 #[cfg(test)]

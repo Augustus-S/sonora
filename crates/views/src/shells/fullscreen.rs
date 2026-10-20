@@ -22,10 +22,10 @@ use ui::{
 use crate::chrome::{Aside, TitleBarOptions};
 use crate::shared::menus::ItemMenu;
 use crate::shared::transport::{NOTCH, fraction, like, moved, percent, transport, volume_icon};
-use crate::shared::veil::{Edge, veil};
 use crate::shared::visualizer::VisualizerDrive;
 use crate::shared::{self, ambient};
 use crate::shells::Shell;
+use ui::{VeilEdge, veil};
 
 const COVER_TALL: f32 = 0.46;
 const COVER_WIDE: f32 = 0.34;
@@ -1146,6 +1146,10 @@ impl Render for FullscreenView {
         let corner = crate::chrome::window_radius(self.settings.read(cx), cx, window);
         #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         let corner: Option<Pixels> = None;
+        let visualizer_tint = match ambient::shown(cx) {
+            true => theme.tint.map(|tint| theme.primary_of(tint)),
+            false => None,
+        };
 
         div()
             .id("fullscreen")
@@ -1180,6 +1184,7 @@ impl Render for FullscreenView {
                 this.child(
                     Visualizer::new(self.visualizer.levels(), visualizer_max)
                         .style_kind(style)
+                        .when_some(visualizer_tint, |this, tint| this.tint(tint))
                         .when_some(corner, |this, radius| this.corner_radius(radius))
                         .absolute()
                         .left_0()
@@ -1202,7 +1207,7 @@ impl Render for FullscreenView {
                         .h(band)
                         .opacity(1. - hide)
                         .child(veil(
-                            Edge::Bottom,
+                            VeilEdge::Bottom,
                             band,
                             VEIL_BLUR,
                             theme.background,

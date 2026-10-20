@@ -83,6 +83,11 @@ pub struct Devices {
     awaiting_code: bool,
     /// Whether the code that opens the Jam's link on a phone is on show.
     code: bool,
+    /// Whether the dialog that takes a Jam link to join is open.
+    joining: bool,
+    /// Whether a leave is on its way. The Jam is off screen already, so updates to it that come
+    /// in before the leave is through are dropped.
+    leaving: bool,
     /// The track playing on another device, once it is read in.
     remote: Option<Track>,
     /// The tracks on that device's queue that are read in, by id.
@@ -144,6 +149,8 @@ impl Devices {
             invite: None,
             awaiting_code: false,
             code: false,
+            joining: false,
+            leaving: false,
             remote: None,
             listed: HashMap::new(),
             people: HashMap::new(),
@@ -209,6 +216,7 @@ impl Devices {
     pub fn accept(&mut self, cx: &mut Context<Self>) {
         if let (Some(invite), Some(link)) = (self.invite.take(), &self.link) {
             link.join(&invite.link);
+            self.leaving = false;
         }
         cx.notify();
     }
@@ -232,6 +240,7 @@ impl Devices {
         if let Some(link) = &self.link {
             link.start();
             self.awaiting_code = true;
+            self.leaving = false;
         }
     }
 
@@ -246,11 +255,35 @@ impl Devices {
         cx.notify();
     }
 
+    /// Whether the dialog that takes a Jam link to join is open.
+    pub fn join_shown(&self) -> bool {
+        self.joining
+    }
+
+    /// Opens or closes the dialog that takes a Jam link to join.
+    pub fn show_join(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.joining = shown;
+        cx.notify();
+    }
+
     /// Leaves the group session, or ends it when the listener started it.
-    pub fn leave(&self) {
-        if let Some(link) = &self.link {
-            link.leave();
-        }
+    /// Takes the Jam off screen at once, says it is over, and asks the provider to follow. A
+    /// refusal brings it back with a toast.
+    pub fn leave(&mut self, cx: &mut Context<Self>) {
+        let Some(link) = &self.link else {
+            return;
+        };
+        link.leave();
+        let owned = self.jam.as_ref().is_some_and(|jam| jam.owner);
+        let said = match owned {
+            true => "toast-jam-ended",
+            false => "toast-jam-left",
+        };
+        Toasts::show(Outcome::Done, said, cx);
+        self.leaving = true;
+        self.jam = None;
+        self.code = false;
+        cx.notify();
     }
 
     /// The track playing on that device, once it is read in.
@@ -385,6 +418,8 @@ impl Devices {
         self.invite = None;
         self.awaiting_code = false;
         self.code = false;
+        self.joining = false;
+        self.leaving = false;
         self.remote = None;
         self.listed.clear();
         self.people.clear();
@@ -436,6 +471,8 @@ impl Devices {
             self.invite = None;
             self.awaiting_code = false;
             self.code = false;
+            self.joining = false;
+            self.leaving = false;
             self.remote = None;
             self.listed.clear();
             self.listing = None;
@@ -461,7 +498,23 @@ impl Devices {
             Event::Roster(roster) => self.set_roster(roster, cx),
             Event::Command(command) => self.run(command, cx),
             Event::Liked { track, liked } => self.liked(track, liked, cx),
-            Event::Jam(jam) => {
+            Event::Jam(mut jam) => {
+                if self.leaving {
+                    if jam.is_some() {
+                        return;
+                    }
+                    self.leaving = false;
+                }
+                // an update to a Jam the listener owns can come without its link or its owner,
+                // which would take the code off screen and bring it back with its entrance played
+                // again, so both carry over from what was known
+                if let (Some(jam), Some(known)) = (jam.as_mut(), self.jam.as_ref())
+                    && known.owner
+                    && jam.link.is_none()
+                {
+                    jam.owner = true;
+                    jam.link = known.link.clone();
+                }
                 // a Jam the listener started shows its code once, as it comes up
                 if self.awaiting_code && jam.as_ref().is_some_and(|jam| jam.link.is_some()) {
                     self.awaiting_code = false;
@@ -479,6 +532,10 @@ impl Devices {
                 }
                 self.invite = invite;
                 cx.notify();
+            }
+            Event::LeaveFailed => {
+                self.leaving = false;
+                Toasts::show(Outcome::Failed, "toast-jam-leave-failed", cx);
             }
             Event::JamFailed => {
                 self.awaiting_code = false;

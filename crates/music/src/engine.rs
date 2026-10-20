@@ -10,8 +10,9 @@
 //! A provider supplies [`Fetch`]: how to get a track and how to open a decoder over it. Every
 //! provider but Spotify does, whose decoding librespot owns. Local reads a file from disk,
 //! YouTube asks for the file a range at a time, Subsonic hands over a plain response, Deezer
-//! decrypts Blowfish stripes as they arrive, and Apple Music indexes CENC fragments and decrypts
-//! each sample through a CDM as the decoder reaches it.
+//! decrypts Blowfish stripes as they arrive, Tidal fetches DASH segments one after another, and
+//! Apple Music indexes CENC fragments and decrypts each sample through a CDM as the decoder
+//! reaches it.
 //!
 //! Loudness normalisation lives here too. A provider only reports how loud a track is, and the
 //! engine decides what gain that earns.
@@ -28,7 +29,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use crate::audio::{Chain, Volume};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
-use crate::{PlaybackConfig, PlaybackEvent, PlaybackEvents, Player};
+use crate::{
+    Encoding, Normalisation, PlaybackConfig, PlaybackEvent, PlaybackEvents, Player, TrackSignal,
+};
 
 /// How many frames the decoder hands over at a time. Small enough that a skip is heard at once,
 /// large enough that the queue is not rebuilt for every few samples.
@@ -95,6 +98,11 @@ pub trait Fetch: Send + Sync + 'static {
         None
     }
 
+    /// How the track is encoded, when the fetch learned it. The signal path shows it.
+    fn encoding(&self, _loaded: &Self::Loaded) -> Option<Encoding> {
+        None
+    }
+
     /// Whether a failed load means the listener has to sign in. The engine reports that as
     /// gated rather than as the track being unavailable.
     fn gated(&self, _error: &anyhow::Error) -> bool {
@@ -109,6 +117,18 @@ pub trait Fetch: Send + Sync + 'static {
     /// Opens a decoder placed at `at`. `None` means the track cannot be played, which the
     /// engine reports as unavailable.
     fn open(&self, id: &str, loaded: &Self::Loaded, at: Duration) -> Option<Self::Source>;
+
+    /// Opens a decoder as near `at` as the download allows and says where it really starts,
+    /// which is where the engine reports the position from. The default is [`open`](Self::open)
+    /// exactly at `at`. A provider that may have to start earlier than asked overrides this.
+    fn open_near(
+        &self,
+        id: &str,
+        loaded: &Self::Loaded,
+        at: Duration,
+    ) -> Option<(Self::Source, Duration)> {
+        self.open(id, loaded, at).map(|source| (source, at))
+    }
 
     /// Whether a seek opens a second decoder at the target rather than moving the running one.
     ///
@@ -305,12 +325,12 @@ async fn engine_loop<F: Fetch>(
 ) {
     let (cue, mut written) = Cue::new();
     let (changed, mut gone) = unbounded_channel();
-    // The user's gain, the shared equalizer and the spectrum tap: what every engine hands the
-    // output. A track's own loudness gain is applied as it is decoded, in `Playing`.
     let chain = Chain {
         volume: Volume::new(config.gain),
         equalizer: config.equalizer.clone(),
         spectrum,
+        meter: config.meter.clone(),
+        analyzer: config.analyzer.clone(),
     };
     let (jobs, job_rx) = channel::<Job<F>>();
     let (joins, mut joined) = unbounded_channel::<Joined>();
@@ -695,23 +715,37 @@ fn spawn<F: Fetch>(
 
 /// The track the audio thread is decoding, and where its samples land in real time.
 struct Playing<F: Fetch> {
+    /// The track's id, as the provider knows it and the engine's events report it.
     id: String,
+
     /// Kept so a seek can open a second decoder over the same download.
     loaded: F::Loaded,
+
+    /// The decoder. `Paced` resamples what it decodes to the device's rate.
     source: F::Source,
+
+    /// The number of channels the source has.
     channels: u16,
+
+    /// The source's rate, which its packets are written at.
     rate: u32,
+
+    /// Where in the track decoding started: the open, or the last seek.
     base: Duration,
+
     /// Samples queued before this track's first one. On a gapless join the one before it is
-    /// still being heard, so its own position only starts once the count passes this.
+    /// still being heard, so its own position only starts once the count passes this. The end
+    /// of that one may still be in the resampler then, so this counts what it will add too.
     offset: u64,
+
     /// The track's normalisation gain, applied to every sample as it is decoded. Each track
     /// carries its own, so a gapless join changes it on the first sample of the next one.
     gain: f32,
 }
 
 impl<F: Fetch> Playing<F> {
-    /// Opens a decoder for one track, or reports that it cannot be played.
+    /// Opens a decoder for one track and reports what it decodes to as a `Signal` event, or
+    /// returns `None` when it cannot be played.
     fn open(
         fetch: &F,
         id: &str,
@@ -719,26 +753,45 @@ impl<F: Fetch> Playing<F> {
         at: Duration,
         offset: u64,
         normalise: bool,
+        events: &UnboundedSender<PlaybackEvent>,
     ) -> Option<Self> {
-        let source = fetch.open(id, &loaded, at)?;
+        let (source, base) = fetch.open_near(id, &loaded, at)?;
         let gain = normalisation(normalise, fetch.loudness(&loaded));
+        let (channels, rate) = (source.channels().get(), source.sample_rate().get());
+        let track = TrackSignal {
+            encoding: fetch.encoding(&loaded),
+            rate,
+            channels,
+            normalisation: match normalise {
+                true => Normalisation::Gain(20. * gain.log10()),
+                false => Normalisation::Off,
+            },
+        };
+        events
+            .send(PlaybackEvent::Signal {
+                id: id.to_owned(),
+                track,
+            })
+            .ok();
         Some(Self {
             id: id.to_owned(),
-            channels: source.channels().get(),
-            rate: source.sample_rate().get(),
+            channels,
+            rate,
             loaded,
             source,
-            base: at,
+            base,
             offset,
             gain,
         })
     }
 
-    fn mark(&self) -> Mark {
+    /// Where this track's sound is read from, given `rate`, the device's, which is what the queue
+    /// counts samples at.
+    fn mark(&self, rate: u32) -> Mark {
         Mark {
             id: self.id.clone(),
             channels: self.channels,
-            rate: self.rate,
+            rate,
             base: self.base,
             offset: self.offset,
         }
@@ -822,15 +875,10 @@ fn audio_loop<F: Fetch>(
     let mut reported_at = Instant::now();
 
     loop {
-        // a track at another rate waits for the last one's tail to play out before the
-        // output reopens under it
-        let refitting = current
-            .as_ref()
-            .is_some_and(|held| !paced.fits(held.rate) && !paced.drained());
         // anything but decoding means waiting for work rather than spinning: no
         // track, a paused one, or a full queue. A restored track sits paused
         // with an empty queue, which the old condition mistook for decoding.
-        let idle = current.is_none() || !playing || paced.full() || refitting;
+        let idle = current.is_none() || !playing || paced.full();
         let job = match idle {
             false => match jobs.try_recv() {
                 Ok(job) => Some(job),
@@ -855,7 +903,7 @@ fn audio_loop<F: Fetch>(
                 })
                 .ok();
             events.send(PlaybackEvent::Ended { id: Some(ended) }).ok();
-            heard = current.as_ref().map(Playing::mark);
+            heard = current.as_ref().map(|held| held.mark(paced.rate()));
             match next {
                 Some((id, duration)) => {
                     announce_length(&events, &id, duration);
@@ -896,13 +944,8 @@ fn audio_loop<F: Fetch>(
                     queued = None;
                     joining = None;
                     written = 0;
-                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise);
-                    if let Some(held) = &current
-                        && paced.fit(held.rate).is_err()
-                    {
-                        return;
-                    }
-                    heard = current.as_ref().map(Playing::mark);
+                    current = Playing::open(fetch.as_ref(), &id, loaded, at, 0, normalise, &events);
+                    heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     playing = start && current.is_some();
                     match playing {
                         true if paced.play().is_err() => return,
@@ -970,6 +1013,7 @@ fn audio_loop<F: Fetch>(
                         position,
                         0,
                         normalise,
+                        &events,
                     );
                     if current.is_none() {
                         log::warn!("playback: cannot seek {}", join.ended);
@@ -981,7 +1025,7 @@ fn audio_loop<F: Fetch>(
                         continue;
                     }
                     written = 0;
-                    heard = current.as_ref().map(Playing::mark);
+                    heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     cue.arm();
                 }
                 Job::Seek(position) => {
@@ -992,8 +1036,15 @@ fn audio_loop<F: Fetch>(
                         // has moved.
                         true => {
                             let (id, loaded) = (held.id.clone(), held.loaded.clone());
-                            match Playing::open(fetch.as_ref(), &id, loaded, position, 0, normalise)
-                            {
+                            match Playing::open(
+                                fetch.as_ref(),
+                                &id,
+                                loaded,
+                                position,
+                                0,
+                                normalise,
+                                &events,
+                            ) {
                                 Some(fresh) => current = Some(fresh),
                                 None => {
                                     log::warn!("playback: cannot seek {id}");
@@ -1011,7 +1062,7 @@ fn audio_loop<F: Fetch>(
                     }
                     joining = None;
                     written = 0;
-                    heard = current.as_ref().map(Playing::mark);
+                    heard = current.as_ref().map(|held| held.mark(paced.rate()));
                     cue.arm();
                 }
                 Job::Gain(level) => paced.set_volume(level),
@@ -1022,9 +1073,6 @@ fn audio_loop<F: Fetch>(
         let Some(held) = &mut current else { continue };
         if idle {
             continue;
-        }
-        if paced.fit(held.rate).is_err() {
-            return;
         }
 
         let buffer = paced.buffer(held.samples(CHUNK));
@@ -1043,29 +1091,43 @@ fn audio_loop<F: Fetch>(
                     &id,
                     loaded,
                     Duration::ZERO,
-                    written,
+                    0,
                     normalise,
+                    &events,
                 );
                 current.as_ref().map(|_| (id, duration))
             });
+            // A track that follows is written straight in behind this one, so the resampler
+            // carries on across the join, as one signal at the same format or a new span at
+            // another, and says where it lands. With nothing to follow, what it holds is let out
+            // so the end is heard.
+            let at = match &mut current {
+                Some(following) => {
+                    following.offset = written + paced.held_back() as u64;
+                    following.offset
+                }
+                None => {
+                    written += paced.flush() as u64;
+                    written
+                }
+            };
             // both events wait for the queue to reach here, so the join lands on the sample
             joining = Some(Join {
                 ended,
                 loaded,
                 next,
-                at: written,
+                at,
             });
             continue;
         };
 
-        let count = samples.len() as u64;
         let Some(chunk) = packet(samples, held.channels, held.rate) else {
             continue;
         };
-        if paced.write(chunk).is_err() {
-            return;
+        match paced.write(chunk) {
+            Ok(queued) => written += queued as u64,
+            Err(_) => return,
         }
-        written += count;
     }
 }
 

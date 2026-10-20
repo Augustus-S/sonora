@@ -19,12 +19,13 @@ use state::{
     Shelf, SideTab, Sonora, Steered, Whence,
 };
 use ui::{
-    ActiveTheme as _, Avatar, Button, Card, DraggedPin, Edge, Initials, Motion, Motioned as _, Pin,
-    Pinnable as _, Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy, drop_gap, drop_marker,
-    ease_out_cubic, ease_out_expo, eyebrow, faint, mix, snapped, vacant,
+    ActiveTheme as _, Avatar, Button, Card, DraggedPin, Edge, Initials, Motion, Motioned as _,
+    PREFETCH_REACH, Pin, Pinnable as _, Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy,
+    drop_gap, drop_marker, ease_out_cubic, ease_out_expo, eyebrow, faint, mix, prefetch, snapped,
+    vacant,
 };
 
-use crate::chrome::{Chrome, PlayerBar, section_label};
+use crate::chrome::{Chrome, section_label};
 use crate::shared::effects;
 use crate::shared::menus::ItemMenu;
 use crate::shared::pins::Pinned as _;
@@ -225,6 +226,20 @@ struct Sung {
     karaoke_tint: gpui::Hsla,
     lift: f32,
     from: gpui::Point<f32>,
+}
+
+/// How one verse is drawn outside the sheet, for a still picture of the lyrics such as the
+/// settings preview. The sizes are the sheet's own, before an active verse grows.
+#[derive(Clone, Copy)]
+pub(crate) struct VerseLook {
+    pub(crate) active: bool,
+    /// The verse's text size and its romanized lane's.
+    pub(crate) size: Pixels,
+    pub(crate) lane: Pixels,
+    pub(crate) karaoke: bool,
+    pub(crate) scripts: Option<RomanizationScripts>,
+    /// How far out of focus the verse sits, from 0 for sharp to 1 at the sheet's edge.
+    pub(crate) haze: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -1091,13 +1106,23 @@ impl Aside {
         Some(self.raised(perch, cx))
     }
 
-    /// Lifts a floating control clear of the transport a stripped aside leaves underneath it.
+    /// Keeps floating controls above the workspace player bar and the strip over it, or above
+    /// the fullscreen transport.
     fn raised(&self, perch: Div, cx: &App) -> Div {
-        // the strip over the player bar sits on the aside's bottom edge, so lift clear of it too
-        let perch = perch.mb(PlayerBar::strip(self.playback.read(cx), cx));
         match self.titled {
-            true => perch,
+            true => match self.bottom(cx) > Pixels::ZERO {
+                true => perch.bottom(self.bottom(cx) + cx.theme().metrics.pad * 1.5),
+                false => perch,
+            },
             false => perch.bottom_16(),
+        }
+    }
+
+    /// Only workspace asides sit behind the player bar; fullscreen keeps its own clearance.
+    fn bottom(&self, cx: &App) -> Pixels {
+        match self.titled {
+            true => Chrome::bottom(cx),
+            false => Pixels::ZERO,
         }
     }
 
@@ -1154,7 +1179,7 @@ impl Aside {
                     * lyrics_frame_scale(window.viewport_size())
             }
         };
-        let lane_size = theme.text(Text::Body) * scale;
+        let (verse, lane_size) = verse_sizes(self.titled, scale, &theme);
         let sung = Sung {
             karaoke: karaoke_effects,
             lane: lane_size,
@@ -1203,10 +1228,6 @@ impl Aside {
             self.pin_verse(focus, window, cx);
         }
 
-        let verse = match self.titled {
-            true => theme.text(Text::Large),
-            false => theme.text(Text::Title) + FULLSCREEN_VERSE_GROWTH,
-        } * scale;
         let reach = verse * REACH;
         let wrap_size = active_verse_size(verse);
         let scroll = self.verse_bar.read(cx).scroll().clone();
@@ -1677,6 +1698,7 @@ impl Aside {
         };
 
         let sheet = Scroller::new("lyrics", &self.verse_bar)
+            .bottom_inset(self.bottom(cx))
             .when(lines.is_some(), Scroller::manual_presentation)
             .when(lines.is_some(), |this| {
                 this.capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, cx| {
@@ -1888,7 +1910,7 @@ impl Aside {
         let name = match origin.whence {
             Whence::Saved => match Sonora::global(cx).library.read(cx).shape(Shelf::Streaming) {
                 Shape::Saved => t!("library-liked-songs"),
-                Shape::Catalog => t!("nav-songs"),
+                Shape::Catalog(_) => t!("nav-songs"),
             },
             Whence::Local => t!("nav-local"),
             Whence::Radio => t!("queue-from-radio", name = origin.name.as_deref()?),
@@ -1905,13 +1927,25 @@ impl Aside {
         let upcoming = sections.upcoming;
         let manual = sections.manual;
         let audible = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
+        let tail = (self.bottom(cx) / cx.theme().metrics.list_row).ceil() as usize;
 
         uniform_list(
             "queue-rows",
-            sections.len() + TAIL_ROWS,
-            cx.processor(move |_, range: Range<usize>, _window, cx| {
-                let (revision, slots) = {
+            sections.len() + TAIL_ROWS + tail,
+            cx.processor(move |_, range: Range<usize>, window, cx| {
+                let reach = (range.len() as f32 * PREFETCH_REACH).ceil() as usize;
+                let near = (range.start.saturating_sub(reach)..range.start)
+                    .chain(range.end..(range.end + reach).min(sections.len()));
+                let (revision, slots, ahead) = {
                     let queue = queue.read(cx);
+                    let ahead = near
+                        .filter_map(|index| match sections.slot(index) {
+                            Slot::Track(position) => {
+                                track(queue, position).map(|found| (index, position, found))
+                            }
+                            Slot::Header(_) => None,
+                        })
+                        .collect::<Vec<_>>();
                     let slots = range
                         .clone()
                         .map(|index| {
@@ -1923,10 +1957,10 @@ impl Aside {
                             (index, slot, found)
                         })
                         .collect::<Vec<_>>();
-                    (queue.revision(), slots)
+                    (queue.revision(), slots, ahead)
                 };
 
-                slots
+                let rows = slots
                     .into_iter()
                     .map(|(index, slot, found)| match (slot, found) {
                         (None, _) => div().into_any_element(),
@@ -1973,7 +2007,17 @@ impl Aside {
                         }
                         (Some(Slot::Track(_)), None) => div().into_any_element(),
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                for (index, position, found) in ahead {
+                    let look = RowLook {
+                        playing: false,
+                        drop_line: None,
+                        queued: matches!(position, QueuePosition::Upcoming(at) if at < manual),
+                    };
+                    let row = Self::row(found, index, position, revision, look, cx);
+                    prefetch(row.into_any_element(), window, cx);
+                }
+                rows
             }),
         )
     }
@@ -2048,6 +2092,7 @@ impl Render for Aside {
                         |this| {
                             this.child(
                                 Scroller::listing("queue-rows", &self.scrollbar)
+                                    .bottom_inset(self.bottom(cx))
                                     .when(effects(), |this| {
                                         this.fade_edges(px(FADE * 0.5), px(FADE))
                                     })
@@ -2117,6 +2162,100 @@ fn fixed_lyrics_lane(rows: &[SharedString], voice: Voice, sung: Sung) -> Div {
                 sung,
             )
         }))
+}
+
+/// One verse drawn the way the sheet draws it at rest, with its karaoke sweep at `position` and
+/// its romanized lane, but without the sheet's pointer handling, drift or growth animations.
+pub(crate) fn verse(
+    line: &music::LyricsLine,
+    look: VerseLook,
+    position: std::time::Duration,
+    theme: ui::Theme,
+) -> Div {
+    let karaoke = look.karaoke && effects();
+    let ended = line_has_passed(line, position);
+    let worded = karaoke && line.worded() && line.words.is_some();
+    let tint = match (look.active, ended) {
+        (true, _) if worded => theme.muted_foreground,
+        (true, _) => theme.foreground,
+        (false, true) => theme.muted_foreground.opacity(PAST),
+        (false, false) => theme.muted_foreground.opacity(AHEAD),
+    };
+    let sung = Sung {
+        karaoke,
+        lane: look.lane,
+        scripts: look.scripts,
+        theme,
+        karaoke_tint: mix(
+            theme.foreground,
+            tint,
+            primary_karaoke_fade(line, look.active, position),
+        ),
+        lift: 1.,
+        from: match line.voice.lead() {
+            true => gpui::point(0., 0.5),
+            false => gpui::point(1., 0.5),
+        },
+    };
+    let primary = match (
+        worded && primary_karaoke_visible(line, look.active, position),
+        line.words.as_deref(),
+    ) {
+        (true, Some(words)) => karaoke_lane(
+            &loose_plan(&line.text, words),
+            line.start,
+            words,
+            position,
+            look.size,
+            line.voice,
+            sung,
+        ),
+        _ => fixed_lyrics_lane(&[SharedString::from(line.text.clone())], line.voice, sung),
+    };
+    let active_size = active_verse_size(look.size);
+    let haze = match effects() {
+        true => look.haze,
+        false => 0.,
+    };
+
+    div()
+        .w_full()
+        .px_2()
+        .py_1()
+        .text_size(match look.active {
+            true => active_size,
+            false => look.size,
+        })
+        .line_height(active_size * ui::LEADING)
+        .text_color(tint)
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(!line.voice.lead(), |this| this.items_end().text_right())
+                .child(primary)
+                .when_some(
+                    selected_romanization(&line.romanized, look.scripts),
+                    |this, text| this.child(romanized_lyrics_lane(text, look.lane, &theme)),
+                ),
+        )
+        .when(haze > 0., |this| this.opacity(1. - VEIL * haze))
+        .map(|this| match look.size * BLUR * haze {
+            soft if soft > HAZE_LEAST => this.blur(soft),
+            _ => this,
+        })
+}
+
+/// The verse and lane sizes the sheet sets at `scale`, in the side panel or in Now playing,
+/// leaving out how much a large window grows Now playing's.
+pub(crate) fn verse_sizes(panel: bool, scale: f32, theme: &ui::Theme) -> (Pixels, Pixels) {
+    let verse = match panel {
+        true => theme.text(Text::Large),
+        false => theme.text(Text::Title) + FULLSCREEN_VERSE_GROWTH,
+    };
+    (verse * scale, theme.text(Text::Body) * scale)
 }
 
 // a lane with no measured plan of its own, split on the spot

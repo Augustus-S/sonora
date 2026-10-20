@@ -3,6 +3,8 @@
 mod actions;
 mod assets;
 mod dock;
+#[cfg(target_os = "macos")]
+mod gestures;
 mod http;
 mod logging;
 mod memory;
@@ -105,6 +107,7 @@ fn main() {
             Arc::new(music::youtube::YouTubeProvider::new()),
             Arc::new(music::subsonic::SubsonicProvider::new()),
             Arc::new(music::deezer::DeezerProvider::new()),
+            Arc::new(music::tidal::TidalProvider::new()),
         ];
         let local_provider: Arc<dyn music::MusicProvider> =
             Arc::new(music::local::LocalProvider::new(
@@ -116,6 +119,7 @@ fn main() {
             ));
         let lyrics: Vec<Arc<dyn LyricsProvider>> = vec![
             Arc::new(music::local::LocalLyrics),
+            Arc::new(music::subsonic::SubsonicLyrics::new()),
             Arc::new(music::spotify::SpotifyLyrics::from_env()),
             Arc::new(music::youtube::YouTubeLyrics::new()),
             Arc::new(music::binimum::Binimum::new()),
@@ -171,6 +175,8 @@ fn main() {
             cx.set_quit_mode(QuitMode::Explicit);
         }
         actions::register(lingers, cx);
+        #[cfg(target_os = "macos")]
+        gestures::install(cx);
         memory::watch(cx);
 
         open_window(cx);
@@ -304,10 +310,12 @@ fn open_window(cx: &mut App) {
         cover: _,
         devices: _,
         drm: _,
+        equalizer: _,
         library,
         history: _,
         lyrics: _,
         network: _,
+        outputs: _,
         pins: _,
         playback,
         potoken: _,
@@ -316,6 +324,7 @@ fn open_window(cx: &mut App) {
         scan: _,
         scrobbling: _,
         settings: _,
+        signal: _,
         updates: _,
         usage: _,
         wake: _,
@@ -510,6 +519,11 @@ fn hide_system_caption(handle: *mut std::ffi::c_void) {
 
 #[cfg(target_os = "windows")]
 const MAXIMIZE_SUBCLASS: usize = 1;
+
+/// Keeps a maximized window off the taskbar, which Windows covers once `hide_system_caption`
+/// drops `WS_SYSMENU`. The clamp works on the final rectangle and not in `WM_GETMINMAXINFO`,
+/// because Windows only carries that size over to a larger monitor when it is at least the
+/// size of the primary one.
 #[cfg(target_os = "windows")]
 fn clamp_maximize(handle: *mut std::ffi::c_void) {
     use windows_sys::Win32::UI::Shell::SetWindowSubclass;
@@ -517,6 +531,9 @@ fn clamp_maximize(handle: *mut std::ffi::c_void) {
     unsafe { SetWindowSubclass(handle, Some(work_area), MAXIMIZE_SUBCLASS, 0) };
 }
 
+/// Pulls each edge of a maximized window that covers its whole monitor back to that monitor's
+/// work area, keeping the frame overhang Windows adds past the other edges. Fullscreen strips
+/// `WS_CAPTION` but keeps `WS_MAXIMIZE`, so a window without a caption is left alone.
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn work_area(
     handle: *mut std::ffi::c_void,
@@ -526,24 +543,45 @@ unsafe extern "system" fn work_area(
     _subclass: usize,
     _data: usize,
 ) -> isize {
+    use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
     };
     use windows_sys::Win32::UI::Shell::DefSubclassProc;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MINMAXINFO, WM_GETMINMAXINFO};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, GetWindowLongPtrW, IsZoomed, SWP_NOMOVE, SWP_NOSIZE, WINDOWPOS,
+        WM_WINDOWPOSCHANGING, WS_CAPTION,
+    };
 
     unsafe {
-        if message == WM_GETMINMAXINFO {
-            let monitor = MonitorFromWindow(handle, MONITOR_DEFAULTTONEAREST);
+        if message == WM_WINDOWPOSCHANGING
+            && IsZoomed(handle) != 0
+            && GetWindowLongPtrW(handle, GWL_STYLE) & WS_CAPTION as isize == WS_CAPTION as isize
+        {
+            let position = &mut *(lparam as *mut WINDOWPOS);
+            let rect = RECT {
+                left: position.x,
+                top: position.y,
+                right: position.x + position.cx,
+                bottom: position.y + position.cy,
+            };
+            let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
             let mut monitor_info: MONITORINFO = std::mem::zeroed();
             monitor_info.cbSize = size_of::<MONITORINFO>() as u32;
-            if GetMonitorInfoW(monitor, &mut monitor_info) != 0 {
+            if position.flags & (SWP_NOMOVE | SWP_NOSIZE) == 0
+                && GetMonitorInfoW(monitor, &mut monitor_info) != 0
+            {
                 let (screen, work) = (monitor_info.rcMonitor, monitor_info.rcWork);
-                let info = &mut *(lparam as *mut MINMAXINFO);
-                info.ptMaxPosition.x += work.left - screen.left;
-                info.ptMaxPosition.y += work.top - screen.top;
-                info.ptMaxSize.x -= (screen.right - screen.left) - (work.right - work.left);
-                info.ptMaxSize.y -= (screen.bottom - screen.top) - (work.bottom - work.top);
+                let covers = rect.left <= screen.left
+                    && rect.top <= screen.top
+                    && rect.right >= screen.right
+                    && rect.bottom >= screen.bottom;
+                if covers {
+                    position.x += work.left - screen.left;
+                    position.y += work.top - screen.top;
+                    position.cx -= (screen.right - screen.left) - (work.right - work.left);
+                    position.cy -= (screen.bottom - screen.top) - (work.bottom - work.top);
+                }
             }
         }
         DefSubclassProc(handle, message, wparam, lparam)

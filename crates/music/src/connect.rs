@@ -225,6 +225,8 @@ pub enum Event {
     Invite(Option<Invite>),
     /// Starting or joining a group session failed.
     JamFailed,
+    /// Leaving or ending the group session failed. The session as it stands follows as a `Jam`.
+    LeaveFailed,
 }
 
 /// The connection to a provider's device network. Every call is fire-and-forget: what comes

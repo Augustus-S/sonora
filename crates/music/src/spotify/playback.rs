@@ -7,17 +7,38 @@ use librespot_core::{Session, SpotifyUri};
 use librespot_playback::config::{Bitrate, PlayerConfig};
 use librespot_playback::mixer::NoOpVolume;
 use librespot_playback::player::{Player, PlayerEvent};
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::audio::{Chain, Volume};
+
 use crate::sink::Cue;
 use crate::spectrum::Spectrum;
 use crate::spotify::sink::OutputSink;
 use crate::{
-    PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory, Player as MusicPlayer,
+    Encoding, Normalisation, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
+    Player as MusicPlayer, Quality, TrackSignal,
 };
 
 const TRACK_PREFIX: &str = "spotify:track:";
+/// The levels Spotify serves, best first: Ogg Vorbis at 320, 160 and 96 kbps.
+pub(crate) const QUALITIES: &[Offer] = &[
+    Offer {
+        quality: Quality::High,
+        encoding: Encoding::Vorbis { kbps: 320 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Normal,
+        encoding: Encoding::Vorbis { kbps: 160 },
+        up_to: false,
+    },
+    Offer {
+        quality: Quality::Low,
+        encoding: Encoding::Vorbis { kbps: 96 },
+        up_to: false,
+    },
+];
 /// Position reports that can still come from before a seek or load: one already in the channel
 /// and one for a packet decoded before the player read the command.
 const STALE_POSITIONS: u8 = 2;
@@ -30,6 +51,8 @@ pub struct Events {
     output: UnboundedReceiver<()>,
     cue: Cue,
     written: UnboundedReceiver<()>,
+    /// The `Signal` events `Engine::learn` sends as it loads a track.
+    signals: UnboundedReceiver<PlaybackEvent>,
     /// The `Playing` or `Seeked` waiting for the sink; a newer one replaces an older one.
     held: Option<PlaybackEvent>,
     /// Position reports seen while the cue refuses writes. A seek or load that took keeps the
@@ -82,6 +105,7 @@ impl PlaybackEvents for Events {
                     changed?;
                     return Some(PlaybackEvent::OutputChanged);
                 }
+                Some(event) = self.signals.recv() => return Some(event),
             }
         }
     }
@@ -110,7 +134,12 @@ pub struct Engine {
     volume: Volume,
     cue: Cue,
     spectrum: Spectrum,
+    /// Where `learn` reports each track's sound, read by `Events`.
+    signals: UnboundedSender<PlaybackEvent>,
     gapless: bool,
+    normalisation: bool,
+    /// The encoding of the offer the quality asks librespot for.
+    encoding: Option<Encoding>,
 }
 
 impl Engine {
@@ -118,9 +147,10 @@ impl Engine {
         let volume = Volume::new(config.gain);
         let (cue, written) = Cue::new();
         let spectrum = Spectrum::new();
+        let (signals, signal_rx) = unbounded_channel();
 
         let player_config = PlayerConfig {
-            bitrate: Bitrate::Bitrate320,
+            bitrate: bitrate(config.quality),
             normalisation: config.normalisation,
             gapless: config.gapless,
             position_update_interval: Some(config.position_interval),
@@ -132,6 +162,8 @@ impl Engine {
             volume: volume.clone(),
             equalizer: config.equalizer.clone(),
             spectrum: spectrum.clone(),
+            meter: config.meter.clone(),
+            analyzer: config.analyzer.clone(),
         };
         let (output_tx, output_rx) = unbounded_channel();
         let player = Player::new(player_config, session, Box::new(NoOpVolume), move || {
@@ -143,6 +175,7 @@ impl Engine {
             output: output_rx,
             cue: cue.clone(),
             written,
+            signals: signal_rx,
             held: None,
             stale: 0,
         };
@@ -151,7 +184,10 @@ impl Engine {
             volume,
             cue,
             spectrum,
+            signals,
             gapless: config.gapless,
+            normalisation: config.normalisation,
+            encoding: offered(config.quality),
         };
         (engine, events)
     }
@@ -162,6 +198,7 @@ impl Engine {
         if !seamless || !self.gapless {
             self.cue.clear();
         }
+        self.learn(track_id);
         self.player.load(uri, true, at.as_millis() as u32);
         Ok(())
     }
@@ -170,6 +207,7 @@ impl Engine {
         let uri = track_uri(track_id)?;
 
         self.cue.clear();
+        self.learn(track_id);
         self.player.load(uri, false, at.as_millis() as u32);
         Ok(())
     }
@@ -198,6 +236,22 @@ impl Engine {
 
     fn spectrum(&self) -> Spectrum {
         self.spectrum.clone()
+    }
+
+    /// Reports what every Spotify track is: Ogg Vorbis at the offer asked for, decoded by
+    /// librespot to 44.1 kHz stereo and normalised there.
+    fn learn(&self, track_id: &str) {
+        let track = TrackSignal {
+            encoding: self.encoding,
+            rate: SAMPLE_RATE,
+            channels: NUM_CHANNELS.into(),
+            normalisation: match self.normalisation {
+                true => Normalisation::Limited,
+                false => Normalisation::Off,
+            },
+        };
+        let id = track_id.to_owned();
+        self.signals.send(PlaybackEvent::Signal { id, track }).ok();
     }
 }
 
@@ -308,4 +362,23 @@ fn translate(event: PlayerEvent) -> Option<PlaybackEvent> {
         }
         _ => None,
     }
+}
+
+/// The bitrate librespot asks for at a level. It steps down by itself when the account is not
+/// allowed that one.
+fn bitrate(quality: Quality) -> Bitrate {
+    match quality.within(QUALITIES) {
+        Quality::HiRes | Quality::Lossless | Quality::High => Bitrate::Bitrate320,
+        Quality::Normal => Bitrate::Bitrate160,
+        Quality::Low => Bitrate::Bitrate96,
+    }
+}
+
+/// The encoding of the offer librespot is asked for at a level.
+fn offered(quality: Quality) -> Option<Encoding> {
+    let level = quality.within(QUALITIES);
+    QUALITIES
+        .iter()
+        .find(|offer| offer.quality == level)
+        .map(|offer| offer.encoding)
 }

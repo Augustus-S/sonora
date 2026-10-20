@@ -12,6 +12,7 @@ widevine = ["widevine/cdm"]
 
 [dependencies]
 anyhow.workspace = true
+ardftsrc.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 blowfish.workspace = true
@@ -43,6 +44,7 @@ roxmltree.workspace = true
 rodio = { workspace = true, features = ["symphonia-aac", "symphonia-aiff", "symphonia-alac", "symphonia-isomp4", "symphonia-libopus", "symphonia-mkv", "flac", "mp3", "vorbis", "wav"] }
 rtrb.workspace = true
 rusqlite.workspace = true
+rusty_aac.workspace = true
 rustfft.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -57,6 +59,11 @@ ytmusic.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa.workspace = true
+# TODO: move to cpal's native `pipewire` backend, and drop the trip through pipewire-pulse, once a
+# cpal release sets `node.rate` (upstream commit ec35008, unreleased in 0.18) and CI builds on a
+# distro with libpipewire 0.3.53 or newer.
+cpal = { workspace = true, features = ["pulseaudio"] }
+pulseaudio.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true
