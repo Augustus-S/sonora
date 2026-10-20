@@ -678,7 +678,7 @@ impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme: "dark".to_owned(),
-            adaptive_theme: true,
+            adaptive_theme: false,
             ambient: true,
             ambient_motion: true,
             visualizer: true,

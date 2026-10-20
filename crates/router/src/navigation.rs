@@ -85,12 +85,12 @@ impl Navigation {
         }
     }
 
-    /// Opens settings on the destination last shown there, or on Providers the first time.
+    /// Opens settings on the destination last shown there, or on General the first time.
     pub fn open_settings(&mut self, cx: &mut Context<Self>) {
         let destination = self
             .last_settings
             .clone()
-            .unwrap_or(Destination::Settings(SettingsPage::Providers));
+            .unwrap_or(Destination::Settings(SettingsPage::General));
         self.go(destination, cx);
     }
 

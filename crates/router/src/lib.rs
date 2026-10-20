@@ -416,7 +416,7 @@ pub fn up(parent: Destination, cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.up(parent, cx));
 }
 
-/// Opens settings on the page they last showed, or on Providers the first time.
+/// Opens settings on the page they last showed, or on General the first time.
 pub fn open_settings(cx: &mut App) {
     trail(cx).update(cx, |navigation, cx| navigation.open_settings(cx));
 }
