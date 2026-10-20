@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, Div, DragMoveEvent, ElementId, Empty, Hsla, MouseButton, MouseDownEvent,
-    MouseUpEvent, PathBuilder, Pixels, Point, Render, ScrollDelta, ShapedLine, SharedString,
+    MouseUpEvent, Path, PathBuilder, Pixels, Point, Render, ScrollDelta, ShapedLine, SharedString,
     Stateful, StyleRefinement, TextRun, Window, canvas, div, linear_color_stop, linear_gradient,
     point, px, size,
 };
@@ -39,6 +39,12 @@ const LINES_PER_NOTCH: f32 = 1.;
 const LINES_PER_NOTCH: f32 = 3.;
 /// How far a held node must travel before it moves, so a click that selects it edits nothing.
 const DEADZONE: f32 = 3.;
+/// The curve coordinates that mark a path's triangle as wholly inside its shape.
+const INSIDE: (Point<f32>, Point<f32>, Point<f32>) = (
+    Point { x: 0., y: 1. },
+    Point { x: 0., y: 1. },
+    Point { x: 0., y: 1. },
+);
 const FREQUENCIES: [f32; 10] = [
     20., 50., 100., 200., 500., 1000., 2000., 5000., 10000., 20000.,
 ];
@@ -240,6 +246,7 @@ pub struct ResponseGraph {
     reference: Option<(f32, SharedString)>,
     bypassed: bool,
     reshape: bool,
+    grid: bool,
     on_edit: Option<Edit>,
 }
 
@@ -263,6 +270,7 @@ impl ResponseGraph {
             reference: None,
             bypassed: false,
             reshape: true,
+            grid: true,
             on_edit: None,
         }
     }
@@ -314,6 +322,12 @@ impl ResponseGraph {
         self
     }
 
+    /// Leaves out the grid and its labels, for a layer drawn under a graph that has them.
+    pub fn without_grid(mut self) -> Self {
+        self.grid = false;
+        self
+    }
+
     /// Reports all edit intents, including a final move on release outside the plot.
     pub fn on_edit(
         mut self,
@@ -339,6 +353,7 @@ struct Plot {
     reference: Option<(f32, SharedString)>,
     bypassed: bool,
     reshape: bool,
+    grid: bool,
     radius: Pixels,
     on_edit: Option<Edit>,
 }
@@ -454,6 +469,7 @@ impl RenderOnce for ResponseGraph {
             reference,
             bypassed,
             reshape,
+            grid,
             on_edit,
         } = self;
         let theme = *cx.theme();
@@ -466,6 +482,7 @@ impl RenderOnce for ResponseGraph {
             reference,
             bypassed,
             reshape,
+            grid,
             radius: theme.metrics.pad,
             on_edit,
         });
@@ -598,7 +615,9 @@ fn paint_plot(
     if let Some(spectrum) = spectrum {
         paint_spectrum(bounds, axes, spectrum, theme, window);
     }
-    paint_grid(bounds, axes, theme, window, cx);
+    if plot.grid {
+        paint_grid(bounds, axes, theme, window, cx);
+    }
     let curve: Vec<_> = response
         .iter()
         .filter(|value| value.frequency_hz.is_finite() && value.gain_db.is_finite())
@@ -698,12 +717,13 @@ fn paint_grid(
             continue;
         }
         last_label = x;
-        line(
-            &[point(x, bounds.top()), point(x, bounds.bottom())],
-            HAIRLINE,
+        window.paint_quad(gpui::fill(
+            Bounds::new(
+                point(x - HAIRLINE / 2., bounds.top()),
+                size(HAIRLINE, bounds.size.height),
+            ),
             theme.border.opacity(GRID_FAINT),
-            window,
-        );
+        ));
         let label = match hz >= 1000. {
             true => t!("response-graph-khz", value = hz / 1000.),
             false => t!("response-graph-hz", value = hz),
@@ -728,12 +748,13 @@ fn paint_grid(
             true => theme.muted_foreground.opacity(GRID_ZERO),
             false => theme.border.opacity(GRID_LEVEL),
         };
-        line(
-            &[point(bounds.left(), y), point(bounds.right(), y)],
-            HAIRLINE,
+        window.paint_quad(gpui::fill(
+            Bounds::new(
+                point(bounds.left(), y - HAIRLINE / 2.),
+                size(bounds.size.width, HAIRLINE),
+            ),
             color,
-            window,
-        );
+        ));
         // the floor's label would sit on the first frequency's in the corner
         if tick == start {
             continue;
@@ -766,9 +787,6 @@ fn gain_step(span: f32) -> f32 {
 /// Fills between the zero line at `zero` and the response `curve`, the boosts and the cuts as
 /// two shapes that each fade from `fill` at the curve's furthest reach to clear at the line.
 fn paint_area(curve: &[Point<Pixels>], zero: Pixels, color: Hsla, fill: f32, window: &mut Window) {
-    let (Some(first), Some(last)) = (curve.first(), curve.last()) else {
-        return;
-    };
     for boost in [true, false] {
         let side = |y: Pixels| match boost {
             true => y.min(zero),
@@ -777,18 +795,15 @@ fn paint_area(curve: &[Point<Pixels>], zero: Pixels, color: Hsla, fill: f32, win
         if curve.iter().all(|sample| side(sample.y) == zero) {
             continue;
         }
-        let mut area = PathBuilder::fill();
-        area.move_to(point(first.x, zero));
-        for sample in curve {
-            area.line_to(point(sample.x, side(sample.y)));
-        }
-        area.line_to(point(last.x, zero));
-        area.close();
+        let sides: Vec<_> = curve
+            .iter()
+            .map(|sample| point(sample.x, side(sample.y)))
+            .collect();
         let angle = match boost {
             true => 180.,
             false => 0.,
         };
-        if let Ok(path) = area.build() {
+        if let Some(path) = area_under(&sides, zero) {
             window.paint_path(
                 path,
                 linear_gradient(
@@ -882,30 +897,18 @@ fn paint_spectrum(
         .filter(|value| value.frequency_hz.is_finite() && value.gain_db.is_finite())
         .map(|value| scale.project(*value, bounds))
         .collect();
-    if let (Some(first), Some(last)) = (points.first(), points.last()) {
-        let mut area = PathBuilder::fill();
-        area.move_to(point(first.x, bounds.bottom()));
-        for sample in &points {
-            area.line_to(*sample);
-        }
-        area.line_to(point(last.x, bounds.bottom()));
-        area.close();
-        if let Ok(path) = area.build() {
-            window.paint_path(
-                path,
-                linear_gradient(
-                    180.,
-                    linear_color_stop(theme.muted_foreground.opacity(0.12), 0.),
-                    linear_color_stop(theme.muted_foreground.opacity(0.03), 1.),
-                ),
-            );
-        }
-        line(
-            &points,
-            HAIRLINE,
-            theme.muted_foreground.opacity(0.2),
-            window,
+    if let Some(path) = area_under(&points, bounds.bottom()) {
+        window.paint_path(
+            path,
+            linear_gradient(
+                180.,
+                linear_color_stop(theme.muted_foreground.opacity(0.12), 0.),
+                linear_color_stop(theme.muted_foreground.opacity(0.03), 1.),
+            ),
         );
+    }
+    if let Some(path) = band(&points, HAIRLINE) {
+        window.paint_path(path, theme.muted_foreground.opacity(0.2));
     }
 }
 
@@ -1060,4 +1063,38 @@ fn shape(label: SharedString, color: Hsla, window: &mut Window, cx: &App) -> Sha
     };
     let size = cx.theme().text(Text::Tiny);
     window.text_system().shape_line(label, size, &[run], None)
+}
+
+/// The area between `points`, which run left to right, and the level `floor` below them, as two
+/// triangles a span. That is all such a shape needs, so it is built directly rather than
+/// tessellated, which the spectrum would pay for every frame.
+fn area_under(points: &[Point<Pixels>], floor: Pixels) -> Option<Path<Pixels>> {
+    let first = points.first()?;
+    let mut path = Path::new(point(first.x, floor));
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        path.push_triangle((point(a.x, floor), a, b), INSIDE);
+        path.push_triangle((point(a.x, floor), b, point(b.x, floor)), INSIDE);
+    }
+    Some(path)
+}
+
+/// The polyline through `points` as a band `width` wide, two triangles a segment with no joins,
+/// which a hairline has no use for. It is built directly for the same reason as `area_under`.
+fn band(points: &[Point<Pixels>], width: Pixels) -> Option<Path<Pixels>> {
+    let first = points.first()?;
+    let mut path = Path::new(*first);
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (dx, dy) = ((b.x - a.x) / px(1.), (b.y - a.y) / px(1.));
+        let length = dx.hypot(dy);
+        if length == 0. {
+            continue;
+        }
+        let half = width / 2. / length;
+        let normal = point(half * -dy, half * dx);
+        path.push_triangle((a + normal, a - normal, b + normal), INSIDE);
+        path.push_triangle((b + normal, a - normal, b - normal), INSIDE);
+    }
+    Some(path)
 }
