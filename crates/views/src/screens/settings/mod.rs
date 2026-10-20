@@ -1029,15 +1029,19 @@ impl SettingsView {
             Some(_) => vec![self.page],
             None => self.page.tab().sections().to_vec(),
         };
+        // a section's title stands as close over its groups as the page's own title does
+        let inset = cx.theme().metrics.inset;
         let pages = pages
             .into_iter()
             .enumerate()
             .map(|(index, page)| {
                 let title = (index > 0).then(|| {
                     let title = section_title(page, cx).into_any_element();
-                    div()
-                        .mt(GROUPS)
-                        .child(self.revealing(Reveal::Section(page), title, cx))
+                    div().mt(GROUPS).mb(inset).child(self.revealing(
+                        Reveal::Section(page),
+                        title,
+                        cx,
+                    ))
                 });
                 let groups = self
                     .groups(page, cx)
@@ -1058,15 +1062,16 @@ impl SettingsView {
                     })
                     .collect::<Vec<_>>();
 
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(GROUPS)
-                    .children(title)
-                    .children(self.header(page, cx))
-                    .children(self.preview(page, cx))
-                    .children(groups)
-                    .children(self.footer(page, cx))
+                div().flex().flex_col().children(title).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(GROUPS)
+                        .children(self.header(page, cx))
+                        .children(self.preview(page, cx))
+                        .children(groups)
+                        .children(self.footer(page, cx)),
+                )
             })
             .collect::<Vec<_>>();
 
