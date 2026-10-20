@@ -40,8 +40,8 @@ const BANNER_FACE: f32 = 24.;
 /// How much of the popover colour a see-through bar and the strip over it keep, and how far they
 /// blur what is under them. Both are thicker than a menu's, since the bar sits over the page for
 /// good and its text has to read over whatever scrolls by.
-const BAR_FILL: f32 = 0.9;
-const BAR_BLUR: Pixels = px(24.);
+const BAR_FILL: f32 = 0.86;
+const BAR_BLUR: Pixels = px(18.);
 const BANNER_FACES: usize = 4;
 /// The space round the faces inside their pill, the same on every side so the pill's round ends
 /// stay concentric with the faces.
