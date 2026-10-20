@@ -432,6 +432,15 @@ impl PlayerBar {
         }
     }
 
+    /// How much of the content's bottom edge the strip above the bar covers right now, which
+    /// is nothing while no other device is being shown.
+    pub(crate) fn strip(playback: &Playback, cx: &gpui::App) -> Pixels {
+        match playback.steered(cx).is_some() {
+            true => px(ELSEWHERE),
+            false => Pixels::ZERO,
+        }
+    }
+
     /// The height the workspace reserves, shared by the overlay's bottom scroll clearance.
     pub(crate) fn height(window: &Window, cx: &gpui::App) -> Pixels {
         let theme = *cx.theme();
