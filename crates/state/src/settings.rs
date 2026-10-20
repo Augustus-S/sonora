@@ -566,7 +566,7 @@ impl Default for Values {
             equalizer_bass: 0.,
             equalizer_treble: 0.,
             sleep_timer: false,
-            spotify_connect: false,
+            spotify_connect: true,
             spotify_connect_name: ConnectName::Both,
             spotify_connect_custom_name: String::new(),
             discord_presence: false,
