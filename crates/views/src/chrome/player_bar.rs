@@ -233,7 +233,6 @@ impl PlayerBar {
             .flex_none()
             .items_center()
             .gap_1()
-            .child(self.devices.clone())
             .child(button(
                 "player-lyrics",
                 "icons/mic-vocal.svg",
@@ -580,6 +579,7 @@ impl Render for PlayerBar {
                         .child(div().flex_1().min_w_0().child(seek))
                         .children(sides)
                         .child(self.sound(Self::volume_width(window), cx))
+                        .child(self.devices.clone())
                         .child(self.fullscreen_button()),
                 ),
             (false, PlayerBarLayout::Centered) => base
@@ -618,6 +618,7 @@ impl Render for PlayerBar {
                         .items_center()
                         .justify_end()
                         .gap_2()
+                        .child(self.devices.clone())
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
                         .child(self.fullscreen_button()),
@@ -631,6 +632,7 @@ impl Render for PlayerBar {
                 )
                 .child(transport(&self.playback, &self.queue, false, cx))
                 .child(div().flex_1().min_w_0().child(seek))
+                .child(self.devices.clone())
                 .children(sides)
                 .child(self.sound(px(VOLUME_WIDTH), cx))
                 .child(self.fullscreen_button()),
@@ -658,6 +660,7 @@ impl Render for PlayerBar {
                         .gap_2()
                         // never narrower than its buttons, or they spill over the seek bar's clock
                         .flex_1()
+                        .child(self.devices.clone())
                         .children(sides)
                         .child(self.sound(px(VOLUME_WIDTH), cx))
                         .child(self.fullscreen_button()),
