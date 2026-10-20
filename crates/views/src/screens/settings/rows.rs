@@ -9,24 +9,47 @@ use super::SettingsView;
 /// What a segmented control does with the option picked in it.
 type Pick<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
 
-/// One row of a group: the label at the start and the control at the end. It stands one list
-/// row tall with no inset of its own, so its label lines up with the group's heading and rows
-/// stack with nothing between.
+/// One row of a group: the label and optional explanation at the start, the control at the end.
+/// It stands at least one list row tall, with no inset, so labels line up with group headings.
 #[derive(IntoElement)]
 pub(crate) struct Row {
     title: SharedString,
+    detail: Option<SharedString>,
     control: AnyElement,
+    disabled: bool,
 }
 
 impl Row {
     pub(crate) fn new(title: SharedString, control: AnyElement) -> Self {
-        Self { title, control }
+        Self {
+            title,
+            detail: None,
+            control,
+            disabled: false,
+        }
+    }
+
+    /// Adds a muted explanation below the label, wrapping within the space beside the control.
+    pub(crate) fn detail(mut self, detail: SharedString) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+
+    /// Mutes an unavailable setting's label. The caller also disables its control.
+    pub(crate) fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 }
 
 impl RenderOnce for Row {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { title, control } = self;
+        let Self {
+            title,
+            detail,
+            control,
+            disabled,
+        } = self;
         let theme = *cx.theme();
 
         div()
@@ -35,7 +58,22 @@ impl RenderOnce for Row {
             .justify_between()
             .gap_4()
             .min_h(theme.metrics.list_row)
-            .child(div().flex_1().min_w_0().truncate().child(title))
+            .when(disabled, |this| this.text_color(theme.muted_foreground))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().truncate().child(title))
+                    .children(detail.map(|detail| {
+                        div()
+                            .text_size(theme.text(ui::Text::Small))
+                            .text_color(theme.muted_foreground)
+                            .child(detail)
+                    })),
+            )
             .child(div().flex_none().child(control))
     }
 }

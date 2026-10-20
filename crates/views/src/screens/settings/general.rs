@@ -321,7 +321,9 @@ impl SettingsView {
             }),
         );
 
-        self.row(t!("settings-saver"), choices.into_any_element())
+        super::Row::new(t!("settings-saver"), choices.into_any_element())
+            .detail(t!("settings-saver-detail"))
+            .into_any_element()
     }
 
     pub(super) fn adaptive_menu_row(&self, cx: &mut Context<Self>) -> AnyElement {

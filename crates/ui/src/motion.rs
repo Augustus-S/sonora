@@ -123,11 +123,9 @@ impl Saver {
     }
 
     pub fn label(self) -> SharedString {
-        match (self, self.rate()) {
-            (Self::Light, Some(fps)) => t!("saver-light", fps = fps),
-            (Self::Medium, Some(fps)) => t!("saver-medium", fps = fps),
-            (Self::Strong, Some(fps)) => t!("saver-strong", fps = fps),
-            _ => t!("saver-off"),
+        match self.rate() {
+            Some(fps) => t!("saver-fps", fps = fps),
+            None => t!("saver-off"),
         }
     }
 
