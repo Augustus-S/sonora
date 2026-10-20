@@ -11,14 +11,16 @@ use rustfft::{Fft, FftPlanner};
 
 use super::feed::{self, Feed, Heard, Layout, Listener};
 
-/// The levels run from `LOW` to `HIGH` in hertz, `STEPS` to an octave.
+/// The levels run from `LOW` to `HIGH` in hertz, `STEPS` to an octave. The graph behind the
+/// equalizer only hints at what the curve shapes, so a coarse spectrum is all it needs, and
+/// every level is a path point painted each frame.
 const LOW: f64 = 20.;
 const HIGH: f64 = 20_000.;
-const STEPS: f64 = 48.;
+const STEPS: f64 = 12.;
 /// How wide a band each level sums, in octaves around its frequency.
-const SMOOTHING: f64 = 1. / 12.;
+const SMOOTHING: f64 = 1. / 4.;
 /// How many bins a level reaches at least to each side of its frequency, so a tone's main lobe
-/// lands whole in the level nearest it where a twelfth of an octave is narrower than that. Two
+/// lands whole in the level nearest it where the band is narrower than that. Two
 /// bins each side hold all but 0.005 dB of a Hann window's lobe wherever the tone falls.
 const LOBE: f64 = 2.;
 /// How long a window lasts, about: its length is the power of two nearest above this at the
@@ -327,7 +329,7 @@ impl Analysis {
 }
 
 impl Band {
-    /// The bins within a twelfth of an octave of `frequency`, and never fewer than `LOBE` each
+    /// The bins within `SMOOTHING` of an octave around `frequency`, and never fewer than `LOBE` each
     /// side, bin k covering half a bin either side of its centre. `top` is the Nyquist bin.
     fn around(frequency: f64, bin: f64, top: usize) -> Self {
         let half = 2f64.powf(SMOOTHING / 2.);
