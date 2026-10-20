@@ -41,6 +41,40 @@ use crate::pins::PinSort;
 use crate::queue::{Resume, gap_target};
 use crate::{Outcome, Repeat, Sonora, Toasts};
 
+/// How Sonora is named on the device list of the provider's apps. `Both` is the app's name with
+/// the computer's in brackets, so two machines on one account tell apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConnectName {
+    Sonora,
+    #[default]
+    Both,
+    Computer,
+    Custom,
+}
+
+impl ConnectName {
+    pub const ALL: [Self; 4] = [Self::Sonora, Self::Both, Self::Computer, Self::Custom];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Sonora => "sonora",
+            Self::Both => "both",
+            Self::Computer => "computer",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Sonora => "settings-spotify-connect-name-sonora",
+            Self::Both => "settings-spotify-connect-name-both",
+            Self::Computer => "settings-spotify-connect-name-computer",
+            Self::Custom => "settings-spotify-connect-name-custom",
+        }
+    }
+}
+
 /// Which panel the right sidebar shows.
 /// What the Discord status calls itself. `Provider` asks the provider the track came from, so
 /// local files say Local Music rather than the provider's own name. `ArtistTitle` shows as
@@ -322,11 +356,15 @@ struct Values {
     #[serde(deserialize_with = "equalizer::read_tone")]
     equalizer_treble: f64,
     sleep_timer: bool,
+    spotify_connect: bool,
+    spotify_connect_name: ConnectName,
+    spotify_connect_custom_name: String,
     discord_presence: bool,
     discord_name: DiscordName,
     discord_show_paused: bool,
     discord_badge: bool,
     discord_without_details: bool,
+    discord_hide_on_connect: bool,
     discord_sonora_button: bool,
     discord_provider_button: bool,
     artwork_for_local_files: bool,
@@ -528,11 +566,15 @@ impl Default for Values {
             equalizer_bass: 0.,
             equalizer_treble: 0.,
             sleep_timer: false,
+            spotify_connect: true,
+            spotify_connect_name: ConnectName::Both,
+            spotify_connect_custom_name: String::new(),
             discord_presence: false,
             discord_name: DiscordName::Sonora,
             discord_show_paused: false,
             discord_badge: false,
             discord_without_details: false,
+            discord_hide_on_connect: false,
             discord_sonora_button: true,
             discord_provider_button: true,
             artwork_for_local_files: true,
@@ -877,6 +919,21 @@ impl AppSettings {
         self.values.sleep_timer
     }
 
+    /// Whether Sonora shows up as a Spotify Connect device while a Spotify account is signed in.
+    pub fn spotify_connect(&self) -> bool {
+        self.values.spotify_connect
+    }
+
+    /// How Sonora is named in the device list of Spotify's apps.
+    pub fn spotify_connect_name(&self) -> ConnectName {
+        self.values.spotify_connect_name
+    }
+
+    /// The name Sonora goes by in that list when it is `ConnectName::Custom`.
+    pub fn spotify_connect_custom_name(&self) -> &str {
+        &self.values.spotify_connect_custom_name
+    }
+
     /// Whether the playing track is published to a local Discord client.
     pub fn discord_presence(&self) -> bool {
         self.values.discord_presence
@@ -895,6 +952,12 @@ impl AppSettings {
     /// Whether the Discord status carries the badge of the provider the track came from.
     pub fn discord_badge(&self) -> bool {
         self.values.discord_badge
+    }
+
+    /// Whether the Discord status steps aside while Spotify Connect has playback, here or on
+    /// another of the account's devices, for a listener who shows Spotify's own status instead.
+    pub fn discord_hide_on_connect(&self) -> bool {
+        self.values.discord_hide_on_connect
     }
 
     /// Whether the Discord status leaves the track out and only says that music is playing.
@@ -1348,6 +1411,24 @@ impl AppSettings {
         self.schedule_save(cx);
     }
 
+    pub fn set_spotify_connect(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.values.spotify_connect = enabled;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_spotify_connect_name(&mut self, name: ConnectName, cx: &mut Context<Self>) {
+        self.values.spotify_connect_name = name;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_spotify_connect_custom_name(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.values.spotify_connect_custom_name == name {
+            return;
+        }
+        self.values.spotify_connect_custom_name = name;
+        self.schedule_save(cx);
+    }
+
     pub fn set_discord_presence(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.values.discord_presence = enabled;
         self.schedule_save(cx);
@@ -1374,6 +1455,11 @@ impl AppSettings {
 
     pub fn set_discord_badge(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.values.discord_badge = enabled;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_discord_hide_on_connect(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.values.discord_hide_on_connect = enabled;
         self.schedule_save(cx);
     }
 

@@ -4,6 +4,7 @@ pub mod artwork;
 mod audio;
 pub mod binimum;
 mod calendar;
+pub mod connect;
 pub mod credentials;
 pub mod deezer;
 pub mod drm;
@@ -107,6 +108,12 @@ pub enum Report {
 pub trait MusicApi: Send + Sync {
     fn alive(&self) -> bool {
         true
+    }
+
+    /// The provider's device network, for a provider that has one. Spotify Connect is the
+    /// only one so far.
+    fn connect(&self) -> Option<Arc<dyn connect::Connect>> {
+        None
     }
 
     fn share_url(&self, kind: MediaKind, id: &str) -> Option<String>;

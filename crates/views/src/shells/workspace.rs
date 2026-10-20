@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{AnyView, App, Context, Entity, FocusHandle, Render, StyleRefinement};
+use gpui::{AnyView, App, Context, Entity, FocusHandle, Pixels, Render, StyleRefinement};
 use gpui::{Window, deferred, div};
 use input::WORKSPACE_CONTEXT;
 use state::{AppSettings, Playback, Queue, SideTab, Sonora};
@@ -23,6 +23,9 @@ use crate::shells::Shell;
 pub(crate) struct Workspace {
     sidebar: Entity<SidebarLeft>,
     player_bar: Entity<PlayerBar>,
+    playback: Entity<Playback>,
+    /// How tall the strip over the player bar stands, which the pages' bottom clearance adds.
+    strip: Pixels,
     settings: Entity<AppSettings>,
     sidebar_right: Entity<SidebarRight>,
     playlist_editor: Entity<PlaylistEditor>,
@@ -53,13 +56,20 @@ impl Workspace {
     ) -> Self {
         let sidebar = cx.new(SidebarLeft::new);
         let sidebar_right = cx.new(|cx| SidebarRight::new(queue.clone(), playback.clone(), cx));
-        let player_bar = cx.new(|cx| PlayerBar::new(playback, queue, cx));
+        let player_bar = cx.new(|cx| PlayerBar::new(playback.clone(), queue, cx));
         let settings = Sonora::global(cx).settings.clone();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
+        let devices = Sonora::global(cx).devices.clone();
+        cx.observe(&devices, |this, _, cx| this.restrip(cx))
+            .detach();
+        cx.observe(&playback, |this, _, cx| this.restrip(cx))
+            .detach();
 
         Self {
             sidebar,
             player_bar,
+            playback,
+            strip: Pixels::ZERO,
             settings,
             sidebar_right,
             playlist_editor: PlaylistEditor::entity(cx),
@@ -74,6 +84,18 @@ impl Workspace {
             cached: true,
             transition: None,
             focus: cx.focus_handle(),
+        }
+    }
+
+    /// Reads how tall the strip over the player bar stands, and redraws only when that changes,
+    /// since playback notifies on every tick.
+    fn restrip(&mut self, cx: &mut Context<Self>) {
+        let strip = PlayerBar::strip(self.playback.read(cx), cx);
+        if self.strip != strip {
+            self.strip = strip;
+            self.toasts
+                .update(cx, |toasts, cx| toasts.set_strip(strip, cx));
+            cx.notify();
         }
     }
 
@@ -183,8 +205,8 @@ impl Render for Workspace {
         let underlap = self.settings.read(cx).player_bar_transparent();
         let bottom = match underlap {
             true => bar_height,
-            false => gpui::Pixels::ZERO,
-        };
+            false => Pixels::ZERO,
+        } + self.strip;
         Chrome::set_bottom(bottom, cx);
         // A cached view is laid out from the style given here and its own root
         // style is never consulted, so it can only be cached while it is in the

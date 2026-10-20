@@ -39,6 +39,7 @@ deunicode = "1.6"
 env_logger = "0.11"
 fastrand = "2.5"
 futures = "0.3"
+gethostname = "1.1"
 fluent-bundle = "0.16"
 gpui = { git = "https://github.com/sonorahq/gpui", rev = "21a735bab9906854364f0b5b2d3ddf54e5c7241d" }
 gpui_platform = { git = "https://github.com/sonorahq/gpui", rev = "21a735bab9906854364f0b5b2d3ddf54e5c7241d", features = [

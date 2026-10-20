@@ -25,6 +25,7 @@ use crate::shared::text;
 mod about;
 mod accounts;
 mod appearance;
+mod connect;
 mod discord;
 mod general;
 mod header;
@@ -97,11 +98,15 @@ enum Slot {
     SampleRate,
     Buffer,
     Equalizer,
+    SpotifyConnect,
+    SpotifyConnectName,
+    SpotifyConnectCustom,
     Discord,
     DiscordName,
     DiscordShowPaused,
     DiscordBadge,
     DiscordAnonymous,
+    DiscordHideOnConnect,
     DiscordButtons,
     ArtworkForLocal,
     Scrobble(usize),
@@ -232,6 +237,8 @@ pub struct SettingsView {
     scrobbling: Entity<Scrobbling>,
     scrobble_first: Entity<Input>,
     scrobble_second: Entity<Input>,
+    /// The field for the custom name Sonora goes by in Spotify's device list.
+    connect_name: Entity<Input>,
     /// The service whose link dialog is open, by slug.
     scrobble_prompt: Option<&'static str>,
     /// The provider whose sign-in choice is up, by slug and name.
@@ -322,6 +329,18 @@ impl SettingsView {
         })
         .detach();
 
+        let connect_name =
+            cx.new(|cx| Input::new("settings-spotify-connect-custom-hint", cx).compact());
+        let custom = settings.read(cx).spotify_connect_custom_name().to_owned();
+        connect_name.update(cx, |input, cx| input.set_text(custom, cx));
+        cx.observe(&connect_name, |this, input, cx| {
+            let text = input.read(cx).text().to_owned();
+            this.settings.update(cx, |settings, cx| {
+                settings.set_spotify_connect_custom_name(text, cx)
+            });
+        })
+        .detach();
+
         let popovers = Popovers::default();
         let output_picker = cx.new(|cx| OutputPicker::new(outputs.clone(), popovers.clone(), cx));
         let previews = preview::Previews::new(cx);
@@ -361,6 +380,7 @@ impl SettingsView {
             scrobbling,
             scrobble_first: cx.new(|cx| Input::new("settings-scrobble-key", cx)),
             scrobble_second: cx.new(|cx| Input::new("settings-scrobble-secret", cx)),
+            connect_name,
             scrobble_prompt: None,
             languages,
             typefaces,
@@ -767,6 +787,18 @@ impl SettingsView {
                 t!("settings-lyrics-for-local-files"),
                 t!("settings-lyrics-for-local-files-detail"),
             ),
+            Slot::SpotifyConnect => (
+                t!("settings-spotify-connect"),
+                t!("settings-spotify-connect-detail"),
+            ),
+            Slot::SpotifyConnectName => (
+                t!("settings-spotify-connect-name"),
+                t!("settings-spotify-connect-name-detail"),
+            ),
+            Slot::SpotifyConnectCustom => (
+                t!("settings-spotify-connect-custom"),
+                t!("settings-spotify-connect-custom-detail"),
+            ),
             Slot::Discord => (t!("settings-discord"), t!("settings-discord-detail")),
             Slot::DiscordName => (
                 t!("settings-discord-name"),
@@ -787,6 +819,10 @@ impl SettingsView {
             Slot::DiscordAnonymous => (
                 t!("settings-discord-anonymous"),
                 t!("settings-discord-anonymous-detail"),
+            ),
+            Slot::DiscordHideOnConnect => (
+                t!("settings-discord-hide-on-connect"),
+                t!("settings-discord-hide-on-connect-detail"),
             ),
             Slot::DiscordButtons => (
                 t!("settings-discord-buttons"),
@@ -871,12 +907,16 @@ impl SettingsView {
             Slot::Karaoke => self.karaoke_lyrics_row(cx),
             Slot::Romanized => self.romanized_lyrics_row(cx),
             Slot::LyricsForLocal => self.lyrics_for_local_files_row(cx),
+            Slot::SpotifyConnect => self.spotify_connect_row(cx),
+            Slot::SpotifyConnectName => self.spotify_connect_name_row(cx),
+            Slot::SpotifyConnectCustom => self.spotify_connect_custom_row(),
             Slot::Discord => self.discord_row(cx),
             Slot::DiscordName => self.discord_name_row(cx),
             Slot::DiscordShowPaused => self.discord_show_paused_row(cx),
             Slot::DiscordBadge => self.discord_badge_row(cx),
             Slot::ArtworkForLocal => self.artwork_for_local_files_row(cx),
             Slot::DiscordAnonymous => self.discord_anonymous_row(cx),
+            Slot::DiscordHideOnConnect => self.discord_hide_on_connect_row(cx),
             Slot::DiscordButtons => self.discord_buttons_row(cx),
             Slot::Scrobble(index) => match index < self.scrobbling.read(cx).rows().len() {
                 true => self.scrobble_row(index, cx),

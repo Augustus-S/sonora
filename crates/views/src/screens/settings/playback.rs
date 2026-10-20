@@ -63,6 +63,7 @@ impl SettingsView {
                 Group::new("settings-group-protected", "icons/lock.svg").rows([Slot::Widevine]),
             );
         }
+        groups.extend(self.connect_groups(cx));
         groups
     }
 

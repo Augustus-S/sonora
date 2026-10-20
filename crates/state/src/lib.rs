@@ -2,6 +2,7 @@ mod artist;
 mod catalog;
 mod cover;
 mod detail;
+mod devices;
 mod discord;
 mod drm;
 mod equalizer;
@@ -41,6 +42,7 @@ mod window_shape;
 pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
+pub use devices::{Devices, Steered};
 pub use drm::{CdmState, Drm};
 pub use equalizer::{DeviceRule, Equalizer, RuleDevice, Sound};
 pub use genre::{GenreDetails, Genres};
@@ -65,7 +67,7 @@ pub use scrobble::{ScrobbleRow, ScrobbleState, Scrobbling};
 pub use search::{AlbumHit, ArtistHit, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
-    AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES,
+    AppSettings, ConnectName, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES,
     PlayerBarLayout, Reloaded, RomanizationScripts, SYSTEM_FONT, SideTab, ThemeFamily,
     ThemeVariant, equalizer_profile_label, remember_window, window_placement,
 };
@@ -176,6 +178,7 @@ pub(crate) fn settled<T>(result: Result<T>, cx: &mut gpui::App) -> std::result::
 pub struct Sonora {
     pub session: Entity<Session>,
     pub cover: Entity<Cover>,
+    pub devices: Entity<Devices>,
     pub drm: Entity<Drm>,
     pub equalizer: Entity<Equalizer>,
     pub library: Entity<Library>,
@@ -306,11 +309,22 @@ pub fn init(
     let potoken = potoken::attach(cx);
     let signal = cx.new(|cx| Signal::new(playback.clone(), outputs.clone(), equalizer.clone(), cx));
     let wake = cx.new(|cx| Wake::new(settings.clone(), playback.clone(), io.clone(), cx));
+    let devices = cx.new(|cx| {
+        Devices::new(
+            playback.clone(),
+            queue.clone(),
+            settings.clone(),
+            session.clone(),
+            io.clone(),
+            cx,
+        )
+    });
     discord::attach(
         playback.clone(),
         settings.clone(),
         session.clone(),
         cover.clone(),
+        devices.clone(),
         io,
         cx,
     );
@@ -318,6 +332,7 @@ pub fn init(
     cx.set_global(Sonora {
         session,
         cover,
+        devices,
         drm,
         equalizer,
         library,

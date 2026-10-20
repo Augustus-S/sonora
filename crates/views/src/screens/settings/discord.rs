@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context};
 use i18n::t;
-use state::DiscordName;
+use state::{DiscordName, Sonora};
 use ui::{Button, MenuItem, Picker, Switch, TabBar};
 
 use super::{Group, SettingsView, Slot};
@@ -12,15 +12,21 @@ impl SettingsView {
     /// The Discord page. While the status is off only the master switch and the local files
     /// row stand, since the rest shapes a status nobody sees.
     pub(super) fn discord_groups(&self, cx: &App) -> Vec<Group> {
+        let settings = self.settings.read(cx);
         let mut groups = vec![Group::untitled().rows([Slot::Discord])];
-        if self.settings.read(cx).discord_presence() {
+        if settings.discord_presence() {
+            // the choice only means something while Spotify is signed in and listed as a device
+            let connect =
+                settings.spotify_connect() && Sonora::global(cx).devices.read(cx).supported();
             groups.push(
-                Group::new("settings-group-status", "icons/radio.svg").rows([
-                    Slot::DiscordName,
-                    Slot::DiscordShowPaused,
-                    Slot::DiscordBadge,
-                    Slot::DiscordAnonymous,
-                ]),
+                Group::new("settings-group-status", "icons/radio.svg")
+                    .rows([
+                        Slot::DiscordName,
+                        Slot::DiscordShowPaused,
+                        Slot::DiscordBadge,
+                        Slot::DiscordAnonymous,
+                    ])
+                    .rows(connect.then_some(Slot::DiscordHideOnConnect)),
             );
             groups.push(
                 Group::new("settings-discord-buttons", "icons/link.svg")
@@ -122,6 +128,21 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {
                         settings.set_discord_without_details(!on, cx)
+                    });
+                }))
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn discord_hide_on_connect_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.settings.read(cx).discord_hide_on_connect();
+
+        self.row(
+            t!("settings-discord-hide-on-connect"),
+            Switch::new("discord-hide-on-connect", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings.update(cx, |settings, cx| {
+                        settings.set_discord_hide_on_connect(!on, cx)
                     });
                 }))
                 .into_any_element(),

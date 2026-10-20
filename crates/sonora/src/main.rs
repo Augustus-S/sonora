@@ -308,6 +308,7 @@ fn open_window(cx: &mut App) {
     let Sonora {
         session,
         cover: _,
+        devices: _,
         drm: _,
         equalizer: _,
         library,
