@@ -551,9 +551,9 @@ impl TableSource for TrackSource {
         let mut axes: Vec<Filter> = duration.into_iter().collect();
         axes.extend([
             Filter::Flag(FlagAxis {
-                key: "filter-explicit",
-                label: t!("filter-explicit"),
-                on: self.sieve.explicit,
+                key: "filter-hide-explicit",
+                label: t!("filter-hide-explicit"),
+                on: self.sieve.hide_explicit,
             }),
             Filter::Flag(FlagAxis {
                 key: "filter-playable",
@@ -577,8 +577,8 @@ impl TableSource for TrackSource {
                 self.sieve.duration = Some(value);
                 true
             }
-            FilterChange::Flag("filter-explicit", value) => {
-                self.sieve.explicit = value;
+            FilterChange::Flag("filter-hide-explicit", value) => {
+                self.sieve.hide_explicit = value;
                 true
             }
             FilterChange::Flag("filter-playable", value) => {

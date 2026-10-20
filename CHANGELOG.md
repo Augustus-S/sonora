@@ -100,6 +100,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The explicit filter on track lists now hides explicit songs instead of showing only them.
 - Active shuffle and repeat show a dot beneath their icons in the player bar and fullscreen,
   so their state is visible without relying on color alone.
 - Adaptive theme is off by default; saved preferences are preserved.
