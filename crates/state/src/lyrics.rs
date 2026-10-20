@@ -41,6 +41,9 @@ pub struct Lyrics {
     unsaved: Vec<Unsaved>,
     providers: Vec<Arc<dyn LyricsProvider>>,
     enabled_providers: Vec<String>,
+    /// The order of the sources the answer on show was ranked by. A new order looks the track
+    /// up again, from what is held, so the source now ranked first is the one shown.
+    priority: Vec<String>,
     playback: Entity<Playback>,
     queue: Entity<Queue>,
     session: Entity<Session>,
@@ -70,10 +73,12 @@ impl Lyrics {
         cx.observe(&settings, |this, settings, cx| {
             let settings = settings.read(cx);
             let enabled = settings.lyrics_providers();
-            if enabled == this.enabled_providers {
+            let priority = settings.lyrics_provider_priority();
+            if enabled == this.enabled_providers && priority == this.priority {
                 return;
             }
             this.enabled_providers = enabled.to_vec();
+            this.priority = priority;
             this.task = None;
             this.ahead = None;
             this.ahead_of = None;
@@ -82,6 +87,7 @@ impl Lyrics {
         })
         .detach();
         let enabled_providers = settings.read(cx).lyrics_providers().to_vec();
+        let priority = settings.read(cx).lyrics_provider_priority();
         let store = Sheets::new(storage::Cache::standard());
         let moving = store.clone();
         let migration = cx
@@ -100,6 +106,7 @@ impl Lyrics {
             unsaved: Vec::new(),
             providers,
             enabled_providers,
+            priority,
             playback,
             queue,
             session,

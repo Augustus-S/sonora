@@ -32,6 +32,7 @@ pub struct Toast {
     icon: Option<SharedString>,
     loading: bool,
     action: Option<(SharedString, Press)>,
+    action_icon: Option<SharedString>,
     cancel: Option<(SharedString, Press)>,
     shown: f32,
     dismiss: Option<Press>,
@@ -54,6 +55,7 @@ impl Toast {
             icon: None,
             loading: false,
             action: None,
+            action_icon: None,
             cancel: None,
             shown: 1.,
             dismiss: None,
@@ -92,6 +94,12 @@ impl Toast {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.action = Some((label.into(), Box::new(handler)));
+        self
+    }
+
+    /// An icon after the action's label, such as an arrow on a button that opens a page.
+    pub fn action_icon(mut self, path: impl Into<SharedString>) -> Self {
+        self.action_icon = Some(path.into());
         self
     }
 
@@ -169,6 +177,7 @@ impl RenderOnce for Toast {
             icon,
             loading,
             action,
+            action_icon,
             cancel,
             shown,
             dismiss,
@@ -246,6 +255,7 @@ impl RenderOnce for Toast {
                                 .outline()
                                 .small()
                                 .label(label)
+                                .when_some(action_icon, Button::trailing)
                                 .when(!inert, |button| {
                                     button
                                         .on_click(move |event, window, cx| press(event, window, cx))

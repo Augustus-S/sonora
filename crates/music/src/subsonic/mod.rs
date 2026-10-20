@@ -1,5 +1,6 @@
 pub(crate) mod auth;
 mod client;
+mod lyrics;
 mod playback;
 mod wire;
 
@@ -9,9 +10,14 @@ use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 
 pub use client::SubsonicClient;
+pub use lyrics::SubsonicLyrics;
 
 use crate::subsonic::playback::Factory;
-use crate::{Capabilities, MusicApi as _, MusicProvider, ProviderSession, Shape, SignIn};
+use crate::{Capabilities, Catalog, MusicApi as _, MusicProvider, ProviderSession, Shape, SignIn};
+
+/// The name the provider and its lyrics source go by. It is saved in settings and in the lyrics
+/// cache, so it must not change.
+pub(crate) const NAME: &str = "Subsonic";
 
 pub struct SubsonicProvider;
 
@@ -47,9 +53,12 @@ impl SubsonicProvider {
             profile,
             api: Arc::new(client.clone()),
             playback: Arc::new(Factory::new(client)),
-            shape: Shape::Catalog,
+            shape: Shape::Catalog(Catalog::Fixed),
             authenticated: true,
-            capabilities: Capabilities::ALL,
+            capabilities: Capabilities {
+                transcode: true,
+                ..Capabilities::ALL
+            },
         })
     }
 
@@ -75,9 +84,12 @@ impl SubsonicProvider {
                 profile,
                 api: Arc::new(client.clone()),
                 playback: Arc::new(Factory::new(client)),
-                shape: Shape::Catalog,
+                shape: Shape::Catalog(Catalog::Fixed),
                 authenticated: true,
-                capabilities: Capabilities::ALL,
+                capabilities: Capabilities {
+                    transcode: true,
+                    ..Capabilities::ALL
+                },
             })),
             Err(error) if crate::trouble::offline(&format!("{error:#}")) => Err(error),
             Err(error) => {
@@ -97,7 +109,7 @@ impl Default for SubsonicProvider {
 #[async_trait]
 impl MusicProvider for SubsonicProvider {
     fn name(&self) -> &'static str {
-        "Subsonic"
+        NAME
     }
 
     fn slug(&self) -> &'static str {

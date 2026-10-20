@@ -15,9 +15,9 @@ use crate::escape;
 use crate::subsonic::auth::Signature;
 use crate::subsonic::wire;
 use crate::{
-    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, Genre, GenreDetail, GenreItem,
-    GenreSection, HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, Report, SUGGESTIONS,
-    SavedArtist, Track, UserProfile, distinct_covers, iso_8601_to_epoch,
+    Album, AlbumCatalogue, AlbumDetail, Artist, ArtistProfile, Codec, Genre, GenreDetail,
+    GenreItem, GenreSection, HomeFeed, MediaKind, MusicApi, Playlist, PlaylistDetail, Report,
+    SUGGESTIONS, SavedArtist, Track, Transcode, UserProfile, distinct_covers, iso_8601_to_epoch,
 };
 
 const PORTRAIT_LIMIT: usize = 24;
@@ -938,12 +938,18 @@ impl SubsonicClient {
             .unwrap_or_default()
     }
 
-    /// Opens the audio of a track and answers once the response headers are in; the body is
-    /// still on its way.
-    pub async fn open_stream(&self, track_id: &str) -> Result<reqwest::Response> {
+    /// Opens the audio of a track, converted as `transcode` asks, and answers once the response
+    /// headers are in. The body is still on its way.
+    pub async fn open_stream(
+        &self,
+        track_id: &str,
+        transcode: Transcode,
+    ) -> Result<reqwest::Response> {
+        let bitrate = transcode.bitrate.and_then(|kbps| i32::try_from(kbps).ok());
+        let format = transcode.codec.map(Codec::id);
         let url = self
             .client
-            .stream_url(track_id, None, None)
+            .stream_url(track_id, bitrate, format)
             .context("cannot build the stream url")?;
         self.http
             .get(url)
@@ -952,6 +958,31 @@ impl SubsonicClient {
             .context("cannot stream the track")?
             .error_for_status()
             .context("the server refused the stream")
+    }
+
+    /// The lyrics the server holds for a track, by the OpenSubsonic `songLyrics` extension. A
+    /// plain Subsonic server fails the call.
+    pub(crate) async fn lyrics_by_song(
+        &self,
+        track_id: &str,
+    ) -> Result<opensubsonic::data::LyricsList> {
+        self.client
+            .get_lyrics_by_song_id(track_id, None)
+            .await
+            .context("cannot fetch the structured lyrics")
+    }
+
+    /// The plain lyrics a Subsonic server finds for an artist and title, the only form a server
+    /// without the `songLyrics` extension offers.
+    pub(crate) async fn lyrics_by_name(
+        &self,
+        artist: &str,
+        title: &str,
+    ) -> Result<opensubsonic::data::Lyrics> {
+        self.client
+            .get_lyrics(Some(artist), Some(title))
+            .await
+            .context("cannot fetch the lyrics")
     }
 
     /// The length and ReplayGain the server records for a track, whichever it has. The track

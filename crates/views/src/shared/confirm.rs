@@ -1,11 +1,11 @@
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, FocusHandle, Global, Render, Window, div};
+use gpui::{App, Context, Entity, FocusHandle, Global, Render, SharedString, Window, div};
 use i18n::t;
-use music::{Album, SavedArtist, Shape, Track};
-use state::{Detail, History, Io, Outcome, Shelf, Sonora, Toasts};
+use music::{Album, SavedArtist, Track};
+use state::{Detail, History, Io, Outcome, Shelf, Sonora, Toasts, equalizer_profile_label};
 use ui::{Button, Dismiss, FORM_CONTEXT, Modal, Submit};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum Kind {
     LibrarySongs(usize),
     PlaylistSongs(usize),
@@ -15,6 +15,8 @@ pub(crate) enum Kind {
     Playlists(usize),
     DeleteTrackFiles(usize),
     Widevine,
+    /// An equalizer profile, by its stored name.
+    EqualizerProfile(SharedString),
 }
 
 impl Kind {
@@ -24,6 +26,7 @@ impl Kind {
             Self::History(_) => t!("confirm-remove-history-title"),
             Self::DeleteTrackFiles(_) => t!("confirm-delete-track-files-title"),
             Self::Widevine => t!("confirm-uninstall-widevine-title"),
+            Self::EqualizerProfile(_) => t!("equalizer-delete"),
             _ => t!("confirm-remove-library-title"),
         }
     }
@@ -38,6 +41,10 @@ impl Kind {
             Self::Playlists(count) => t!("confirm-remove-playlists", count = count),
             Self::DeleteTrackFiles(count) => t!("confirm-delete-track-files", count = count),
             Self::Widevine => t!("confirm-uninstall-widevine"),
+            Self::EqualizerProfile(ref name) => {
+                let name = equalizer_profile_label(name);
+                t!("equalizer-delete-confirm", name = &name)
+            }
         }
     }
 
@@ -85,7 +92,11 @@ impl Confirm {
     /// `Shape::Catalog` shelf the favorites sit over a library that stays put; on a
     /// `Shape::Saved` one the heart is the library itself, and the question stands.
     pub(crate) fn unstarring(id: &str, cx: &App) -> bool {
-        Sonora::global(cx).library.read(cx).shape(Shelf::of(id)) == Shape::Catalog
+        Sonora::global(cx)
+            .library
+            .read(cx)
+            .shape(Shelf::of(id))
+            .is_catalog()
     }
 
     pub fn ask(kind: Kind, apply: impl FnOnce(&mut App) + 'static, cx: &mut App) {

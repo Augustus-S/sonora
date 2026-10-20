@@ -189,6 +189,12 @@ pub struct Input {
     blurred: bool,
     clearable: bool,
     masked: bool,
+    /// Whether the text keeps to the field's end rather than its start, as a column of numbers.
+    end: bool,
+    /// The Fluent key of the muted unit drawn after the text inside the field.
+    suffix: Option<SharedString>,
+    /// The keystroke that focuses the field, drawn as keys at its end while it is empty.
+    shortcut: Option<SharedString>,
     content: SharedString,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -211,6 +217,9 @@ impl Input {
             blurred: false,
             clearable: false,
             masked: false,
+            end: false,
+            suffix: None,
+            shortcut: None,
             content: SharedString::default(),
             selected_range: 0..0,
             selection_reversed: false,
@@ -254,6 +263,34 @@ impl Input {
 
     pub fn masked(mut self) -> Self {
         self.masked = true;
+        self
+    }
+
+    /// Keeps the text against the field's end, so numbers in fields stacked or set side by side
+    /// line up by their last digit. Text too long for the field starts at its start as usual.
+    pub fn align_end(mut self) -> Self {
+        self.end = true;
+        self
+    }
+
+    /// Draws the Fluent message `key` muted after the text inside the field, as a unit.
+    pub fn suffix(mut self, key: impl Into<SharedString>) -> Self {
+        self.suffix = Some(key.into());
+        self
+    }
+
+    /// Changes the Fluent key of the unit drawn after the text, redrawing only when it differs.
+    pub fn set_suffix(&mut self, key: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.suffix != key {
+            self.suffix = key;
+            cx.notify();
+        }
+    }
+
+    /// Shows `keystroke`, the shortcut that focuses the field, as a row of keys at its end while
+    /// the field is empty. It is spelled as key bindings are, such as `"secondary-f"`.
+    pub fn shortcut(mut self, keystroke: impl Into<SharedString>) -> Self {
+        self.shortcut = Some(keystroke.into());
         self
     }
 

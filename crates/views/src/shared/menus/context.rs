@@ -378,9 +378,12 @@ impl ItemMenu {
             ),
         };
         let toggle_library = library_toggle(tracks, &library, cx);
-        let membership =
-            (!barren && !imported && Sonora::global(cx).session.read(cx).capabilities().library)
-                .then(|| library_membership(tracks, &library, cx));
+        let editable = Sonora::global(cx)
+            .session
+            .read(cx)
+            .shape_of(shelf)
+            .editable();
+        let membership = (!barren && editable).then(|| library_membership(tracks, &library, cx));
 
         let album = match (many, columns.album, track.album_id.clone()) {
             (true, _, _) | (false, true, _) => None,
@@ -656,7 +659,7 @@ fn library_membership(tracks: &[Track], library: &Entity<Library>, cx: &App) -> 
 /// The same for one album, and nothing on a provider whose library is its favorites.
 fn album_membership_item(album: Album, cx: &App) -> Option<MenuItem> {
     let session = Sonora::global(cx).session.read(cx);
-    if !session.capabilities().library || music::is_local_id(&album.id) {
+    if !session.shape_of(Shelf::of(&album.id)).editable() {
         return None;
     }
     let library = Sonora::global(cx).library.clone();

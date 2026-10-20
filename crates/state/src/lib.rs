@@ -5,6 +5,7 @@ mod detail;
 mod devices;
 mod discord;
 mod drm;
+mod equalizer;
 mod genre;
 mod history;
 mod home;
@@ -13,6 +14,8 @@ mod logging;
 mod lyrics;
 mod mosaic;
 mod network;
+mod outputs;
+mod overload;
 mod pins;
 mod playback;
 mod potoken;
@@ -26,6 +29,7 @@ mod search;
 mod session;
 mod settings;
 mod sheets;
+mod signal;
 mod snapshot;
 mod song;
 mod tags;
@@ -40,6 +44,7 @@ pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
 pub use devices::{Devices, Steered};
 pub use drm::{CdmState, Drm};
+pub use equalizer::{DeviceRule, Equalizer, RuleDevice, Sound};
 pub use genre::{GenreDetails, Genres};
 pub use history::{History, HistoryState};
 pub use home::Home;
@@ -49,6 +54,8 @@ pub use library::{
 pub use logging::log_file;
 pub use lyrics::{Lyrics, LyricsState};
 pub use network::{Network, Reconnected};
+pub use outputs::Outputs;
+pub use overload::OutputLevel;
 pub use pins::{PinSort, Pins};
 pub use playback::{Origin, Playback, PlaybackState, Repeat, Sleep, Whence};
 pub use profile::Profile;
@@ -61,8 +68,10 @@ pub use search::{AlbumHit, ArtistHit, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, ConnectName, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES,
-    Reloaded, RomanizationScripts, SYSTEM_FONT, SideTab, remember_window, window_placement,
+    PlayerBarLayout, Reloaded, RomanizationScripts, SYSTEM_FONT, SideTab, ThemeFamily,
+    ThemeVariant, equalizer_profile_label, remember_window, window_placement,
 };
+pub use signal::{Change, Equalizing, FLOAT_BITS, Following, Signal, SignalPath};
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, ToastAction, Toasts};
@@ -171,10 +180,12 @@ pub struct Sonora {
     pub cover: Entity<Cover>,
     pub devices: Entity<Devices>,
     pub drm: Entity<Drm>,
+    pub equalizer: Entity<Equalizer>,
     pub library: Entity<Library>,
     pub history: Entity<History>,
     pub lyrics: Entity<Lyrics>,
     pub network: Entity<Network>,
+    pub outputs: Entity<Outputs>,
     pub pins: Entity<Pins>,
     pub playback: Entity<Playback>,
     /// The window that mints YouTube's proof-of-origin token. Nothing reads it; it is held so
@@ -185,6 +196,7 @@ pub struct Sonora {
     pub scan: Entity<Scan>,
     pub scrobbling: Entity<Scrobbling>,
     pub settings: Entity<AppSettings>,
+    pub signal: Entity<Signal>,
     pub updates: Entity<Updates>,
     pub usage: Entity<Usage>,
     pub wake: Entity<Wake>,
@@ -234,7 +246,22 @@ pub fn init(
     let cache = storage::Cache::standard();
     let library = cx.new(|cx| Library::new(session.clone(), io.clone(), cache, cx));
     let queue = cx.new(|cx| Queue::new(session.clone(), settings.clone(), cx));
-    let playback = cx.new(|cx| Playback::new(session.clone(), queue.clone(), settings.clone(), cx));
+    // Playback starts no engine until a provider is up, so the saved device is handed over
+    // before any stream opens.
+    let equalizer = cx.new(|cx| Equalizer::new(settings.clone(), cx));
+    let playback = cx.new(|cx| {
+        Playback::new(
+            session.clone(),
+            queue.clone(),
+            settings.clone(),
+            &equalizer,
+            cx,
+        )
+    });
+    let outputs = cx.new(|cx| Outputs::new(settings.clone(), playback.clone(), cx));
+    equalizer.update(cx, |equalizer, cx| {
+        equalizer.follow(&playback, &outputs, cx)
+    });
     let history = cx.new(|cx| {
         History::new(
             session.clone(),
@@ -272,7 +299,7 @@ pub fn init(
         Requirements::new(
             settings.clone(),
             session.clone(),
-            playback.clone(),
+            outputs.clone(),
             io.clone(),
             cx,
         )
@@ -280,6 +307,7 @@ pub fn init(
     let usage = cx.new(|cx| Usage::new(session.clone(), database, io.clone(), cx));
     let pins = cx.new(|cx| Pins::new(settings.clone(), library.clone(), session.clone(), cx));
     let potoken = potoken::attach(cx);
+    let signal = cx.new(|cx| Signal::new(playback.clone(), outputs.clone(), equalizer.clone(), cx));
     let wake = cx.new(|cx| Wake::new(settings.clone(), playback.clone(), io.clone(), cx));
     let devices = cx.new(|cx| {
         Devices::new(
@@ -306,10 +334,12 @@ pub fn init(
         cover,
         devices,
         drm,
+        equalizer,
         library,
         history,
         lyrics,
         network,
+        outputs,
         pins,
         playback,
         potoken,
@@ -318,6 +348,7 @@ pub fn init(
         scan,
         scrobbling,
         settings,
+        signal,
         updates,
         usage,
         wake,
