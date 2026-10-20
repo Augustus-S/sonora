@@ -42,7 +42,7 @@ mod window_shape;
 pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
-pub use devices::{Devices, Steered};
+pub use devices::{Devices, Steered, Upcoming};
 pub use drm::{CdmState, Drm};
 pub use equalizer::{DeviceRule, Equalizer, RuleDevice, Sound};
 pub use genre::{GenreDetails, Genres};

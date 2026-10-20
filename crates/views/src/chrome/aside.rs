@@ -12,16 +12,17 @@ use gpui::{
     div, ease_in_out, px, relative, size, svg, uniform_list,
 };
 use i18n::t;
-use music::{Shape, Track, Voice};
+use music::{Contributor, Shape, Track, Voice};
 use router::{Destination, LibraryTab, Link as _};
 use state::{
     AppSettings, Lyrics, LyricsState, Network, Playback, PlaybackState, Queue, RomanizationScripts,
-    Shelf, SideTab, Sonora, Whence,
+    Shelf, SideTab, Sonora, Steered, Whence,
 };
 use ui::{
-    ActiveTheme as _, Button, Card, DraggedPin, Edge, Motion, Motioned as _, PREFETCH_REACH, Pin,
-    Pinnable as _, Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy, drop_gap, drop_marker,
-    ease_out_cubic, ease_out_expo, eyebrow, faint, mix, prefetch, snapped, vacant,
+    ActiveTheme as _, Avatar, Button, Card, DraggedPin, Edge, Initials, Motion, Motioned as _,
+    PREFETCH_REACH, Pin, Pinnable as _, Popup, Scrollbar, Scroller, Spot, Springs, Text, Vacancy,
+    drop_gap, drop_marker, ease_out_cubic, ease_out_expo, eyebrow, faint, mix, prefetch, snapped,
+    vacant,
 };
 
 use crate::chrome::{Chrome, section_label};
@@ -30,6 +31,8 @@ use crate::shared::menus::ItemMenu;
 use crate::shared::pins::Pinned as _;
 
 const QUEUE: &str = "queue";
+/// How many text heights across the picture of whoever queued a song is.
+const ADDER_FACE: f32 = 1.4;
 const BULLET: SharedString = SharedString::new_static("·");
 const FADE: f32 = 96.;
 const REST: f32 = FADE * 0.75;
@@ -243,6 +246,8 @@ pub(crate) struct VerseLook {
 struct RowLook {
     playing: bool,
     drop_line: Option<Edge>,
+    /// Whether the row is a song someone queued by hand, which names who did when it is known.
+    queued: bool,
 }
 
 /// The credit under a sheet, resolved once for the answer it names and the language it was read
@@ -760,7 +765,11 @@ impl Aside {
         look: RowLook,
         cx: &Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let RowLook { playing, drop_line } = look;
+        let RowLook {
+            playing,
+            drop_line,
+            queued,
+        } = look;
         let theme = *cx.theme();
         let past_index = position.past();
         let queue_index = position.upcoming();
@@ -779,14 +788,25 @@ impl Aside {
         )
         .cover(track.cover.clone())
         .bare_meta(
-            crate::shared::cells::artist_links(
-                SharedString::from(format!("queue-track-artist-{index}")),
-                track.artist_refs.clone(),
-                track.artists.clone(),
-                theme.muted_foreground,
-            )
-            .text_size(theme.text(Text::Small))
-            .truncate(),
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .min_w_0()
+                .child(
+                    crate::shared::cells::artist_links(
+                        SharedString::from(format!("queue-track-artist-{index}")),
+                        track.artist_refs.clone(),
+                        track.artists.clone(),
+                        theme.muted_foreground,
+                    )
+                    .text_size(theme.text(Text::Small))
+                    .truncate(),
+                )
+                .when_some(
+                    track.added_by.as_deref().filter(|_| queued),
+                    |this, added| this.child(adder(added, theme)),
+                ),
         )
         .tint(title)
         .when(track.explicit, Card::explicit)
@@ -897,6 +917,61 @@ impl Aside {
             .min_w_0()
             .child(card)
             .when_some(drop_line, |this, edge| this.child(drop_marker(edge, cx)))
+    }
+
+    /// The queue of the device that has playback, which is read only: what is playing, what
+    /// people queued with who did, and what follows from the album or playlist.
+    fn other(steered: &Steered, cx: &App) -> impl IntoElement {
+        let theme = *cx.theme();
+        let (queued, following) = steered
+            .upcoming
+            .iter()
+            .partition::<Vec<_>, _>(|upcoming| upcoming.queued);
+        let row = |id: &'static str, index: usize, track: &Track, color| {
+            Card::new((id, index), SharedString::from(track.name.clone()))
+                .cover(track.cover.clone())
+                .bare_meta(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(theme.text(Text::Small))
+                        .text_color(theme.muted_foreground)
+                        .child(SharedString::from(track.artists.clone()))
+                        .when_some(track.added_by.as_deref(), |this, added| {
+                            this.child(adder(added, theme))
+                        }),
+                )
+                .tint(color)
+                .when(track.explicit, Card::explicit)
+        };
+
+        div()
+            .id("queue-other")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .px_2()
+            .overflow_y_scroll()
+            .when_some(steered.track.as_ref(), |this, track| {
+                this.child(section_label("queue-now-playing", cx))
+                    .child(row("other-now", 0, track, theme.primary))
+            })
+            .when(!queued.is_empty(), |this| {
+                this.child(section_label("queue-next-in-queue", cx))
+                    .children(queued.iter().enumerate().map(|(at, upcoming)| {
+                        row("other-queued", at, &upcoming.track, theme.foreground)
+                    }))
+            })
+            .when(!following.is_empty(), |this| {
+                this.child(section_label("queue-up-next", cx)).children(
+                    following.iter().enumerate().map(|(at, upcoming)| {
+                        row("other-following", at, &upcoming.track, theme.foreground)
+                    }),
+                )
+            })
     }
 
     fn menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -1031,7 +1106,8 @@ impl Aside {
         Some(self.raised(perch, cx))
     }
 
-    /// Keeps floating controls above the workspace player bar or fullscreen transport.
+    /// Keeps floating controls above the workspace player bar and the strip over it, or above
+    /// the fullscreen transport.
     fn raised(&self, perch: Div, cx: &App) -> Div {
         match self.titled {
             true => match self.bottom(cx) > Pixels::ZERO {
@@ -1849,6 +1925,7 @@ impl Aside {
         let from = self.playing_from(cx);
         let drop_gap = self.drop_gap;
         let upcoming = sections.upcoming;
+        let manual = sections.manual;
         let audible = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
         let tail = (self.bottom(cx) / cx.theme().metrics.list_row).ceil() as usize;
 
@@ -1919,7 +1996,13 @@ impl Aside {
                                 _ => None,
                             };
                             let playing = audible && position == QueuePosition::Current;
-                            let look = RowLook { playing, drop_line };
+                            let queued =
+                                matches!(position, QueuePosition::Upcoming(at) if at < manual);
+                            let look = RowLook {
+                                playing,
+                                drop_line,
+                                queued,
+                            };
                             Self::row(found, index, position, revision, look, cx).into_any_element()
                         }
                         (Some(Slot::Track(_)), None) => div().into_any_element(),
@@ -1929,6 +2012,7 @@ impl Aside {
                     let look = RowLook {
                         playing: false,
                         drop_line: None,
+                        queued: matches!(position, QueuePosition::Upcoming(at) if at < manual),
                     };
                     let row = Self::row(found, index, position, revision, look, cx);
                     prefetch(row.into_any_element(), window, cx);
@@ -1950,6 +2034,7 @@ impl Render for Aside {
             upcoming: queue.upcoming().len(),
             similar: queue.similar().len(),
         };
+        let steered = self.playback.read(cx).steered(cx);
         let empty = sections.len() == 0;
         if !cx.has_active_drag() {
             self.drop_gap = None;
@@ -1994,28 +2079,57 @@ impl Render for Aside {
                     .when(self.tab == SideTab::Lyrics, |this| {
                         this.child(self.verses(window, cx)).child(self.witness())
                     })
-                    .when(self.tab == SideTab::Queue && empty, |this| {
-                        this.child(vacant(t!("queue-empty"), cx).flex_1())
-                    })
-                    .when(self.tab == SideTab::Queue && !empty, |this| {
-                        this.child(
-                            Scroller::listing("queue-rows", &self.scrollbar)
-                                .bottom_inset(self.bottom(cx))
-                                .when(effects(), |this| this.fade_edges(px(FADE * 0.5), px(FADE)))
-                                .child(
-                                    self.rows(sections, cx)
-                                        .px_2()
-                                        .pt(px(FADE * 0.5))
-                                        .track_scroll(&self.scroll)
-                                        .size_full(),
-                                ),
-                        )
-                    })
+                    .when_some(
+                        steered.as_ref().filter(|_| self.tab == SideTab::Queue),
+                        |this, steered| this.child(Self::other(steered, cx)),
+                    )
+                    .when(
+                        self.tab == SideTab::Queue && steered.is_none() && empty,
+                        |this| this.child(vacant(t!("queue-empty"), cx).flex_1()),
+                    )
+                    .when(
+                        self.tab == SideTab::Queue && steered.is_none() && !empty,
+                        |this| {
+                            this.child(
+                                Scroller::listing("queue-rows", &self.scrollbar)
+                                    .bottom_inset(self.bottom(cx))
+                                    .when(effects(), |this| {
+                                        this.fade_edges(px(FADE * 0.5), px(FADE))
+                                    })
+                                    .child(
+                                        self.rows(sections, cx)
+                                            .px_2()
+                                            .pt(px(FADE * 0.5))
+                                            .track_scroll(&self.scroll)
+                                            .size_full(),
+                                    ),
+                            )
+                        },
+                    )
                     .children(self.follow(cx))
                     .children(self.recall(sections, window, cx)),
             )
             .children(self.menu(cx))
     }
+}
+
+/// The part of a queue row that names who queued the song: a bullet, their round picture or
+/// initials, and "Added by NAME".
+fn adder(added: &Contributor, theme: ui::Theme) -> Div {
+    let face = theme.text(Text::Small) * ADDER_FACE;
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .child(BULLET)
+        .child(match &added.avatar {
+            Some(image) => Avatar::new(Some(image.clone()))
+                .size(face)
+                .into_any_element(),
+            None => Initials::new(added.name.clone(), face).into_any_element(),
+        })
+        .child(t!("queue-added-by", name = added.name.as_str()))
 }
 
 fn source_link(name: SharedString, to: Destination, cx: &App) -> impl IntoElement {

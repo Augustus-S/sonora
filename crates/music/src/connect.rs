@@ -85,8 +85,12 @@ pub enum Command {
     Volume(f32),
     Shuffle(bool),
     Repeat(RepeatMode),
-    /// Adds a track to the end of the hand-made queue.
-    Enqueue(String),
+    /// Adds a track to the end of the hand-made queue, with the id of whoever queued it when
+    /// the provider says who that is.
+    Enqueue {
+        id: String,
+        added_by: Option<String>,
+    },
     /// Plays a collection or a track list, from this app's side only.
     Start(Start),
     /// Another device took playback over, so this app has to let go of it.
@@ -128,6 +132,18 @@ pub struct Elsewhere {
     pub duration: Duration,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    /// The first tracks the device lists after the one it plays, in order.
+    pub upcoming: Vec<Listed>,
+}
+
+/// A track on the queue of a device other than this app.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub id: String,
+    /// Whether someone queued it by hand rather than it following from the album or playlist.
+    pub queued: bool,
+    /// What the provider goes by to name who queued it, when it says.
+    pub added_by: Option<String>,
 }
 
 impl Elsewhere {
@@ -151,6 +167,49 @@ pub struct Roster {
     pub elsewhere: Option<Elsewhere>,
 }
 
+/// One person in a group session.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct JamMember {
+    /// What the provider goes by to name the person, as removing them does.
+    pub id: String,
+    /// The account name, which songs they queue name them by when it differs from `id`.
+    pub username: String,
+    pub name: String,
+    /// The address of their picture, when they have one.
+    pub image: Option<String>,
+    /// Whether they own the session.
+    pub host: bool,
+    /// Whether they are the listener.
+    pub you: bool,
+}
+
+/// A group listening session the listener has joined, in which the host's playback plays here
+/// too.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Jam {
+    /// Everyone in it, the listener too, in the order the provider lists them.
+    pub members: Vec<JamMember>,
+    /// Whether the listener owns the session, which leaving ends for everyone.
+    pub owner: bool,
+    /// The link that invites others, when the listener owns the session.
+    pub link: Option<String>,
+}
+
+impl Jam {
+    /// The person who owns the session, when the provider says who that is.
+    pub fn host(&self) -> Option<&JamMember> {
+        self.members.iter().find(|member| member.host)
+    }
+}
+
+/// A group session a link names, read before the listener joins it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Invite {
+    /// The link to join it by, which needs no lookup of its own.
+    pub link: String,
+    pub jam: Jam,
+}
+
 pub enum Event {
     Command(Command),
     Roster(Roster),
@@ -160,6 +219,14 @@ pub enum Event {
         track: String,
         liked: bool,
     },
+    /// The group session changed: joined, updated, or `None` once it ended or was left.
+    Jam(Option<Jam>),
+    /// What `Connect::peek` found, or `None` when the link names no group session.
+    Invite(Option<Invite>),
+    /// Starting or joining a group session failed.
+    JamFailed,
+    /// Leaving or ending the group session failed. The session as it stands follows as a `Jam`.
+    LeaveFailed,
 }
 
 /// The connection to a provider's device network. Every call is fire-and-forget: what comes
@@ -189,4 +256,22 @@ pub trait Connect: Send + Sync {
     /// Sends a command to another device of the account. A `Start` it does not take comes back as
     /// `Event::Command(Command::Start)`, so it plays here instead.
     fn control(&self, device: &str, command: Command);
+
+    /// Joins a friend's group session from the link they shared. The session arrives as an
+    /// `Event::Jam` once it is joined.
+    fn join(&self, link: &str);
+
+    /// Starts a group session on this app, or reports the one already running. The session
+    /// arrives as an `Event::Jam` once it started.
+    fn start(&self);
+
+    /// Reads the group session a link names without joining it, so the listener can be asked.
+    /// What it found arrives as an `Event::Invite`.
+    fn peek(&self, link: &str);
+
+    /// Leaves the group session joined, or ends the one the listener started.
+    fn leave(&self);
+
+    /// Removes a member, by `JamMember::id`, from the group session the listener owns.
+    fn kick(&self, member: &str);
 }

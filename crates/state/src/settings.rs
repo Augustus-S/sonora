@@ -75,7 +75,6 @@ impl ConnectName {
     }
 }
 
-/// Which panel the right sidebar shows.
 /// What the Discord status calls itself. `Provider` asks the provider the track came from, so
 /// local files say Local Music rather than the provider's own name. `ArtistTitle` shows as
 /// "Artist - Title".
@@ -166,6 +165,7 @@ impl FullscreenControlsAutohide {
     }
 }
 
+/// Which panel the right sidebar shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SideTab {

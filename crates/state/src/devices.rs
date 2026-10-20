@@ -6,15 +6,15 @@ use anyhow::Result;
 use futures::future::join_all;
 use gpui::{App, Context, Entity, Task};
 use music::connect::{
-    Collection, Command, Connect, Device, Elsewhere, Event, Naming, NowPlaying, RepeatMode, Roster,
-    Start,
+    Collection, Command, Connect, Device, Elsewhere, Event, Invite, Jam, Naming, NowPlaying,
+    RepeatMode, Roster, Start,
 };
-use music::{MusicApi, Track};
+use music::{Contributor, MusicApi, Track};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
-    AppSettings, ConnectName, Io, Library, Origin, Playback, Queue, Repeat, Session, SessionEvent,
-    Whence, join,
+    AppSettings, ConnectName, Io, Library, Origin, Outcome, Playback, Queue, Repeat, Session,
+    SessionEvent, Toasts, Whence, join,
 };
 
 /// How far the position may stray from where steady playback would have put it before it is
@@ -47,6 +47,16 @@ pub struct Steered {
     pub duration: Duration,
     pub shuffle: bool,
     pub repeat: Repeat,
+    /// What it lists after that track, as far as it is read in.
+    pub upcoming: Vec<Upcoming>,
+}
+
+/// A track on the queue of the device that has playback.
+#[derive(Clone, Debug)]
+pub struct Upcoming {
+    pub track: Track,
+    /// Whether someone queued it by hand.
+    pub queued: bool,
 }
 
 /// The provider's device network as the app sees it: this app listed as a device, playback
@@ -65,8 +75,27 @@ pub struct Devices {
     /// The name last handed to the link.
     named: Option<Naming>,
     roster: Roster,
+    /// The group session the listener joined, if any.
+    jam: Option<Jam>,
+    /// The group session a link named, which the listener is being asked to join.
+    invite: Option<Invite>,
+    /// Whether the listener started a Jam that is not up yet, so its code shows once it is.
+    awaiting_code: bool,
+    /// Whether the code that opens the Jam's link on a phone is on show.
+    code: bool,
+    /// Whether the dialog that takes a Jam link to join is open.
+    joining: bool,
+    /// Whether a leave is on its way. The Jam is off screen already, so updates to it that come
+    /// in before the leave is through are dropped.
+    leaving: bool,
     /// The track playing on another device, once it is read in.
     remote: Option<Track>,
+    /// The tracks on that device's queue that are read in, by id.
+    listed: HashMap<String, Track>,
+    listing: Option<Task<()>>,
+    /// People who queued songs and are not in the Jam's member list, read from their profiles,
+    /// by the id the queue names them by.
+    people: HashMap<String, Arc<Contributor>>,
     /// Whether this app took playback, which only the listener pressing play does. A track
     /// restored paused at launch must not pull playback off another device.
     claimed: bool,
@@ -116,7 +145,16 @@ impl Devices {
             shown: false,
             named: None,
             roster: Roster::default(),
+            jam: None,
+            invite: None,
+            awaiting_code: false,
+            code: false,
+            joining: false,
+            leaving: false,
             remote: None,
+            listed: HashMap::new(),
+            people: HashMap::new(),
+            listing: None,
             claimed: false,
             sent: None,
             stamp: Instant::now(),
@@ -156,6 +194,98 @@ impl Devices {
         self.roster.elsewhere.as_ref()
     }
 
+    /// The group session the listener is in, if any.
+    pub fn jam(&self) -> Option<&Jam> {
+        self.jam.as_ref()
+    }
+
+    /// The group session a link named, while the listener is asked whether to join it.
+    pub fn invite(&self) -> Option<&Invite> {
+        self.invite.as_ref()
+    }
+
+    /// Looks up the group session a shared link names. It shows up on `invite()` to be accepted
+    /// or dismissed.
+    pub fn peek(&self, link: &str) {
+        if let Some(link_to) = &self.link {
+            link_to.peek(link);
+        }
+    }
+
+    /// Joins the group session the invite names.
+    pub fn accept(&mut self, cx: &mut Context<Self>) {
+        if let (Some(invite), Some(link)) = (self.invite.take(), &self.link) {
+            link.join(&invite.link);
+            self.leaving = false;
+        }
+        cx.notify();
+    }
+
+    /// Drops the invite without joining.
+    pub fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.invite = None;
+        cx.notify();
+    }
+
+    /// Removes a member, by `JamMember::id`, from the group session the listener owns.
+    pub fn kick(&self, member: &str) {
+        if let Some(link) = &self.link {
+            link.kick(member);
+        }
+    }
+
+    /// Starts a group session on this app. Its link to share is on `jam()` once it is up, and its
+    /// code is shown then.
+    pub fn start_jam(&mut self) {
+        if let Some(link) = &self.link {
+            link.start();
+            self.awaiting_code = true;
+            self.leaving = false;
+        }
+    }
+
+    /// Whether the code of the Jam's link is on show, which only a Jam with a link can have.
+    pub fn code_shown(&self) -> bool {
+        self.code && self.jam.as_ref().is_some_and(|jam| jam.link.is_some())
+    }
+
+    /// Shows or hides the code of the Jam's link.
+    pub fn show_code(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.code = shown;
+        cx.notify();
+    }
+
+    /// Whether the dialog that takes a Jam link to join is open.
+    pub fn join_shown(&self) -> bool {
+        self.joining
+    }
+
+    /// Opens or closes the dialog that takes a Jam link to join.
+    pub fn show_join(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.joining = shown;
+        cx.notify();
+    }
+
+    /// Leaves the group session, or ends it when the listener started it.
+    /// Takes the Jam off screen at once, says it is over, and asks the provider to follow. A
+    /// refusal brings it back with a toast.
+    pub fn leave(&mut self, cx: &mut Context<Self>) {
+        let Some(link) = &self.link else {
+            return;
+        };
+        link.leave();
+        let owned = self.jam.as_ref().is_some_and(|jam| jam.owner);
+        let said = match owned {
+            true => "toast-jam-ended",
+            false => "toast-jam-left",
+        };
+        Toasts::show(Outcome::Done, said, cx);
+        self.leaving = true;
+        self.jam = None;
+        self.code = false;
+        cx.notify();
+    }
+
     /// The track playing on that device, once it is read in.
     pub fn remote_track(&self) -> Option<&Track> {
         self.remote.as_ref()
@@ -184,7 +314,49 @@ impl Devices {
             duration,
             shuffle: elsewhere.shuffle,
             repeat: repeat_of(elsewhere.repeat),
+            upcoming: self.upcoming(elsewhere),
         })
+    }
+
+    /// What the other device lists after its track, as far as it is read in, with who queued each
+    /// track named by the Jam's members when it is one.
+    fn upcoming(&self, elsewhere: &Elsewhere) -> Vec<Upcoming> {
+        elsewhere
+            .upcoming
+            .iter()
+            .filter_map(|listed| {
+                let mut track = self.listed.get(&listed.id)?.clone();
+                track.added_by = listed.added_by.as_deref().map(|id| self.contributor(id));
+                Some(Upcoming {
+                    track,
+                    queued: listed.queued,
+                })
+            })
+            .collect()
+    }
+
+    /// The person a provider id names, by the Jam's members or a profile already read, when
+    /// either knows them.
+    fn known(&self, id: &str) -> Option<Arc<Contributor>> {
+        let member = self
+            .jam
+            .iter()
+            .flat_map(|jam| &jam.members)
+            .find(|member| member.id == id || member.username == id);
+        match member {
+            Some(member) => Some(Arc::new(Contributor {
+                id: member.id.clone(),
+                name: member.name.clone(),
+                avatar: member.image.clone(),
+            })),
+            None => self.people.get(id).cloned(),
+        }
+    }
+
+    /// The person a provider id names, or the id itself until a profile is read.
+    fn contributor(&self, id: &str) -> Arc<Contributor> {
+        self.known(id)
+            .unwrap_or_else(|| Arc::new(Contributor::unnamed(id)))
     }
 
     /// Moves playback onto this app from whichever device has it.
@@ -242,7 +414,16 @@ impl Devices {
         self.queuing.clear();
         self.liking.clear();
         self.roster = Roster::default();
+        self.jam = None;
+        self.invite = None;
+        self.awaiting_code = false;
+        self.code = false;
+        self.joining = false;
+        self.leaving = false;
         self.remote = None;
+        self.listed.clear();
+        self.people.clear();
+        self.listing = None;
         self.claimed = false;
         self.sent = None;
         self.shown = false;
@@ -286,7 +467,15 @@ impl Devices {
             self.claimed = false;
             self.sent = None;
             self.roster = Roster::default();
+            self.jam = None;
+            self.invite = None;
+            self.awaiting_code = false;
+            self.code = false;
+            self.joining = false;
+            self.leaving = false;
             self.remote = None;
+            self.listed.clear();
+            self.listing = None;
         }
         cx.notify();
     }
@@ -309,6 +498,49 @@ impl Devices {
             Event::Roster(roster) => self.set_roster(roster, cx),
             Event::Command(command) => self.run(command, cx),
             Event::Liked { track, liked } => self.liked(track, liked, cx),
+            Event::Jam(mut jam) => {
+                if self.leaving {
+                    if jam.is_some() {
+                        return;
+                    }
+                    self.leaving = false;
+                }
+                // an update to a Jam the listener owns can come without its link or its owner,
+                // which would take the code off screen and bring it back with its entrance played
+                // again, so both carry over from what was known
+                if let (Some(jam), Some(known)) = (jam.as_mut(), self.jam.as_ref())
+                    && known.owner
+                    && jam.link.is_none()
+                {
+                    jam.owner = true;
+                    jam.link = known.link.clone();
+                }
+                // a Jam the listener started shows its code once, as it comes up
+                if self.awaiting_code && jam.as_ref().is_some_and(|jam| jam.link.is_some()) {
+                    self.awaiting_code = false;
+                    self.code = true;
+                }
+                if jam.is_none() {
+                    self.code = false;
+                }
+                self.jam = jam;
+                cx.notify();
+            }
+            Event::Invite(invite) => {
+                if invite.is_none() {
+                    Toasts::show(Outcome::Failed, "toast-jam-unreadable", cx);
+                }
+                self.invite = invite;
+                cx.notify();
+            }
+            Event::LeaveFailed => {
+                self.leaving = false;
+                Toasts::show(Outcome::Failed, "toast-jam-leave-failed", cx);
+            }
+            Event::JamFailed => {
+                self.awaiting_code = false;
+                Toasts::show(Outcome::Failed, "toast-jam-failed", cx);
+            }
         }
     }
 
@@ -324,8 +556,71 @@ impl Devices {
                 self.fetching = Some(self.read_remote(client, id, cx));
             }
         }
+        if self.elsewhere().is_none() {
+            self.listed.clear();
+        }
+        self.list(cx);
         self.tick(cx);
         self.redraw(cx);
+    }
+
+    /// Reads in the tracks on the other device's queue that are not yet, one request after the
+    /// other so a long queue does not flood the provider. A change that comes meanwhile is taken
+    /// up when this one is done.
+    fn list(&mut self, cx: &mut Context<Self>) {
+        if self.listing.is_some() {
+            return;
+        }
+        let Some(client) = self.session.read(cx).client() else {
+            return;
+        };
+        let upcoming = self
+            .elsewhere()
+            .into_iter()
+            .flat_map(|elsewhere| &elsewhere.upcoming)
+            .collect::<Vec<_>>();
+        let missing = upcoming
+            .iter()
+            .filter(|listed| !self.listed.contains_key(&listed.id))
+            .map(|listed| listed.id.clone())
+            .collect::<Vec<_>>();
+        let mut strangers = upcoming
+            .iter()
+            .filter_map(|listed| listed.added_by.clone())
+            .filter(|adder| self.known(adder).is_none())
+            .collect::<Vec<_>>();
+        strangers.sort();
+        strangers.dedup();
+        if missing.is_empty() && strangers.is_empty() {
+            return;
+        }
+        let io = self.io.clone();
+        self.listing = Some(cx.spawn(async move |this, cx| {
+            let read = join(io.spawn(async move {
+                let mut read = Vec::new();
+                for id in missing {
+                    match client.track(&id).await {
+                        Ok(track) => read.push((id, track)),
+                        Err(error) => log::warn!("connect: cannot read a queued track: {error:#}"),
+                    }
+                }
+                let mut people = Vec::new();
+                for adder in strangers {
+                    people.extend(person(&*client, adder).await);
+                }
+                Ok((read, people))
+            }))
+            .await;
+            this.update(cx, |this, cx| {
+                this.listing = None;
+                let (read, people) = read.unwrap_or_default();
+                this.listed.extend(read);
+                this.people.extend(people);
+                this.list(cx);
+                this.redraw(cx);
+            })
+            .ok();
+        }));
     }
 
     /// Tells the views, and everything that follows playback such as the lyrics, that what the
@@ -405,7 +700,7 @@ impl Devices {
             Command::Repeat(mode) => {
                 self.here(cx, |playback, cx| playback.set_repeat(repeat_of(mode), cx))
             }
-            Command::Enqueue(id) => self.enqueue(id, cx),
+            Command::Enqueue { id, added_by } => self.enqueue(id, added_by, cx),
             Command::Start(start) => self.start(start, cx),
             Command::Released => {
                 // another device took over, so this one stops without calling playback back
@@ -416,19 +711,32 @@ impl Devices {
         }
     }
 
-    fn enqueue(&mut self, id: String, cx: &mut Context<Self>) {
+    fn enqueue(&mut self, id: String, added_by: Option<String>, cx: &mut Context<Self>) {
         let Some(client) = self.session.read(cx).client() else {
             return;
         };
         let io = self.io.clone();
         let key = id.clone();
         let slot = id.clone();
+        let stranger = added_by.clone().filter(|adder| self.known(adder).is_none());
         let task = cx.spawn(async move |this, cx| {
-            let found = join(io.spawn(async move { client.track(&id).await })).await;
+            let found = join(io.spawn(async move {
+                let track = client.track(&id).await?;
+                let person = match stranger {
+                    Some(adder) => person(&*client, adder).await,
+                    None => None,
+                };
+                Ok((track, person))
+            }))
+            .await;
             this.update(cx, |this, cx| {
                 this.queuing.remove(&key);
                 match found {
-                    Ok(track) => this.here(cx, |playback, cx| playback.enqueue(track, cx)),
+                    Ok((mut track, person)) => {
+                        this.people.extend(person);
+                        track.added_by = added_by.as_deref().map(|id| this.contributor(id));
+                        this.here(cx, |playback, cx| playback.enqueue(track, cx))
+                    }
                     Err(error) => log::warn!("connect: cannot queue {key}: {error:#}"),
                 }
             })
@@ -636,6 +944,24 @@ fn differs(a: &NowPlaying, b: &NowPlaying) -> &'static str {
 
 /// Reads in what a start names: the collection if it has one the track is in, otherwise the
 /// track and the tracks that follow it.
+/// The profile of someone a queue names by an id the Jam's members do not list, keyed by that id.
+async fn person(client: &dyn MusicApi, id: String) -> Option<(String, Arc<Contributor>)> {
+    match client.user(&id).await {
+        Ok(user) => Some((
+            id,
+            Arc::new(Contributor {
+                id: user.id,
+                name: user.name,
+                avatar: user.avatar,
+            }),
+        )),
+        Err(error) => {
+            log::warn!("connect: cannot read who queued a track: {error:#}");
+            None
+        }
+    }
+}
+
 async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
     let (tracks, origin) = match &start.collection {
         Some(Collection::Album(id)) => (client.album_tracks(id).await?, Some(Origin::album(id))),

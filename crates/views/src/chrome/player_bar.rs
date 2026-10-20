@@ -1,22 +1,26 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use router::{Destination, Link, navigate};
 use std::time::Duration;
 use ui::ActiveTheme as _;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Render, ScrollWheelEvent, SharedString,
+    AnyElement, Bounds, ClickEvent, Context, Entity, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString,
 };
-use gpui::{Window, div, px};
+use gpui::{Window, canvas, div, point, px};
 use i18n::t;
 use input::{ToggleFullscreen, ToggleLyrics, ToggleQueue};
 use state::{AppSettings, Playback, PlayerBarLayout, Queue, SideTab, Sonora};
 use ui::{
-    Artwork, Button, ExplicitBadge, InlineLink, InlineLinks, Popup, Room, Scrollbar, Scrubber,
-    ScrubberState, clock, tabular,
+    Artwork, Button, ExplicitBadge, HoverFade, InlineLink, InlineLinks, Motion, Popup, Room,
+    Scrollbar, Scrubber, ScrubberState, clock, tabular,
 };
 
 use crate::chrome::devices::DevicePicker;
+use crate::chrome::jam::{self, JamPeople};
 use crate::chrome::{Chrome, SidebarRight};
 use crate::shared::menus::ItemMenu;
 use crate::shared::transport::{NOTCH, fraction, like, moved, percent, transport, volume_icon};
@@ -26,12 +30,20 @@ const VOLUME_WIDTH: f32 = 110.;
 const VOLUME_TIGHT: f32 = 72.;
 const CLOCK_SHORT: f32 = 3.4;
 const CLOCK_LONG: f32 = 5.4;
-/// The height of the strip above the bar that names the other device playback is on.
-const ELSEWHERE: f32 = 28.;
-const ELSEWHERE_ICON: f32 = 14.;
+/// The height of the strip above the bar that names the Jam being listened to, or the other
+/// device playback is on.
+const BANNER: f32 = 32.;
+const BANNER_ICON: f32 = 14.;
+/// The width of a member's picture on the strip, and how many of them it shows before it counts
+/// the rest.
+const BANNER_FACE: f32 = 24.;
 /// How much of the popover colour the strip keeps over its blur, as a menu does, so what it
 /// covers does not read through the text.
-const ELSEWHERE_FILL: f32 = 0.75;
+const BANNER_FILL: f32 = 0.75;
+const BANNER_FACES: usize = 4;
+/// The space round the faces inside their pill, the same on every side so the pill's round ends
+/// stay concentric with the faces.
+const FACES_PAD: f32 = 2.;
 
 pub(crate) struct PlayerBar {
     playback: Entity<Playback>,
@@ -39,6 +51,9 @@ pub(crate) struct PlayerBar {
     settings: Entity<AppSettings>,
     track_menu: ItemMenu,
     devices: Entity<DevicePicker>,
+    people: Entity<JamPeople>,
+    /// Where the faces on the Jam's strip were last laid out, so the people list opens over them.
+    faces_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     context_menu: Option<(music::Track, Point<Pixels>)>,
     seek: ScrubberState,
     volume: ScrubberState,
@@ -62,13 +77,17 @@ impl PlayerBar {
 
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(me));
+        let people = cx.new(JamPeople::new);
+        let picker = cx.new(DevicePicker::new);
 
         Self {
             playback,
             queue,
             settings,
             track_menu: ItemMenu::new(playlist_scrollbar, cx),
-            devices: cx.new(DevicePicker::new),
+            devices: picker,
+            people,
+            faces_at: Rc::default(),
             context_menu: None,
             seek: ScrubberState::new("seek"),
             volume: ScrubberState::new("volume"),
@@ -432,10 +451,11 @@ impl PlayerBar {
     }
 
     /// How much of the content's bottom edge the strip above the bar covers right now, which
-    /// is nothing while no other device is being shown.
+    /// is nothing while no Jam or other device is being shown.
     pub(crate) fn strip(playback: &Playback, cx: &gpui::App) -> Pixels {
-        match playback.steered(cx).is_some() {
-            true => px(ELSEWHERE),
+        let devices = Sonora::global(cx).devices.read(cx);
+        match (devices.jam().is_some() && devices.available()) || playback.steered(cx).is_some() {
+            true => px(BANNER),
             false => Pixels::ZERO,
         }
     }
@@ -667,19 +687,24 @@ impl Render for PlayerBar {
                 ),
         };
 
+        // the faces on the Jam's strip spread apart under the pointer
+        let faces =
+            window.use_keyed_state("jam-faces", cx, |_, _| HoverFade::new(Motion::Quick.span()));
+        let spread = faces.update(cx, |faces, cx| faces.level(window, cx));
         let frosting = ui::blurring(cx);
         let fill = match frosting {
-            true => theme.popover.opacity(ELSEWHERE_FILL),
+            true => theme.popover.opacity(BANNER_FILL),
             false => theme.popover,
         };
-        let elsewhere = self.playback.read(cx).steered(cx).map(|steered| {
-            let devices = Sonora::global(cx).devices.clone();
+        let devices = Sonora::global(cx).devices.read(cx);
+        let strip = |id: &'static str| {
             div()
+                .id(id)
                 .absolute()
                 .left_0()
                 .bottom(height)
                 .w_full()
-                .h(px(ELSEWHERE))
+                .h(px(BANNER))
                 .px_5()
                 .flex()
                 .items_center()
@@ -688,32 +713,139 @@ impl Render for PlayerBar {
                 .text_color(theme.foreground)
                 .bg(fill)
                 .when(frosting, ui::frost)
+        };
+        let banner = devices.jam().filter(|_| devices.available()).map(|jam| {
+            let text = match jam::host_name(jam) {
+                Some(host) => t!("devices-jam-banner", host = host),
+                None => t!("devices-jam-banner-anonymous"),
+            };
+            // The people list rises from the strip's top edge, over the faces that open it.
+            let top = window.viewport_size().height - height - px(BANNER);
+            let controls = Sonora::global(cx).devices.clone();
+            let anchor = self.faces_at.clone();
+            let measured = self.faces_at.clone();
+            strip("jam-banner")
+                .occlude()
                 .child(
                     gpui::svg()
-                        .path(icons::path("icons/monitor-speaker.svg"))
-                        .size(px(ELSEWHERE_ICON))
+                        .path(icons::path("icons/users-round-collaboration.svg"))
+                        .size(px(BANNER_ICON))
                         .flex_none()
                         .text_color(theme.foreground),
                 )
+                .child(div().min_w_0().truncate().child(text))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(t!("devices-elsewhere-banner", device = steered.device.name)),
+                        .id("jam-people-open")
+                        .relative()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .p(ui::snapped(px(FACES_PAD), window))
+                        .rounded_full()
+                        .cursor_pointer()
+                        .bg(theme.secondary_hover.opacity(spread))
+                        .on_hover({
+                            let faces = faces.clone();
+                            move |hovered, window, cx| {
+                                faces.update(cx, |faces, _| faces.set(*hovered));
+                                window.refresh();
+                            }
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let left = anchor.get().map_or(Pixels::ZERO, |bounds| bounds.left());
+                            this.people
+                                .update(cx, |people, cx| people.show(point(left, top), cx));
+                        }))
+                        .child(jam::faces(
+                            &jam.members,
+                            BANNER_FACES,
+                            px(BANNER_FACE),
+                            spread,
+                            window,
+                            theme,
+                        ))
+                        .child(
+                            canvas(
+                                move |bounds, _, _| measured.set(Some(bounds)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        ),
                 )
+                // the faces follow the Jam's name, and its buttons keep to the right edge
+                .child(div().flex_1())
+                .when_some(jam.link.clone(), |this, link| {
+                    this.child(
+                        Button::new("jam-code")
+                            .ghost()
+                            .small()
+                            .icon("icons/qr-code.svg")
+                            .tooltip_above("devices-jam-code")
+                            .on_click({
+                                let devices = controls.clone();
+                                move |_, _, cx| {
+                                    devices.update(cx, |devices, cx| devices.show_code(true, cx))
+                                }
+                            }),
+                    )
+                    .child(
+                        Button::new("jam-copy")
+                            .ghost()
+                            .small()
+                            .icon("icons/copy.svg")
+                            .tooltip_above("devices-jam-copy")
+                            .on_click(move |_, _, cx| jam::copy_link(&link, cx)),
+                    )
+                })
                 .child(
-                    Button::new("elsewhere-here")
+                    Button::new("jam-leave")
                         .ghost()
                         .small()
-                        .label(t!("devices-elsewhere-here"))
-                        .on_click(move |_, _, cx| devices.read(cx).transfer_here()),
+                        .icon("icons/log-out.svg")
+                        .label(match jam.owner {
+                            true => t!("devices-jam-end"),
+                            false => t!("devices-jam-leave"),
+                        })
+                        .on_click(move |_, _, cx| {
+                            controls.update(cx, |devices, cx| devices.leave(cx))
+                        }),
                 )
+        });
+        // a Jam's strip names the device already, so the plain one is for when there is no Jam
+        let banner = banner.or_else(|| {
+            self.playback.read(cx).steered(cx).map(|steered| {
+                let devices = Sonora::global(cx).devices.clone();
+                strip("elsewhere-banner")
+                    .child(
+                        gpui::svg()
+                            .path(icons::path("icons/monitor-speaker.svg"))
+                            .size(px(BANNER_ICON))
+                            .flex_none()
+                            .text_color(theme.foreground),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(t!("devices-elsewhere-banner", device = steered.device.name)),
+                    )
+                    .child(
+                        Button::new("elsewhere-here")
+                            .ghost()
+                            .small()
+                            .label(t!("devices-elsewhere-here"))
+                            .on_click(move |_, _, cx| devices.read(cx).transfer_here()),
+                    )
+            })
         });
 
         content
             .relative()
-            .when_some(elsewhere, |this, banner| this.child(banner))
+            .when_some(banner, |this, banner| this.child(banner))
             .when_some(context_menu, |this, menu| this.child(menu))
+            .child(self.people.clone())
     }
 }

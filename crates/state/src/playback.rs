@@ -1769,6 +1769,7 @@ impl Playback {
         self.queue.update(cx, |queue, cx| queue.set_shuffle(on, cx));
     }
 
+    /// Flips shuffle from what the player shows, which is the other device's when it has playback.
     pub fn toggle_shuffle(&mut self, cx: &mut Context<Self>) {
         self.set_shuffle(!self.shown_shuffle(cx), cx);
     }

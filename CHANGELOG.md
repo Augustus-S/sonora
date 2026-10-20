@@ -33,6 +33,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already shows Spotify's own.
 - While Show as a Spotify device is on, a song you like or unlike in Spotify's other apps
   updates its heart in Sonora right away, without a restart.
+- While Show as a Spotify device is on, pick Join a Jam in the devices menu, paste a friend's
+  link and confirm to join. A strip above the player bar shows who is in the Jam. Click their
+  faces to see everyone and open their profiles.
+- The devices menu can start a Jam, copy its link to share, and end it. Starting one shows a
+  code others can scan to join. As host you can remove people from the list.
 - You can undo clearing the queue or removing songs from it. Press Undo on the toast that
   appears.
 - Adding a whole album, playlist or artist to the queue shows that it is on its way, and

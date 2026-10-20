@@ -7,11 +7,14 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt as _;
-use http::{HeaderMap, HeaderValue, Method, header::CONTENT_TYPE};
+use http::{
+    HeaderMap, HeaderValue, Method,
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+};
 use librespot_core::dealer::manager::{BoxedStream, BoxedStreamResult, Reply, RequestReply};
 use librespot_core::dealer::protocol::{
     Command as Wire, Message, PayloadValue, PlayCommand, TransferOptions,
@@ -30,6 +33,7 @@ use librespot_protocol::media::AudioQuality;
 use librespot_protocol::player::{
     ContextIndex, ContextPlayerOptions, PlayOrigin, PlayerState, ProvidedTrack, Suppressions,
 };
+use librespot_protocol::social_connect_v2::Session as SocialSession;
 use librespot_protocol::transfer_state::TransferState;
 use protobuf::rt::WireType;
 use protobuf::{CodedInputStream, EnumOrUnknown, Message as _, MessageField};
@@ -37,8 +41,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::Instant;
 
 use crate::connect::{
-    Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Naming, NowPlaying,
-    RepeatMode, Roster, Start,
+    Collection, Command, Connect, Device, DeviceKind, Elsewhere, Event, Invite, Jam, JamMember,
+    Listed, Naming, NowPlaying, RepeatMode, Roster, Start,
 };
 
 const DEVICE_NAME: &str = "Sonora";
@@ -54,6 +58,10 @@ const ACK_DELAY: Duration = Duration::from_millis(600);
 const CLAIM_GRACE: Duration = Duration::from_secs(3);
 /// The most upcoming tracks a start carries over from the device that sent it.
 const CARRIED: usize = 40;
+/// The most tracks of another device's queue that are read.
+const LISTED: usize = 25;
+/// The metadata keys a queued track may name the person who queued it under.
+const ADDERS: [&str; 4] = ["added_by", "added_by_username", "adder", "queued_by"];
 /// How long a new name settles before it is put, so a name typed in is put once.
 const RENAME_DELAY: Duration = Duration::from_millis(800);
 /// The least time between two puts of the state. A change that comes sooner waits for the next
@@ -63,6 +71,14 @@ const PUT_GAP: Duration = Duration::from_secs(1);
 /// after being refused again and again.
 const BACKOFF_FIRST: Duration = Duration::from_secs(2);
 const BACKOFF_LAST: Duration = Duration::from_secs(60);
+
+/// How long a shared short link may take to answer before it is given up on.
+const LINK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How much of a short link's page is read when looking for the session in it.
+const LINK_PAGE_LIMIT: usize = 256 * 1024;
+
+/// Where a Jam's token goes to make a link that opens in Spotify's apps and on the web.
+const INVITE: &str = "https://open.spotify.com/socialsession/";
 const VOLUME_STEPS: u32 = 64;
 /// The protobuf tags of a collection update: its items, and in each its kind, raw id and whether
 /// it was removed.
@@ -70,6 +86,14 @@ const ITEM: u32 = 1 << 3 | 2;
 const ITEM_KIND: u32 = 1 << 3;
 const ITEM_ID: u32 = 2 << 3 | 2;
 const ITEM_REMOVED: u32 = 6 << 3;
+/// The dealer topic that reports changes to the group session the listener is in.
+const JAM_TOPIC: &str = "social-connect/v2/session_update";
+const JAM_JOIN: &str = "/social-connect/v2/sessions/join";
+const JAM_CURRENT: &str = "/social-connect/v2/sessions/current";
+const JAM_LEAVE: &str = "/social-connect/v2/sessions/leave";
+const JAM_START: &str = "/social-connect/v2/sessions/current_or_new";
+const JAM_INFO: &str = "/social-connect/v2/sessions/info";
+const JAM_END: &str = "/social-connect/v3/sessions";
 
 enum Input {
     Enable(bool),
@@ -77,6 +101,11 @@ enum Input {
     Publish(Option<NowPlaying>),
     Transfer(String),
     Control(String, Command),
+    Join(String),
+    Peek(String),
+    Start,
+    Leave,
+    Kick(String),
 }
 
 /// The handle the app holds. The work happens on a task of the session's runtime, which ends
@@ -133,6 +162,26 @@ impl Connect for Connection {
             .send(Input::Control(device.to_owned(), command))
             .ok();
     }
+
+    fn join(&self, link: &str) {
+        self.inputs.send(Input::Join(link.to_owned())).ok();
+    }
+
+    fn start(&self) {
+        self.inputs.send(Input::Start).ok();
+    }
+
+    fn peek(&self, link: &str) {
+        self.inputs.send(Input::Peek(link.to_owned())).ok();
+    }
+
+    fn leave(&self) {
+        self.inputs.send(Input::Leave).ok();
+    }
+
+    fn kick(&self, member: &str) {
+        self.inputs.send(Input::Kick(member.to_owned())).ok();
+    }
 }
 
 /// What the dealer hands the worker: the connection id Spotify gave this session, changes to the
@@ -143,6 +192,7 @@ struct Streams {
     volumes: BoxedStreamResult<SetVolumeCommand>,
     commands: BoxedStream<RequestReply>,
     likes: BoxedStreamResult<Vec<(String, bool)>>,
+    jams: BoxedStreamResult<Message>,
 }
 
 impl Streams {
@@ -154,6 +204,7 @@ impl Streams {
             volumes: Box::pin(futures::stream::pending()),
             commands: Box::pin(futures::stream::pending()),
             likes: Box::pin(futures::stream::pending()),
+            jams: Box::pin(futures::stream::pending()),
         }
     }
 
@@ -180,6 +231,7 @@ impl Streams {
                     _ => Ok(Vec::new()),
                 }
             })?,
+            jams: dealer.listen_for(JAM_TOPIC, Ok)?,
         })
     }
 }
@@ -272,6 +324,11 @@ impl Worker {
                     Some(Err(error)) => log::warn!("connect: bad volume request: {error}"),
                     None => self.streams.volumes = Box::pin(futures::stream::pending()),
                 },
+                update = self.streams.jams.next() => match update {
+                    Some(Ok(update)) => self.jam_update(update),
+                    Some(Err(error)) => log::warn!("connect: bad jam update: {error}"),
+                    None => self.streams.jams = Box::pin(futures::stream::pending()),
+                },
                 request = self.streams.commands.next() => match request {
                     Some(request) => self.request(request),
                     None => self.streams.commands = Box::pin(futures::stream::pending()),
@@ -307,6 +364,11 @@ impl Worker {
             }
             Input::Publish(now) => self.publish(now).await,
             Input::Transfer(to) => self.transfer(to).await,
+            Input::Join(link) => self.join(&link).await,
+            Input::Peek(link) => self.peek(&link).await,
+            Input::Start => self.start_jam().await,
+            Input::Leave => self.leave().await,
+            Input::Kick(member) => self.kick(&member).await,
             Input::Control(device, command) => {
                 let start = match &command {
                     Command::Start(start) => Some(start.clone()),
@@ -320,6 +382,273 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// Joins the group session a shared link names, as a listener on this device. Spotify then
+    /// moves the host's playback here the way it does for any transfer.
+    async fn join(&mut self, link: &str) {
+        if !self.enabled || !self.connected {
+            return log::warn!("connect: cannot join a jam while not listed as a device");
+        }
+        let Some(token) = jam_token(link).await else {
+            return log::warn!("connect: no jam token in the link");
+        };
+        let endpoint = format!(
+            "{JAM_JOIN}/{token}?playback_control=listen_and_control&join_type=deeplinking&local_device_id={}",
+            self.session.device_id()
+        );
+        let answer = self
+            .session
+            .spclient()
+            .request(
+                &Method::POST,
+                &endpoint,
+                Some(jam_headers(&self.session, true)),
+                None,
+            )
+            .await;
+        match answer {
+            Ok(body) => {
+                log::info!("connect: joined a jam");
+                // the update that follows has the members, and this has them too when it reads
+                if let Some(read) = read_session(&body, &self.session.username()) {
+                    self.out.send(Event::Jam(Some(read.jam))).ok();
+                }
+            }
+            Err(error) => {
+                log::warn!("connect: cannot join the jam: {error}");
+                self.out.send(Event::JamFailed).ok();
+            }
+        }
+    }
+
+    /// The group session the account is in now, if any.
+    async fn current_jam(session: &Session) -> Result<Option<Jam>, Error> {
+        let jam = Self::current_session(session).await?.map(|read| read.jam);
+        match &jam {
+            Some(jam) => log::info!("connect: in a jam of {}", jam.members.len()),
+            None => log::info!("connect: not in a jam"),
+        }
+        Ok(jam)
+    }
+
+    /// The group session the account is in. Spotify answers 404 when there is none, which is
+    /// `Ok(None)`, unlike a request that failed.
+    async fn current_session(session: &Session) -> Result<Option<Read>, Error> {
+        let answer = session
+            .spclient()
+            .request(
+                &Method::GET,
+                JAM_CURRENT,
+                Some(jam_headers(session, false)),
+                None,
+            )
+            .await;
+        match answer {
+            Ok(body) => read_session(&body, &session.username())
+                .map(Some)
+                .ok_or_else(|| Error::data_loss("the jam answer cannot be read")),
+            Err(error) if error.kind == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reads the group session a link names without joining it, and says what it found in an
+    /// `Event::Invite`, which is `None` when the link names none or it cannot be read.
+    async fn peek(&mut self, link: &str) {
+        let found = self.peeked(link).await;
+        self.out.send(Event::Invite(found)).ok();
+    }
+
+    async fn peeked(&mut self, link: &str) -> Option<Invite> {
+        if !self.enabled || !self.connected {
+            log::warn!("connect: cannot look up a jam while not listed as a device");
+            return None;
+        }
+        let Some(token) = jam_token(link).await else {
+            log::warn!("connect: no jam token in the link");
+            return None;
+        };
+        let body = self
+            .session
+            .spclient()
+            .request(
+                &Method::GET,
+                &format!("{JAM_INFO}/{token}"),
+                Some(jam_headers(&self.session, false)),
+                None,
+            )
+            .await
+            .inspect_err(|error| log::warn!("connect: cannot look up the jam: {error}"))
+            .ok()?;
+        let read = read_session(&body, &self.session.username())?;
+        Some(Invite {
+            link: format!("{INVITE}{token}"),
+            jam: read.jam,
+        })
+    }
+
+    /// Starts a group session with this device as the one playing, or finds the one that runs.
+    /// The link to invite others with comes back in the `Event::Jam`.
+    async fn start_jam(&mut self) {
+        if !self.enabled || !self.connected {
+            return log::warn!("connect: cannot start a jam while not listed as a device");
+        }
+        // activate is what the desktop app asks for, and what has the session show in the others
+        let endpoint = format!(
+            "{JAM_START}?activate=true&local_device_id={}&type=REMOTE",
+            self.session.device_id()
+        );
+        let answer = self
+            .session
+            .spclient()
+            .request(
+                &Method::GET,
+                &endpoint,
+                Some(jam_headers(&self.session, false)),
+                None,
+            )
+            .await;
+        match answer {
+            Ok(body) => match read_session(&body, &self.session.username()) {
+                Some(read) => {
+                    log::info!("connect: started a jam, link {}", read.jam.link.is_some());
+                    self.out.send(Event::Jam(Some(read.jam))).ok();
+                }
+                None => {
+                    log::warn!("connect: the jam that started cannot be read");
+                    self.out.send(Event::JamFailed).ok();
+                }
+            },
+            Err(error) => {
+                log::warn!("connect: cannot start a jam: {error}");
+                self.out.send(Event::JamFailed).ok();
+            }
+        }
+    }
+
+    /// Leaves the group session. The owner ends it for everyone instead, since leaving would
+    /// only hand it on. A session that cannot be read is left as it is, since it may be owned.
+    async fn leave(&mut self) {
+        let owned = match Self::current_session(&self.session).await {
+            Ok(Some(read)) if read.owner && is_path_id(&read.id, "_-") => Some(read.id),
+            Ok(_) => None,
+            Err(error) => {
+                log::warn!("connect: cannot read the jam to leave it: {error}");
+                return self.leave_failed().await;
+            }
+        };
+        let answer = match owned {
+            Some(id) => {
+                let endpoint = format!(
+                    "{JAM_END}/{id}?local_device_id={}",
+                    self.session.device_id()
+                );
+                self.session
+                    .spclient()
+                    .request(
+                        &Method::DELETE,
+                        &endpoint,
+                        Some(jam_headers(&self.session, false)),
+                        None,
+                    )
+                    .await
+            }
+            None => {
+                self.session
+                    .spclient()
+                    .request(
+                        &Method::POST,
+                        JAM_LEAVE,
+                        Some(jam_headers(&self.session, true)),
+                        None,
+                    )
+                    .await
+            }
+        };
+        match answer {
+            Ok(_) => {
+                self.out.send(Event::Jam(None)).ok();
+            }
+            Err(error) => {
+                log::warn!("connect: cannot leave the jam: {error}");
+                self.leave_failed().await;
+            }
+        }
+    }
+
+    /// Says a leave did not go through, and then what the group session is now, since the app
+    /// takes the Jam off screen before it asks.
+    async fn leave_failed(&mut self) {
+        self.out.send(Event::LeaveFailed).ok();
+        if let Ok(jam) = Self::current_jam(&self.session).await {
+            self.out.send(Event::Jam(jam)).ok();
+        }
+    }
+
+    /// Removes `member` from the group session, which only its owner may do, and then reports
+    /// who is left without waiting for the dealer to.
+    async fn kick(&mut self, member: &str) {
+        // the id goes into the path, so nothing else than what an id is made of is let through
+        if !is_path_id(member, "._-") {
+            return log::warn!("connect: not a member id to remove");
+        }
+        let id = match Self::current_session(&self.session).await {
+            Ok(Some(read)) if read.owner && is_path_id(&read.id, "_-") => read.id,
+            Ok(_) => return log::warn!("connect: only the owner of a jam can remove a member"),
+            Err(error) => {
+                return log::warn!("connect: cannot read the jam to remove from: {error}");
+            }
+        };
+        let endpoint = format!(
+            "{JAM_END}/{id}/member/{member}/kick?local_device_id={}",
+            self.session.device_id()
+        );
+        let answer = self
+            .session
+            .spclient()
+            .request(
+                &Method::POST,
+                &endpoint,
+                Some(jam_headers(&self.session, true)),
+                None,
+            )
+            .await;
+        match answer {
+            Ok(_) => {
+                log::info!("connect: removed a member from the jam");
+                if let Ok(Some(read)) = Self::current_session(&self.session).await {
+                    self.out.send(Event::Jam(Some(read.jam))).ok();
+                }
+            }
+            Err(error) => log::warn!("connect: cannot remove the member: {error}"),
+        }
+    }
+
+    /// Reads a change to the group session. The payload is read as loose JSON, since a value
+    /// Spotify added since the proto was cut would fail a typed parse and lose the update.
+    fn jam_update(&self, message: Message) {
+        let PayloadValue::Json(json) = message.payload else {
+            return;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&json) else {
+            return log::warn!("connect: unreadable jam update");
+        };
+        let reason = json.get("reason").and_then(|reason| reason.as_str());
+        log::info!("connect: jam update {reason:?}");
+        let ended = matches!(
+            reason,
+            Some("SESSION_DELETED" | "YOU_LEFT" | "YOU_WERE_KICKED")
+        );
+        let jam = json
+            .get("session")
+            .and_then(|_| session_of(&json, &self.session.username()));
+        match (ended, jam) {
+            (true, _) => self.out.send(Event::Jam(None)).ok(),
+            // an update with no session says nothing about who is in it
+            (false, Some(jam)) => self.out.send(Event::Jam(Some(jam))).ok(),
+            (false, None) => None,
+        };
     }
 
     /// Moves playback to `to`. This app takes it the way librespot does, by naming itself on both
@@ -438,6 +767,13 @@ impl Worker {
             roster.devices.len()
         );
         self.out.send(Event::Roster(roster)).ok();
+        // the listener may have joined a jam from another app before this one was listed
+        match Self::current_jam(&self.session).await {
+            Ok(jam) => {
+                self.out.send(Event::Jam(jam)).ok();
+            }
+            Err(error) => log::warn!("connect: cannot read the jam: {error}"),
+        }
         // something may have been playing before the device was listed
         if self.now.is_some() {
             self.sync(None).await;
@@ -513,14 +849,19 @@ impl Worker {
         self.want_put(reason).await;
     }
 
-    /// Asks for the state to be put. Puts are spaced out, and held back for longer each time
-    /// Spotify refuses one for coming too often. Whatever the wait, the put that goes out
-    /// carries the state as it is then, so the changes in between cost nothing.
-    async fn want_put(&mut self, reason: PutStateReason) {
+    /// Keeps `reason` as the pending put unless one that matters more is already held.
+    fn hold(&mut self, reason: PutStateReason) {
         self.pending = Some(match self.pending {
             Some(held) if rank(held) > rank(reason) => held,
             _ => reason,
         });
+    }
+
+    /// Asks for the state to be put. Puts are spaced out, and held back for longer each time
+    /// Spotify refuses one for coming too often. Whatever the wait, the put that goes out
+    /// carries the state as it is then, so the changes in between cost nothing.
+    async fn want_put(&mut self, reason: PutStateReason) {
+        self.hold(reason);
 
         let now = Instant::now();
         let due = [self.last_put.map(|at| at + PUT_GAP), self.blocked_until]
@@ -564,10 +905,7 @@ impl Worker {
                 let until = Instant::now() + self.backoff;
                 self.blocked_until = Some(until);
                 self.flush_at = Some(until);
-                self.pending = Some(match self.pending {
-                    Some(held) if rank(held) > rank(reason) => held,
-                    _ => reason,
-                });
+                self.hold(reason);
                 log::warn!(
                     "connect: Spotify asked for fewer state updates, waiting {}s",
                     self.backoff.as_secs()
@@ -739,6 +1077,7 @@ impl Worker {
                         (false, true) => RepeatMode::Context,
                         (false, false) => RepeatMode::Off,
                     },
+                    upcoming: listed(&state.next_tracks),
                 }
             });
         Roster { devices, elsewhere }
@@ -751,6 +1090,7 @@ impl Worker {
 
     fn request(&mut self, (request, reply): RequestReply) {
         self.last_command = (request.message_id, request.sent_by_device_id.clone());
+        log::debug!("connect: asked, {}", request.command);
         if let Wire::Play(play) = request.command {
             self.play(*play);
             reply.send(Reply::Success).ok();
@@ -828,13 +1168,25 @@ impl Worker {
                 }
                 commands
             }
-            Wire::AddToQueue(add) => track_id(&add.track.uri)
-                .map(Command::Enqueue)
-                .into_iter()
-                .collect(),
+            Wire::AddToQueue(add) => {
+                log::debug!(
+                    "connect: a track was queued, it carries {:?}",
+                    keys(&add.track)
+                );
+                track_id(&add.track.uri)
+                    .map(|id| Command::Enqueue {
+                        id,
+                        added_by: adder(&add.track),
+                    })
+                    .into_iter()
+                    .collect()
+            }
             // the app keeps its own queue, which it reports back with the next state
             Wire::SetQueue(_) | Wire::UpdateContext(_) => Vec::new(),
-            Wire::Unknown(_) => return None,
+            Wire::Unknown(value) => {
+                describe_unknown(&value);
+                return None;
+            }
         })
     }
 
@@ -866,6 +1218,7 @@ async fn control(session: Session, device: &str, command: Command) -> bool {
         ),
         Command::Start(start) => {
             let Some(command) = play_command(&start, &session.username()) else {
+                log::warn!("connect: nothing to send for {what}");
                 return true;
             };
             (
@@ -876,6 +1229,7 @@ async fn control(session: Session, device: &str, command: Command) -> bool {
         }
         command => {
             let Some(command) = wire_command(&command) else {
+                log::warn!("connect: nothing to send for {what}");
                 return true;
             };
             (
@@ -900,6 +1254,242 @@ async fn control(session: Session, device: &str, command: Command) -> bool {
             false
         }
     }
+}
+
+/// The headers of a POST with no body, which Spotify wants to see a length of 0 on.
+fn empty_body() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
+    headers
+}
+
+/// The token of a group session in a shared link. Only an https `spotify.link` short link is
+/// fetched, and then its address or its page names the session; no other text makes the app
+/// fetch anything.
+async fn jam_token(link: &str) -> Option<String> {
+    let link = link.trim();
+    let short = reqwest::Url::parse(link)
+        .ok()
+        .filter(|url| url.scheme() == "https" && url.host_str() == Some("spotify.link"));
+    let Some(short) = short else {
+        return token_in(link);
+    };
+    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(LINK_TIMEOUT)
+                .build()
+                .ok()
+        })
+        .as_ref()?;
+    let mut response = client.get(short).send().await.ok()?;
+    if let Some(token) = token_in(response.url().as_str()) {
+        return Some(token);
+    }
+    // a short link sometimes answers with a page that names the session instead of redirecting,
+    // and only the start of a page is read
+    let mut page = Vec::new();
+    while page.len() < LINK_PAGE_LIMIT {
+        match response.chunk().await.ok()? {
+            Some(chunk) => page.extend_from_slice(&chunk),
+            None => break,
+        }
+    }
+    token_in(&String::from_utf8_lossy(&page))
+}
+
+/// The token that follows `socialsession/` in a link or a page, or `sessions/join/` in the
+/// address Spotify itself gives a session. It is letters and digits only, since it goes into a
+/// request.
+fn token_in(text: &str) -> Option<String> {
+    let rest = ["socialsession/", "sessions/join/"]
+        .into_iter()
+        .find_map(|marker| text.split(marker).nth(1))?;
+    let token = rest.split(|c: char| !c.is_ascii_alphanumeric()).next()?;
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
+/// The link that invites others to the session at `url`, which Spotify gives as an address only
+/// its own apps open.
+fn invite(url: &str) -> Option<String> {
+    match token_in(url) {
+        Some(token) => Some(format!("{INVITE}{token}")),
+        None => url.starts_with("https://").then(|| url.to_owned()),
+    }
+}
+
+/// A group session as Spotify answers for it: what the app shows, the id to end it by, and
+/// whether the account owns it.
+struct Read {
+    jam: Jam,
+    id: String,
+    owner: bool,
+}
+
+/// Reads a group session from an answer, which is JSON or a protobuf `Session`.
+fn read_session(body: &[u8], own: &str) -> Option<Read> {
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) {
+        let session = json.get("session").unwrap_or(&json);
+        return Some(Read {
+            jam: session_of(&json, own)?,
+            id: key_of(session, ["session_id", "sessionId"])?
+                .as_str()?
+                .to_owned(),
+            owner: is_owner(session),
+        });
+    }
+    let session = SocialSession::parse_from_bytes(body).ok()?;
+    // an empty answer parses as a session with nothing in it
+    if session.session_id.is_empty() {
+        return None;
+    }
+    let link = session
+        .is_session_owner
+        .then(|| invite(&session.join_session_url))
+        .flatten();
+    let listed = session.session_members.iter().map(|member| {
+        let image = match member.image_url.is_empty() {
+            true => &member.large_image_url,
+            false => &member.image_url,
+        };
+        [&member.id, &member.username, &member.display_name, image].map(String::as_str)
+    });
+    Some(Read {
+        jam: Jam {
+            members: members_of(
+                listed,
+                &session.session_owner_id,
+                session.is_session_owner,
+                own,
+            ),
+            owner: session.is_session_owner,
+            link,
+        },
+        id: session.session_id,
+        owner: session.is_session_owner,
+    })
+}
+
+/// The people in a session, from what it lists of each as `[id, username, name, image]`.
+/// `owner` is the id of whoever owns the session when it says, and `owned` whether the account
+/// `own` does, which makes the account the host when no id names one.
+fn members_of<'a>(
+    listed: impl Iterator<Item = [&'a str; 4]>,
+    owner: &str,
+    owned: bool,
+    own: &str,
+) -> Vec<JamMember> {
+    let mut members = listed
+        .filter_map(|[id, username, name, image]| {
+            let id = [id, username].into_iter().find(|id| !id.is_empty())?;
+            Some(JamMember {
+                id: id.to_owned(),
+                username: username.to_owned(),
+                name: [name, username, id]
+                    .into_iter()
+                    .find(|name| !name.is_empty())?
+                    .to_owned(),
+                image: image_of(image),
+                host: !owner.is_empty() && (id == owner || username == owner),
+                you: id == own || username == own,
+            })
+        })
+        .collect::<Vec<_>>();
+    if owned
+        && !members.iter().any(|member| member.host)
+        && let Some(you) = members.iter_mut().find(|member| member.you)
+    {
+        you.host = true;
+    }
+    members
+}
+
+/// The address of a picture Spotify names either by a link or by an `spotify:image:` uri.
+fn image_of(image: &str) -> Option<String> {
+    match image.strip_prefix("spotify:image:") {
+        Some(id) => Some(format!("https://i.scdn.co/image/{id}")),
+        None => image.starts_with("https://").then(|| image.to_owned()),
+    }
+}
+
+/// The text under the first of `keys` in a JSON object, or nothing.
+fn text_of<'a>(object: &'a serde_json::Value, keys: [&str; 2]) -> &'a str {
+    key_of(object, keys)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+}
+
+/// The value under the first of `keys` a JSON object has, since the case of the keys varies.
+fn key_of<'a>(object: &'a serde_json::Value, keys: [&str; 2]) -> Option<&'a serde_json::Value> {
+    keys.into_iter().find_map(|key| object.get(key))
+}
+
+fn is_owner(session: &serde_json::Value) -> bool {
+    key_of(session, ["is_session_owner", "isSessionOwner"])
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The group session in a JSON `Session`, or in a `SessionUpdate` holding one, whichever case
+/// its keys are in. The link to invite others is there only when `own` owns the session.
+fn session_of(json: &serde_json::Value, own: &str) -> Option<Jam> {
+    let session = json.get("session").unwrap_or(json);
+    let owned = is_owner(session);
+    // a session nobody else is in has no member list, since JSON leaves out an empty one
+    let members = key_of(session, ["session_members", "sessionMembers"])
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    let link = key_of(session, ["join_session_url", "joinSessionUrl"])
+        .and_then(serde_json::Value::as_str)
+        .filter(|_| owned)
+        .and_then(invite);
+    let listed = members.iter().map(|member| {
+        let image = match text_of(member, ["image_url", "imageUrl"]) {
+            "" => text_of(member, ["large_image_url", "largeImageUrl"]),
+            image => image,
+        };
+        [
+            text_of(member, ["id", "id"]),
+            text_of(member, ["username", "username"]),
+            text_of(member, ["display_name", "displayName"]),
+            image,
+        ]
+    });
+    Some(Jam {
+        members: members_of(
+            listed,
+            text_of(session, ["session_owner_id", "sessionOwnerId"]),
+            owned,
+            own,
+        ),
+        owner: owned,
+        link,
+    })
+}
+
+/// The headers every Jam request carries: the dealer connection this device listens on, which
+/// ties the session to this device, and a zero length for a request with no body.
+fn jam_headers(session: &Session, post: bool) -> HeaderMap {
+    let mut headers = match post {
+        true => empty_body(),
+        false => HeaderMap::new(),
+    };
+    if let Ok(id) = HeaderValue::from_str(&session.connection_id())
+        && !id.is_empty()
+    {
+        headers.insert("spotify-connection-id", id);
+    }
+    headers
+}
+
+/// Whether `id` is non-empty and made only of letters, digits and the `extra` characters, which
+/// makes it safe to put in a URL path.
+fn is_path_id(id: &str, extra: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
 }
 
 /// How much a put matters when two are due at once: the stronger one goes out.
@@ -1063,6 +1653,91 @@ fn track_id(uri: &str) -> Option<String> {
     uri.strip_prefix(TRACK_PREFIX)
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
+}
+
+/// The first tracks of a player state's queue, with who queued each when the state says.
+fn listed(tracks: &[ProvidedTrack]) -> Vec<Listed> {
+    let listed = tracks
+        .iter()
+        .filter_map(|track| {
+            Some(Listed {
+                id: track_id(&track.uri)?,
+                queued: track.provider == "queue"
+                    || track
+                        .metadata
+                        .get("is_queued")
+                        .is_some_and(|queued| queued == "true"),
+                added_by: adder(track),
+            })
+        })
+        .take(LISTED)
+        .collect::<Vec<_>>();
+    if let Some(track) = tracks.iter().find(|track| track.provider == "queue") {
+        log::debug!("connect: a queued track carries {:?}", keys(track));
+    }
+    listed
+}
+
+/// Who queued a track, read from the first of the metadata keys Spotify names them by.
+fn adder(track: &ProvidedTrack) -> Option<String> {
+    ADDERS
+        .iter()
+        .find_map(|key| track.metadata.get(*key))
+        .filter(|name| !name.is_empty())
+        .cloned()
+}
+
+/// The metadata keys a track carries, sorted, so a log shows what Spotify sends without the values.
+fn keys(track: &ProvidedTrack) -> Vec<&String> {
+    let mut keys = track.metadata.keys().collect::<Vec<_>>();
+    keys.sort();
+    keys
+}
+
+/// Logs a command this device cannot read, with the shape of its payload and, for a transfer,
+/// what the state it carries holds. Jams send some of their changes this way, so it shows what
+/// they carry.
+fn describe_unknown(value: &serde_json::Value) {
+    use base64::Engine as _;
+    use protobuf::Message as _;
+
+    let Some(object) = value.as_object() else {
+        return log::debug!("connect: an unknown command is not an object");
+    };
+    let shape = object
+        .iter()
+        .map(|(key, value)| match value {
+            serde_json::Value::String(text) if text.len() <= 60 => format!("{key}={text}"),
+            serde_json::Value::String(text) => format!("{key}=<{} chars>", text.len()),
+            other => format!("{key}={other}").chars().take(160).collect(),
+        })
+        .collect::<Vec<_>>();
+    log::debug!("connect: an unknown command carries {shape:?}");
+
+    let state = object
+        .get("data")
+        .and_then(|data| data.as_str())
+        .and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok())
+        .and_then(|bytes| TransferState::parse_from_bytes(&bytes).ok());
+    let Some(state) = state else {
+        return log::debug!("connect: the unknown command holds no readable state");
+    };
+    let queue = state
+        .queue
+        .tracks
+        .iter()
+        .take(LISTED)
+        .map(|track| {
+            let mut keys = track.metadata.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            (track.uri.clone().unwrap_or_default(), keys)
+        })
+        .collect::<Vec<_>>();
+    log::debug!(
+        "connect: the unknown command holds a state, playing queue {:?}, {} queued: {queue:?}",
+        state.queue.is_playing_queue,
+        state.queue.tracks.len(),
+    );
 }
 
 /// The id of a track another device lists, read from its uri or, since Spotify's apps often send

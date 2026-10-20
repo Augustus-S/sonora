@@ -5,6 +5,8 @@ use music::connect::{Command, DeviceKind};
 use state::{Devices, Sonora};
 use ui::{ActiveTheme as _, MenuItem, Picker, Popovers};
 
+use crate::chrome::jam;
+
 /// The player bar's button for the account's other devices: where playback is, and the list to
 /// move it between this app and the rest. It draws nothing unless the signed-in provider has a
 /// device network and the listener has it on.
@@ -91,6 +93,63 @@ impl Render for DevicePicker {
                     .icon("icons/skip-forward.svg")
                     .on_click(control(Command::Next)),
             );
+        }
+
+        items.push(MenuItem::separator("jam-separator"));
+        match state.jam() {
+            Some(jam) => {
+                if let Some(link) = jam.link.clone() {
+                    items.push(
+                        MenuItem::new("jam-code", t!("devices-jam-code-menu"))
+                            .icon("icons/qr-code.svg")
+                            .on_click({
+                                let devices = devices.clone();
+                                move |_, _, cx| {
+                                    devices.update(cx, |devices, cx| devices.show_code(true, cx))
+                                }
+                            }),
+                    );
+                    items.push(
+                        MenuItem::new("jam-copy", t!("devices-jam-copy"))
+                            .icon("icons/copy.svg")
+                            .on_click(move |_, _, cx| jam::copy_link(&link, cx)),
+                    );
+                }
+                items.push(
+                    MenuItem::new(
+                        "jam-leave",
+                        match jam.owner {
+                            true => t!("devices-jam-end"),
+                            false => t!("devices-jam-leave"),
+                        },
+                    )
+                    .icon("icons/log-out.svg")
+                    .on_click({
+                        let devices = devices.clone();
+                        move |_, _, cx| devices.update(cx, |devices, cx| devices.leave(cx))
+                    }),
+                );
+            }
+            None => {
+                items.push(
+                    MenuItem::new("jam-start", t!("devices-jam-start"))
+                        .icon("icons/users-round-collaboration.svg")
+                        .on_click({
+                            let devices = devices.clone();
+                            move |_, _, cx| devices.update(cx, |devices, _| devices.start_jam())
+                        }),
+                );
+                items.push(
+                    MenuItem::new("jam-join", t!("devices-jam-join"))
+                        .icon("icons/link.svg")
+                        .on_click({
+                            let devices = devices.clone();
+                            move |_, _, cx| {
+                                devices.update(cx, |devices, cx| devices.show_join(true, cx))
+                            }
+                        }),
+                );
+            }
         }
 
         Picker::icon("devices", &self.popovers, "icons/monitor-speaker.svg")

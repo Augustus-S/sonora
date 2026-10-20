@@ -31,6 +31,7 @@ mod picker;
 mod pin;
 mod popover;
 mod popup;
+mod qr;
 mod radio;
 mod rail;
 mod response_graph;
@@ -104,6 +105,7 @@ pub use picker::Picker;
 pub use pin::{DraggedPin, Pin, PinKind, Pinnable, Spot};
 pub use popover::{Popover, Popovers};
 pub use popup::Popup;
+pub use qr::Qr;
 pub use radio::Radio;
 pub use rail::Rail;
 pub use response_graph::{
