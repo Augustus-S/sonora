@@ -364,6 +364,7 @@ struct Values {
     discord_show_paused: bool,
     discord_badge: bool,
     discord_without_details: bool,
+    discord_hide_on_connect: bool,
     discord_sonora_button: bool,
     discord_provider_button: bool,
     artwork_for_local_files: bool,
@@ -573,6 +574,7 @@ impl Default for Values {
             discord_show_paused: false,
             discord_badge: false,
             discord_without_details: false,
+            discord_hide_on_connect: false,
             discord_sonora_button: true,
             discord_provider_button: true,
             artwork_for_local_files: true,
@@ -950,6 +952,12 @@ impl AppSettings {
     /// Whether the Discord status carries the badge of the provider the track came from.
     pub fn discord_badge(&self) -> bool {
         self.values.discord_badge
+    }
+
+    /// Whether the Discord status steps aside while Spotify Connect has playback, here or on
+    /// another of the account's devices, for a listener who shows Spotify's own status instead.
+    pub fn discord_hide_on_connect(&self) -> bool {
+        self.values.discord_hide_on_connect
     }
 
     /// Whether the Discord status leaves the track out and only says that music is playing.
@@ -1447,6 +1455,11 @@ impl AppSettings {
 
     pub fn set_discord_badge(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.values.discord_badge = enabled;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_discord_hide_on_connect(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.values.discord_hide_on_connect = enabled;
         self.schedule_save(cx);
     }
 
