@@ -66,10 +66,10 @@ pub use search::{AlbumHit, ArtistHit, Hit, Kind, PlaylistHit, Search};
 pub use session::{Failure, ProviderInfo, Session, SessionEvent, SessionState};
 pub use settings::{
     AppSettings, DiscordName, FilterValue, FullscreenControlsAutohide, LYRICS_SOURCES, Reloaded,
-    RomanizationScripts, SYSTEM_FONT, SideTab, equalizer_profile_label, remember_window,
-    window_placement,
+    RomanizationScripts, SYSTEM_FONT, SideTab, ThemeFamily, ThemeVariant, equalizer_profile_label,
+    remember_window, window_placement,
 };
-pub use signal::{Change, Equalizing, FLOAT_BITS, Signal, SignalPath};
+pub use signal::{Change, Equalizing, FLOAT_BITS, Following, Signal, SignalPath};
 pub use song::SongDetail;
 pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, ToastAction, Toasts};

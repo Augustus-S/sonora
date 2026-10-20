@@ -1,26 +1,28 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Render, ScrollHandle,
-    SharedString, StyleRefinement, Task, Window, div,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Pixels, Render,
+    ScrollHandle, SharedString, StyleRefinement, Task, WeakEntity, Window, div,
 };
 use i18n::t;
-use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset};
+use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, TONE_RANGE, Tone};
 use music::output::{DeviceOption, OutputId, Port};
+use router::Destination;
 use state::{
     AppSettings, Equalizer, Outputs, RuleDevice, Signal, Sonora, Sound, equalizer_profile_label,
 };
 use ui::{
-    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, InfoCard, Input, Lazy, MenuItem, Modal,
-    Picker, Popovers, Room, Scrollbar, Scroller, Submit, Switch, TabBar, Text, heading,
+    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, Input, Lazy, MenuItem, Modal, Picker,
+    Popovers, Room, Scrollbar, Scrubber, ScrubberState, Submit, Switch, TabBar,
 };
 
 use crate::chrome::Chrome;
+use crate::screens::settings::{self, Row};
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::{preset_key, sound_picker};
 
-use graph::EqualizerGraph;
+use graph::{EqualizerGraph, EqualizerSpectrum};
 use meter::OutputMeter;
-use rows::{Row, figure, measured};
+use rows::{Fields, figure, figure_cell};
 
 mod graph;
 mod meter;
@@ -37,13 +39,19 @@ const DIALOG: f32 = 2.8;
 /// How wide the sound picker and its menu are in a wide room, in cover sizes. A narrower room
 /// lets the picker fill its row instead.
 const SOUND_WIDTH: f32 = 2.2;
-/// How narrow a card's description gets before the action beside it wraps underneath, in
-/// cover sizes.
-const BLURB: f32 = 1.6;
+/// The icons before the sound group's heading and the filter group's.
+const SOUND_ICON: &str = "icons/sliders-horizontal.svg";
+const FILTERS_ICON: &str = "icons/funnel.svg";
+/// How wide the bass and treble sliders are, and the gain beside each, in cover sizes.
+const TONE_SLIDER: f32 = 1.6;
+const TONE_VALUE: f32 = 0.6;
+/// The step the bass and treble move in, and how near 0 dB a drag snaps to it.
+const TONE_STEP: f64 = 0.5;
+const TONE_REST: f64 = 0.75;
 
-/// The equalizer's own screen. Simple mode shows the sound picker, undo and the response graph,
-/// and advanced mode adds a card each for the preamp, the filters, the device rules and
-/// Equalizer APO text in and out.
+/// The equalizer's own screen. Simple mode shows the sound picker, undo, the response graph
+/// and the bass and treble sliders, and advanced mode trades the sliders for the preamp and a
+/// group each for the filters, the device rules and Equalizer APO text in and out.
 pub(crate) struct EqualizerView {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -52,7 +60,10 @@ pub(crate) struct EqualizerView {
     popovers: Popovers,
     scrollbar: Entity<Scrollbar>,
     preamp: Entity<Input>,
-    rows: Vec<Row>,
+    rows: Vec<Fields>,
+    /// The bass and treble sliders Simple mode shows under the graph.
+    bass: ScrubberState,
+    treble: ScrubberState,
     name: Entity<Input>,
     /// What the name dialog is open for, while it is.
     naming: Option<Naming>,
@@ -65,6 +76,10 @@ pub(crate) struct EqualizerView {
     /// The curve the fields were last filled from, so they are only rewritten when it changes.
     shown: Option<Curve>,
     graph: Entity<EqualizerGraph>,
+    /// The spectrum under the graph, which redraws on its own with every read.
+    spectrum: Entity<EqualizerSpectrum>,
+    /// The rest of the page in parts drawn as views of their own, made on the first render.
+    parts: Option<Parts>,
     /// The level meter and clip warning under the graph, which redraw on their own.
     meter: Entity<OutputMeter>,
     /// What the screen last drew from the equalizer and the output, so a notify
@@ -93,6 +108,7 @@ enum Naming {
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
+    tone: Tone,
     on: bool,
     history: (bool, bool),
     preamp: f64,
@@ -100,6 +116,88 @@ struct Drawn {
     port: Option<Port>,
     /// What the device rules' menu offers.
     devices: Vec<DeviceOption>,
+}
+
+/// One of the two shelves of the tone.
+#[derive(Clone, Copy)]
+enum Shelf {
+    Bass,
+    Treble,
+}
+
+impl Shelf {
+    fn gain(self, tone: Tone) -> f64 {
+        match self {
+            Self::Bass => tone.bass(),
+            Self::Treble => tone.treble(),
+        }
+    }
+
+    /// `tone` with this shelf at `gain` and the other as it was.
+    fn with(self, tone: Tone, gain: f64) -> Tone {
+        match self {
+            Self::Bass => Tone::new(gain, tone.treble()),
+            Self::Treble => Tone::new(tone.bass(), gain),
+        }
+    }
+}
+
+/// The parts of the page that are views of their own.
+#[derive(Clone)]
+struct Parts {
+    controls: Entity<Part>,
+    below: Entity<Part>,
+    advanced: Entity<Part>,
+}
+
+/// What a part draws, from the page's own state.
+type Build = fn(&mut EqualizerView, &mut Window, &mut Context<EqualizerView>) -> AnyElement;
+
+/// A part of the page drawn as a view of its own and laid out cached. The spectrum and the meter
+/// redraw the page every frame, and a cached part is not built again then. It redraws when the
+/// page notifies, and stands as tall as its content measured the last time it drew.
+struct Part {
+    page: WeakEntity<EqualizerView>,
+    build: Build,
+    height: Pixels,
+}
+
+impl Part {
+    fn new(page: &Entity<EqualizerView>, build: Build, cx: &mut Context<Self>) -> Self {
+        cx.observe(page, |_, _, cx| cx.notify()).detach();
+        Self {
+            page: page.downgrade(),
+            build,
+            height: Pixels::ZERO,
+        }
+    }
+}
+
+impl Render for Part {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let build = self.build;
+        let content = self
+            .page
+            .update(cx, |page, cx| build(page, window, cx))
+            .unwrap_or_else(|_| div().into_any_element());
+        let part = cx.entity().downgrade();
+        div()
+            .w_full()
+            .when(self.height == Pixels::ZERO, |this| this.invisible())
+            .child(content)
+            .on_children_prepainted(move |bounds, _, cx| {
+                let Some(height) = bounds.first().map(|bounds| bounds.size.height) else {
+                    return;
+                };
+                part.update(cx, |part, cx| {
+                    if part.height != height {
+                        part.height = height;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+    }
 }
 
 impl EqualizerView {
@@ -112,18 +210,18 @@ impl EqualizerView {
         let signal = Sonora::global(cx).signal.clone();
         let outputs = Sonora::global(cx).outputs.clone();
         let id = cx.entity_id();
-        let preamp = cx.new(|cx| Input::new("", cx).compact());
-        let rows = (0..MAX_FILTERS).map(|_| Row::new(cx)).collect();
+        let preamp = cx.new(|cx| {
+            Input::new("", cx)
+                .compact()
+                .align_end()
+                .suffix("equalizer-decibels")
+        });
+        let rows = (0..MAX_FILTERS).map(|_| Fields::new(cx)).collect();
         let meter = cx.new(|cx| OutputMeter::new(equalizer.clone(), signal.clone(), cx));
         let graph = cx.new(|cx| {
-            EqualizerGraph::new(
-                equalizer.clone(),
-                settings.clone(),
-                outputs.clone(),
-                signal.clone(),
-                cx,
-            )
+            EqualizerGraph::new(equalizer.clone(), settings.clone(), outputs.clone(), cx)
         });
+        let spectrum = cx.new(|cx| EqualizerSpectrum::new(signal.clone(), cx));
 
         cx.observe(&equalizer, |this, _, cx| {
             this.show_curve(cx);
@@ -132,6 +230,8 @@ impl EqualizerView {
         .detach();
         cx.observe(&settings, |_, _, cx| cx.notify()).detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
+        cx.subscribe(&graph, |_, _, _: &graph::Selected, cx| cx.notify())
+            .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 
@@ -144,6 +244,8 @@ impl EqualizerView {
             scrollbar: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(id)),
             preamp,
             rows,
+            bass: ScrubberState::new("equalizer-bass"),
+            treble: ScrubberState::new("equalizer-treble"),
             name: cx.new(|cx| Input::new("equalizer-profile-name-hint", cx)),
             naming: None,
             rule_device: None,
@@ -152,6 +254,8 @@ impl EqualizerView {
             restore: None,
             shown: None,
             graph,
+            spectrum,
+            parts: None,
             meter,
             drawn: None,
             watch: None,
@@ -170,12 +274,25 @@ impl EqualizerView {
         view
     }
 
+    /// The page's parts, made the first time the page draws, when it can be observed.
+    fn parts(&mut self, cx: &mut Context<Self>) -> Parts {
+        let page = cx.entity();
+        self.parts
+            .get_or_insert_with(|| Parts {
+                controls: cx.new(|cx| Part::new(&page, Self::controls, cx)),
+                below: cx.new(|cx| Part::new(&page, Self::below, cx)),
+                advanced: cx.new(|cx| Part::new(&page, Self::advanced, cx)),
+            })
+            .clone()
+    }
+
     /// What the screen shows from the equalizer and the output right now.
     fn drawing(&self, cx: &App) -> Drawn {
         let equalizer = self.equalizer.read(cx);
         let outputs = self.outputs.read(cx);
         Drawn {
             curve: equalizer.curve().clone(),
+            tone: equalizer.tone(),
             on: equalizer.enabled(),
             history: equalizer.history(),
             preamp: equalizer.preamp_db(),
@@ -208,6 +325,13 @@ impl EqualizerView {
         }
     }
 
+    /// Closes an open menu on escape. Returns false when none was open.
+    pub(crate) fn escape(&mut self) -> bool {
+        let open = self.popovers.any();
+        self.popovers.close();
+        open
+    }
+
     /// Plays `curve`, an edit made on this screen.
     fn apply(&mut self, curve: Curve, cx: &mut Context<Self>) {
         self.graph.update(cx, |graph, cx| graph.apply(curve, cx));
@@ -217,12 +341,12 @@ impl EqualizerView {
         let Some(curve) = self.shown.clone() else {
             return;
         };
-        let preamp = self.equalizer.read(cx).preamp_db();
+        let preamp = curve.preamp_db();
         if auto == (curve.preamp() == Preamp::Auto) {
             return;
         }
-        // A manual preamp starts where the automatic one was, rounded down so switching never
-        // raises the level.
+        // A manual preamp starts where the sound's automatic one was, rounded down so switching
+        // never raises the level. The tone lowers both alike.
         let preamp = match auto {
             true => Preamp::Auto,
             false => Preamp::Manual(
@@ -339,9 +463,9 @@ impl EqualizerView {
         );
     }
 
-    /// The page title and what the screen is for, with the Simple and Advanced switch on the
-    /// right. The choice is remembered across launches.
-    fn header(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// The Simple and Advanced switch, at the end of the sound group's heading. The choice is
+    /// remembered across launches.
+    fn mode(&self, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
         let mode = |id: &'static str, label: SharedString, choice: bool| {
             Button::new(id)
                 .small()
@@ -359,32 +483,19 @@ impl EqualizerView {
             mode("equalizer-advanced", t!("equalizer-advanced"), true),
         ];
 
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap_4()
-            .child(heading(t!("settings-equalizer"), cx))
-            .child(TabBar::new("equalizer-mode").flex_none().items(modes))
+        TabBar::new("equalizer-mode")
+            .flex_none()
+            .items(modes)
             .into_any_element()
     }
 
-    /// The main card: the one picker for every preset and profile with the on switch, undo and
-    /// redo beside it, then the response graph with the output meter under it. Advanced mode adds
-    /// what can be done to the playing profile.
-    fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
-        let graph = self.graph.clone().cached(
-            StyleRefinement::default()
-                .w_full()
-                .h(graph::height(room, cx)),
-        );
+    /// The top of the sound group: its heading, then the one picker for every preset and profile
+    /// with the on switch, undo and redo beside it. Advanced mode adds what can be done to the
+    /// playing profile.
+    fn controls(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let room = settings::Layout::of(window, cx).room();
+        let advanced = self.settings.read(cx).equalizer_advanced();
         let theme = *cx.theme();
-        let meter = self.meter.clone().cached(
-            StyleRefinement::default()
-                .w_full()
-                .h(theme.metrics.control_small),
-        );
         let on = self.equalizer.read(cx).enabled();
         let settings = self.settings.read(cx);
         let only = settings.equalizer_profiles().count() < 2;
@@ -449,8 +560,12 @@ impl EqualizerView {
                         .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
                 )
         });
+        let mode = self.mode(advanced, cx);
 
-        section(t!("equalizer-sound"))
+        div()
+            .flex()
+            .flex_col()
+            .child(heading("equalizer-sound", SOUND_ICON, Some(mode), cx))
             .child(
                 div()
                     .flex()
@@ -468,18 +583,110 @@ impl EqualizerView {
                     .child(history)
                     .children(manage),
             )
-            .child(graph)
-            .child(meter)
             .into_any_element()
     }
 
-    /// The preamp's card: whether it follows the filters on its own or holds a level, and that
-    /// level.
-    fn preamp_card(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The bottom of the sound group under the graph and the meter: the preamp's row in
+    /// advanced mode, and the bass and treble sliders in simple mode.
+    fn below(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        match self.settings.read(cx).equalizer_advanced() {
+            true => self.preamp_row(cx),
+            false => self.tone_rows(cx),
+        }
+    }
+
+    /// The groups only advanced mode shows, the filters, the device rules and Equalizer APO text
+    /// in and out, each built only while it is on screen.
+    fn advanced(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        div()
+            .flex()
+            .flex_col()
+            .gap(settings::GROUPS)
+            .child(card(&view, "equalizer-filters", |this, window, cx| {
+                let row = settings::Layout::of(window, cx).room();
+                let filters = this.filters(row.fits(Room::Roomy), cx);
+                form(filters, cx).into_any_element()
+            }))
+            .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
+            .child(card(&view, "equalizer-transfer", |this, _, cx| {
+                this.transfer(cx)
+            }))
+            .into_any_element()
+    }
+
+    /// The bass and treble rows Simple mode shows under the graph, which tilt whatever sound
+    /// plays without editing it.
+    fn tone_rows(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .mt_2()
+            .child(self.tone_row(Shelf::Bass, cx))
+            .child(self.tone_row(Shelf::Treble, cx))
+            .into_any_element()
+    }
+
+    /// One shelf's row: its name, a slider from -12 to +12 dB, and the gain it is at. Pressing
+    /// the gain puts the shelf back to 0 dB.
+    fn tone_row(&self, shelf: Shelf, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
+        let tone = self.equalizer.read(cx).tone();
+        let gain = shelf.gain(tone);
+        let (low, high) = (*TONE_RANGE.start(), *TONE_RANGE.end());
+        let (title, state, reset) = match shelf {
+            Shelf::Bass => (t!("equalizer-bass"), &self.bass, "equalizer-bass-reset"),
+            Shelf::Treble => (
+                t!("equalizer-treble"),
+                &self.treble,
+                "equalizer-treble-reset",
+            ),
+        };
+        let signed = match gain > 0. {
+            true => format!("+{}", figure(gain, 1)),
+            false => figure(gain, 1),
+        };
+
+        let slider = div().w(theme.metrics.cover * TONE_SLIDER).child(
+            Scrubber::new(state, ((gain - low) / (high - low)) as f32)
+                .colors(theme.muted, theme.muted, theme.foreground)
+                .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
+                    let gain = tone_gain(*fraction);
+                    let tone = shelf.with(this.equalizer.read(cx).tone(), gain);
+                    this.equalizer
+                        .update(cx, |equalizer, cx| equalizer.glide_tone(tone, cx));
+                })),
+        );
+        let value = Button::new(reset)
+            .small()
+            .w(theme.metrics.cover * TONE_VALUE)
+            .label(t!("equalizer-decibels-value", db = signed))
+            .tooltip("equalizer-tone-reset")
+            .disabled(gain == 0.)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let tone = shelf.with(this.equalizer.read(cx).tone(), 0.);
+                this.equalizer
+                    .update(cx, |equalizer, cx| equalizer.set_tone(tone, cx));
+            }));
+        let controls = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(slider)
+            .child(value)
+            .into_any_element();
+
+        Row::new(title, controls).into_any_element()
+    }
+
+    /// The preamp's row: whether it follows the filters on its own or holds a level, and that
+    /// level, in a field while it is held and as a figure in the field's place while automatic.
+    /// It is the sound's own preamp, before the tone lowers it further.
+    fn preamp_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let curve = self.equalizer.read(cx).curve();
         let auto = curve.preamp() == Preamp::Auto;
-        let resolved = self.equalizer.read(cx).preamp_db();
+        let resolved = curve.preamp_db();
         let mode = Picker::new(
             PREAMP,
             &self.popovers,
@@ -501,26 +708,26 @@ impl EqualizerView {
             }),
         );
         let value = match auto {
-            true => div()
+            true => figure_cell(
+                t!("equalizer-decibels-value", db = figure(resolved, 1)),
+                theme.metrics.cover * FIELD,
+                cx,
+            ),
+            false => div()
                 .flex_none()
-                .whitespace_nowrap()
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(t!("equalizer-decibels-value", db = figure(resolved, 1)))
+                .w(theme.metrics.cover * FIELD)
+                .child(self.preamp.clone())
                 .into_any_element(),
-            false => measured(self.preamp.clone(), t!("equalizer-decibels"), cx),
         };
         let controls = div()
             .flex()
             .items_center()
-            .gap_3()
+            .gap_2()
             .child(mode)
             .child(value)
             .into_any_element();
 
-        section(t!("equalizer-preamp"))
-            .child(blurb(t!("equalizer-preamp-detail"), Some(controls), cx))
-            .into_any_element()
+        form(Row::new(t!("equalizer-preamp"), controls), cx).into_any_element()
     }
 
     /// The dialog that names a profile, titled for saving or renaming.
@@ -569,81 +776,99 @@ impl EqualizerView {
 
 impl Render for EqualizerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let inset = cx.theme().metrics.inset;
-        let room = Chrome::room(window, cx);
+        let room = settings::Layout::of(window, cx).room();
         let advanced = self.settings.read(cx).equalizer_advanced();
-        let sound = self.sound(room, advanced, cx);
+        let parts = self.parts(cx);
+        let theme = *cx.theme();
+        let layer = || {
+            StyleRefinement::default()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+        };
 
-        let view = cx.entity();
-        let page = Scroller::new("equalizer-page", &self.scrollbar)
-            .p(inset)
+        let sound = div()
+            .flex()
+            .flex_col()
+            .child(shown(&parts.controls, cx))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_6()
-                    .child(self.header(advanced, cx))
-                    .child(sound)
-                    .when(advanced, |this| {
-                        this.child(
-                            div()
-                                .key_context(FORM_CONTEXT)
-                                .on_action(cx.listener(|this, _: &Submit, window, cx| {
-                                    cx.stop_propagation();
-                                    this.submit(window, cx);
-                                }))
-                                .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
-                                    cx.stop_propagation();
-                                    this.revert(window, cx);
-                                }))
-                                .flex()
-                                .flex_col()
-                                .gap_6()
-                                .child(card(&view, "equalizer-preamp", |this, _, cx| {
-                                    this.preamp_card(cx)
-                                }))
-                                .child(card(&view, "equalizer-filters", |this, window, cx| {
-                                    this.filters(Chrome::room(window, cx).fits(Room::Wide), cx)
-                                })),
-                        )
-                        .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
-                        .child(card(
-                            &view,
-                            "equalizer-transfer",
-                            |this, _, cx| this.transfer(cx),
-                        ))
-                    }),
-            );
+                    .relative()
+                    .w_full()
+                    .h(graph::height(room, cx))
+                    .mt_3()
+                    .child(self.spectrum.clone().cached(layer()))
+                    .child(self.graph.clone().cached(layer())),
+            )
+            .child(
+                self.meter.clone().cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(theme.metrics.control_small)
+                        .mt_3(),
+                ),
+            )
+            .child(shown(&parts.below, cx));
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(settings::GROUPS)
+            .child(sound)
+            .when(advanced, |this| this.child(shown(&parts.advanced, cx)));
 
-        div().size_full().child(page).children(self.name_dialog(cx))
+        settings::frame(
+            &Destination::Equalizer,
+            None,
+            "equalizer-page",
+            &self.scrollbar,
+            body,
+            window,
+            cx,
+        )
+        .children(self.name_dialog(cx))
     }
 }
 
-/// The muted line that says what a card is for, with the card's action on its right. The
-/// action wraps under the line when the room is too narrow for both.
-fn blurb(description: SharedString, action: Option<AnyElement>, cx: &App) -> Div {
+/// `part` laid out cached at the height it measured.
+fn shown(part: &Entity<Part>, cx: &App) -> impl IntoElement + use<> {
+    let height = part.read(cx).height;
+    part.clone()
+        .cached(StyleRefinement::default().w_full().h(height))
+}
+
+/// A group's heading as every settings page draws it, its icon before an uppercase eyebrow, with
+/// `action` at the end of its line when the group has one.
+fn heading(key: &'static str, icon: &'static str, action: Option<AnyElement>, cx: &App) -> Div {
     let theme = cx.theme();
     div()
         .flex()
-        .flex_wrap()
         .items_center()
-        .gap_x_4()
-        .gap_y_3()
-        .child(
-            div()
-                .flex_1()
-                .min_w(theme.metrics.cover * BLURB)
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(description),
-        )
-        .when_some(action, |this, action| {
-            this.child(div().flex_none().child(action))
-        })
+        .justify_between()
+        .gap_4()
+        .mb(theme.metrics.pad)
+        .child(settings::group_heading(i18n::lookup(key, None), Some(icon), cx).mb_0())
+        .children(action)
 }
 
-/// An advanced card that is built and laid out only while it is on screen, so scrolling the
-/// long page costs what shows rather than every card on it.
+/// Gives `content` the form keys of the number fields in it: Enter commits the focused field and
+/// Escape puts it back.
+fn form(content: impl IntoElement, cx: &mut Context<EqualizerView>) -> Div {
+    div()
+        .key_context(FORM_CONTEXT)
+        .on_action(cx.listener(|this, _: &Submit, window, cx| {
+            cx.stop_propagation();
+            this.submit(window, cx);
+        }))
+        .on_action(cx.listener(|this, _: &Dismiss, window, cx| {
+            cx.stop_propagation();
+            this.revert(window, cx);
+        }))
+        .child(content)
+}
+
+/// An advanced group that is built and laid out only while it is on screen, so scrolling the
+/// long page costs what shows rather than every group on it.
 fn card(
     view: &Entity<EqualizerView>,
     id: &'static str,
@@ -656,7 +881,13 @@ fn card(
     })
 }
 
-/// A part of the screen under its title, laid out like a card without the card around it.
-fn section(title: SharedString) -> InfoCard {
-    InfoCard::new(title).plain()
+/// The gain a bass or treble slider at `fraction` of its travel stands for, in `TONE_STEP`s,
+/// resting at 0 dB when it comes within `TONE_REST` of it.
+fn tone_gain(fraction: f32) -> f64 {
+    let (low, high) = (*TONE_RANGE.start(), *TONE_RANGE.end());
+    let gain = low + f64::from(fraction) * (high - low);
+    match gain.abs() < TONE_REST {
+        true => 0.,
+        false => (gain / TONE_STEP).round() * TONE_STEP,
+    }
 }

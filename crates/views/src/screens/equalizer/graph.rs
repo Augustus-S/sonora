@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, Pixels, Render, Window};
+use gpui::{App, Context, Entity, EventEmitter, Pixels, Render, Window};
 use i18n::t;
 use music::Level;
 use music::equalizer::{
     Curve, FREQUENCY_RANGE, Filter, GAIN_RANGE, Invalid, Kind, OCTAVES_RANGE, Q_RANGE, Response,
-    Width,
+    Tone, Width,
 };
 use state::{AppSettings, Equalizer, Outputs, Signal};
 use ui::{
@@ -49,22 +49,27 @@ pub(super) struct EqualizerGraph {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
-    signal: Entity<Signal>,
     graph: Graph,
     /// What the graph last drew, so a notify that changed none of it draws nothing.
     drawn: Option<Drawn>,
-    /// When the spectrum last arrived after none, which its rise counts from.
-    spectrum_since: Option<Instant>,
+    /// The node the filter list lit while the pointer is over its row.
+    lit: Option<u64>,
 }
 
-/// What the graph shows from the equalizer, the output and the spectrum.
+/// Says the selected filter changed by a press on the graph or in the list, so the list can
+/// mark the row of the filter now selected.
+pub(super) struct Selected;
+
+impl EventEmitter<Selected> for EqualizerGraph {}
+
+/// What the graph shows from the equalizer and the output.
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
+    tone: Tone,
     on: bool,
     preamp: f64,
     rate: u32,
-    spectrum: Option<Vec<Level>>,
     /// Whether advanced mode lets nodes be added, removed and widened on the graph.
     advanced: bool,
 }
@@ -216,23 +221,20 @@ impl EqualizerGraph {
         equalizer: Entity<Equalizer>,
         settings: Entity<AppSettings>,
         outputs: Entity<Outputs>,
-        signal: Entity<Signal>,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&equalizer, |this, _, cx| this.redraw(cx))
             .detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
-        cx.observe(&signal, |this, _, cx| this.redraw(cx)).detach();
         cx.observe(&settings, |this, _, cx| this.redraw(cx))
             .detach();
         let mut graph = Self {
             equalizer,
             settings,
             outputs,
-            signal,
             graph: Graph::new(),
             drawn: None,
-            spectrum_since: None,
+            lit: None,
         };
         graph.redraw(cx);
         graph
@@ -244,10 +246,10 @@ impl EqualizerGraph {
         let equalizer = self.equalizer.read(cx);
         let drawn = Drawn {
             curve: equalizer.curve().clone(),
+            tone: equalizer.tone(),
             on: equalizer.enabled(),
             preamp: equalizer.preamp_db(),
             rate: rate(&self.outputs, cx),
-            spectrum: self.signal.read(cx).levels().map(<[Level]>::to_vec),
             advanced: self.settings.read(cx).equalizer_advanced(),
         };
         if self.drawn.as_ref() == Some(&drawn) {
@@ -267,6 +269,35 @@ impl EqualizerGraph {
     /// Selects filter `id`, or none.
     pub(super) fn select(&mut self, id: Option<u64>, cx: &mut Context<Self>) {
         if self.graph.select(id) {
+            cx.emit(Selected);
+            cx.notify();
+        }
+    }
+
+    /// Where the selected filter stands in the playing curve, if one is selected.
+    pub(super) fn selected_index(&self) -> Option<usize> {
+        self.graph.selected.and_then(|id| self.graph.index(id))
+    }
+
+    /// Selects the filter at `index` of the playing curve.
+    pub(super) fn select_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let id = self.graph.ids.get(index).copied();
+        self.select(id, cx);
+    }
+
+    /// Lights the node of the filter at `index` while the pointer is over its row, and puts it
+    /// out when the pointer leaves, unless another row lit a node since.
+    pub(super) fn light(&mut self, index: usize, hovered: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.graph.ids.get(index).copied() else {
+            return;
+        };
+        let lit = match hovered {
+            true => Some(id),
+            false if self.lit == Some(id) => None,
+            false => return,
+        };
+        self.lit = lit;
+        if self.graph.state.light(lit) {
             cx.notify();
         }
     }
@@ -295,9 +326,15 @@ impl EqualizerGraph {
 
     /// Carries out what was done on the graph. A drag or a wheel step glides the filter it
     /// moves, and adding and removing cross-fade like the list's own buttons. A dragged or added
-    /// gain stays within the axis shown, a shelf's whole step included.
+    /// gain stays within the axis shown, a shelf's whole step included. A node stands raised by the
+    /// tone, so the tone at its frequency comes off the gain it is dragged or added to.
     fn graph_edit(&mut self, edit: &GraphEdit, cx: &mut Context<Self>) {
         let curve = self.equalizer.read(cx).curve().clone();
+        let tone = self
+            .equalizer
+            .read(cx)
+            .tone()
+            .response(rate(&self.outputs, cx));
         let span = self.graph.span;
         let glided = match *edit {
             GraphEdit::Select(id) => {
@@ -316,9 +353,13 @@ impl EqualizerGraph {
                     false => placed_frequency(position.frequency_hz),
                 };
                 let lift = lift(filter.kind());
-                let moved = position.gain_db != plotted_db(filter.gain() * lift);
+                let shown = filter.gain() * lift + tone.db(filter.frequency());
+                let moved = position.gain_db != plotted_db(shown);
                 let gain = match filter.kind().has_gain() && moved {
-                    true => placed_gain(position.gain_db / lift as f32, span),
+                    true => {
+                        let own = f64::from(position.gain_db) - tone.db(frequency);
+                        placed_gain((own / lift) as f32, span)
+                    }
                     false => filter.gain(),
                 };
                 Filter::new(
@@ -352,7 +393,8 @@ impl EqualizerGraph {
             GraphEdit::Add(position) => {
                 let (kind, _, _, q) = NEW_FILTER;
                 let frequency = placed_frequency(position.frequency_hz);
-                let gain = placed_gain(position.gain_db, span);
+                let own = f64::from(position.gain_db) - tone.db(frequency);
+                let gain = placed_gain(own as f32, span);
                 if let Ok(filter) = Filter::new(kind, frequency, gain, Width::Q(q), true) {
                     self.add_filter(filter, cx);
                 }
@@ -372,55 +414,41 @@ impl EqualizerGraph {
     }
 }
 
-/// The live response of the filters, a node per filter on it, and the preamp as a level across
-/// it. A node sits on its own filter's curve at its frequency. The graph fills the bounds the
-/// screen lays it out at.
+/// The live response heard, the tone's bass and treble included, a node per filter of the sound,
+/// and the preamp as a level across it. A node sits on its own filter's curve at its frequency,
+/// raised or lowered by the tone there. The graph fills the bounds the screen lays it out at.
 impl Render for EqualizerGraph {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let equalizer = self.equalizer.read(cx);
         let on = equalizer.enabled();
         let advanced = self.settings.read(cx).equalizer_advanced();
         let curve = equalizer.curve().clone();
+        let played = equalizer.played().clone();
         let rate = rate(&self.outputs, cx);
+        let tone = equalizer.tone().response(rate);
         let preamp = equalizer.preamp_db();
-        let levels = self.signal.read(cx).levels().unwrap_or_default();
-        // The spectrum comes in the way sound fades in: a gain that climbs from below the plot's
-        // floor to none, so it rises from the bottom rather than appearing at once.
-        let rise = match levels.is_empty() {
-            true => {
-                self.spectrum_since = None;
-                1.
-            }
-            false => {
-                let since = *self.spectrum_since.get_or_insert_with(Instant::now);
-                ease_out_cubic(since.elapsed().as_secs_f32() / SPECTRUM_RISE.as_secs_f32())
-            }
-        };
-        let (floor, ceiling) = SPECTRUM_SCALE;
-        let fade = (floor - ceiling) * (1. - rise);
-        let spectrum: Vec<_> = levels
-            .iter()
-            .map(|level| ResponsePoint {
-                frequency_hz: level.frequency,
-                gain_db: level.dbfs + fade,
-            })
-            .collect();
         let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
-        let plotted = self.graph.plotted(&curve, rate);
+        let plotted = self.graph.plotted(&played, rate);
         let nodes: Vec<_> = curve
             .filters()
             .iter()
             .zip(ids)
             .map(|(filter, id)| {
-                let gain = match filter.kind().has_gain() {
-                    true => filter.gain(),
-                    false => plotted.response.db(filter.frequency()),
+                let (gain, position) = match filter.kind().has_gain() {
+                    true => (
+                        filter.gain(),
+                        filter.gain() * lift(filter.kind()) + tone.db(filter.frequency()),
+                    ),
+                    false => {
+                        let gain = plotted.response.db(filter.frequency());
+                        (gain, gain)
+                    }
                 };
                 ResponseNode {
                     id,
                     position: ResponsePoint {
                         frequency_hz: filter.frequency() as f32,
-                        gain_db: plotted_db(gain * lift(filter.kind())),
+                        gain_db: plotted_db(position),
                     },
                     readout_db: plotted_db(gain),
                     gain_adjustable: filter.kind().has_gain(),
@@ -444,12 +472,8 @@ impl Render for EqualizerGraph {
         let axes = ResponseAxes::new(low as f32..=high as f32, -span..=span)
             .expect("the graph's axes are valid");
 
-        let (bottom, top) = SPECTRUM_SCALE;
         ResponseGraph::new(&self.graph.state, axes)
             .size_full()
-            .when(!spectrum.is_empty(), |graph| {
-                graph.spectrum(spectrum, bottom..=top)
-            })
             .response(points)
             .nodes(nodes)
             .reference(
@@ -459,6 +483,71 @@ impl Render for EqualizerGraph {
             .bypassed(!on)
             .reshape(advanced)
             .on_edit(cx.listener(|this, edit: &GraphEdit, _, cx| this.graph_edit(edit, cx)))
+    }
+}
+
+/// The spectrum of what plays, a view of its own that the screen lays under the graph. It redraws
+/// on every read of the spectrum, which leaves the graph over it and the rest of the page cached.
+pub(super) struct EqualizerSpectrum {
+    state: ResponseGraphState,
+    levels: Vec<Level>,
+    /// When the spectrum last arrived after none, which its rise counts from.
+    since: Option<Instant>,
+}
+
+impl EqualizerSpectrum {
+    pub(super) fn new(signal: Entity<Signal>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&signal, |this, signal, cx| {
+            let levels = signal.read(cx).levels().unwrap_or_default();
+            if this.levels != levels {
+                this.levels = levels.to_vec();
+                cx.notify();
+            }
+        })
+        .detach();
+        Self {
+            state: ResponseGraphState::new("equalizer-spectrum"),
+            levels: Vec::new(),
+            since: None,
+        }
+    }
+}
+
+/// The spectrum alone, in the plot the graph over it draws in. It comes in the way sound fades
+/// in, a gain that climbs from below the plot's floor to none, so it rises from the bottom rather
+/// than appearing at once.
+impl Render for EqualizerSpectrum {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let rise = match self.levels.is_empty() {
+            true => {
+                self.since = None;
+                1.
+            }
+            false => {
+                let since = *self.since.get_or_insert_with(Instant::now);
+                ease_out_cubic(since.elapsed().as_secs_f32() / SPECTRUM_RISE.as_secs_f32())
+            }
+        };
+        let (floor, ceiling) = SPECTRUM_SCALE;
+        let fade = (floor - ceiling) * (1. - rise);
+        let points: Vec<_> = self
+            .levels
+            .iter()
+            .map(|level| ResponsePoint {
+                frequency_hz: level.frequency,
+                gain_db: level.dbfs + fade,
+            })
+            .collect();
+        let (low, high) = GRAPH_FREQUENCIES;
+        let axes = ResponseAxes::new(low as f32..=high as f32, floor..=ceiling)
+            .expect("the spectrum's axes are valid");
+
+        ResponseGraph::new(&self.state, axes)
+            .size_full()
+            .without_grid()
+            .when(!points.is_empty(), |graph| {
+                graph.spectrum(points, floor..=ceiling)
+            })
     }
 }
 

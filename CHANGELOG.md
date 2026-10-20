@@ -16,8 +16,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - With a Subsonic or Navidrome server, you can pick the format and the highest bitrate tracks
   stream at in Settings → Playback → Streaming. MP3, Opus or AAC at 128 kbps uses far less
   data than lossless files on a metered connection.
-- You can rank your lyrics providers in Settings, by dragging them or with the arrows. When two
-  of them have equally good lyrics for a song, Sonora shows the one you ranked higher.
+- You can rank your lyrics sources by dragging them in Settings → Lyrics → Lyrics sources, and
+  Sonora shows the lyrics of the highest one that has them. Word-by-word lyrics still come before
+  line-synced ones, and line-synced before plain text, whichever source they come from.
 - You can undo clearing the queue or removing songs from it. Press Undo on the toast that
   appears.
 - Adding a whole album, playlist or artist to the queue shows that it is on its way, and
@@ -62,11 +63,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sound, what it sends to your device, and whether that is bit-perfect or why not.
 - Undo and redo your equalizer edits with the buttons next to the profile, or with Ctrl+Z and
   Ctrl+Shift+Z.
+- Switch the equalizer's preset or profile straight from Settings → Sound. Each one shows a
+  small drawing of its curve before its name.
+- Each equalizer filter sits on one line with its switch, type, frequency, gain and Q. Point at
+  a filter and its dot lights up on the graph, and the filter you pick on the graph is marked
+  in the list.
+- Bass and Treble sliders in the equalizer's Simple mode turn the low or high end up or down by
+  as much as 12 dB on top of any preset or profile, without changing it. Sonora lowers the level
+  to make room, so a boost never clips.
+- New themes: Catppuccin (Latte, Frappé, Macchiato and Mocha), Rosé Pine (Main, Moon and Dawn),
+  Gruvbox (Dark, Dark Hard, Light and Light Hard), Solarized (Dark and Light), Nord and Dracula.
+  Pick one in Settings → Appearance.
+- Your own themes can come in variants. Put the theme files in a folder inside the themes
+  folder and they show up as one theme with a variant for each file.
 
 ### Changed
 
 - Active shuffle and repeat show a dot beneath their icons in the player bar and fullscreen,
   so their state is visible without relying on color alone.
+- Adaptive theme is off by default; saved preferences are preserved.
+- Settings open on General the first time.
+- Ambient motion remains visible but disabled when Ambient background is off, keeping its
+  saved choice for when the background is enabled again.
+- The setting that caps the frame rate while Sonora is in the background now lists plain FPS
+  values.
+- The Midnight, Forest, Ocean, Rose, Lavender and Amber themes are no longer built in. If you
+  used one, Sonora saved it to your themes folder and keeps it selected, so nothing changes. The
+  others can be copied from `themes/legacy` in Sonora's repository.
+- Settings are regrouped into six tabs under the search field: General, Providers, Appearance,
+  Lyrics, Playback and Integrations. The search finds any setting by name and takes you to it.
+  Themes, icon packs, corners, the visualizer and streaming quality are picked from cards that
+  show what you get.
+- The equalizer, lyrics sources and music folders each have a page of their own inside
+  settings, with a link back to the page they open from.
 - With YouTube Music Premium, songs stream at 256 kbps instead of 128 kbps.
 - An equalizer preset that boosts no longer distorts loud passages. Sonora lowers the level by
   the curve's highest boost, so the balance you chose is what you hear.

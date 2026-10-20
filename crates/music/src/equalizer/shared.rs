@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
 
-use super::{Curve, Filter, Kind, MAX_CHANNELS, MAX_FILTERS, Width};
+use super::{Curve, Filter, Kind, MAX_CHANNELS, SLOTS, Tone, Width};
 
 /// How a curve change should reach the ear. A glide is a permission rather than an order, since
 /// the reader replaces any move too big to glide, while a replace is never glided.
@@ -21,9 +21,12 @@ pub struct EqualizerWriter {
     shared: Arc<Shared>,
     enabled: bool,
     curve: Curve,
+    tone: Tone,
+    /// The curve the outputs play, `curve` under `tone`.
+    played: Curve,
     /// The filter each slot holds. An unchanged filter keeps its slot, so deleting, adding or
     /// reordering rows starts no transition in any other slot, and slot order is not heard.
-    held: [Option<Filter>; MAX_FILTERS],
+    held: [Option<Filter>; SLOTS],
 }
 
 /// The audio thread's view of the curve, shared by every output. Cloning shares the same curve.
@@ -40,7 +43,7 @@ pub(crate) struct Snapshot {
     /// The resolved preamp in decibels.
     pub preamp_db: f64,
     /// One per slot, an empty slot holding a filter that is off.
-    pub filters: [Filter; MAX_FILTERS],
+    pub filters: [Filter; SLOTS],
 }
 
 struct Shared {
@@ -49,7 +52,7 @@ struct Shared {
     enabled: AtomicBool,
     replaces: AtomicU32,
     preamp: AtomicU64,
-    slots: [Slot; MAX_FILTERS],
+    slots: [Slot; SLOTS],
     /// Set by an output that met more channels than it has state for and passed them through.
     unprocessed: AtomicBool,
 }
@@ -78,8 +81,10 @@ impl EqualizerWriter {
         let mut writer = Self {
             shared,
             enabled,
+            played: curve.toned(Tone::default()),
             curve,
-            held: [None; MAX_FILTERS],
+            tone: Tone::default(),
+            held: [None; SLOTS],
         };
         writer.place();
         writer.publish(Edit::Replace);
@@ -98,7 +103,16 @@ impl EqualizerWriter {
         &self.curve
     }
 
-    /// The preamp the curve resolves to in decibels, as published to the outputs, so an
+    pub fn tone(&self) -> Tone {
+        self.tone
+    }
+
+    /// The curve the outputs play: the sound's own under the tone.
+    pub fn played(&self) -> &Curve {
+        &self.played
+    }
+
+    /// The preamp the played curve resolves to in decibels, as published to the outputs, so an
     /// automatic one is not worked out again.
     pub fn preamp_db(&self) -> f64 {
         f64::from_bits(self.shared.preamp.load(Ordering::Relaxed))
@@ -117,26 +131,36 @@ impl EqualizerWriter {
             return;
         }
         self.curve = curve;
+        self.played = self.curve.toned(self.tone);
         self.place();
         self.publish(edit);
     }
 
-    /// Gives every filter of the curve a slot. An unchanged filter stays where it is, so a
+    /// Lays `tone` over the curve. A glide moves its shelves smoothly like a dragged filter.
+    pub fn set_tone(&mut self, tone: Tone, edit: Edit) {
+        if tone == self.tone {
+            return;
+        }
+        self.tone = tone;
+        self.played = self.curve.toned(tone);
+        self.place();
+        self.publish(edit);
+    }
+
+    /// Gives every filter of the played curve a slot. An unchanged filter stays where it is, so a
     /// filter edited in place keeps its slot and can glide.
     fn place(&mut self) {
-        let mut placed = [None; MAX_FILTERS];
+        let mut placed = [None; SLOTS];
         let mut moved = Vec::new();
-        for filter in self.curve.filters() {
-            let kept = (0..MAX_FILTERS)
-                .find(|&slot| placed[slot].is_none() && self.held[slot] == Some(*filter));
+        for filter in self.played.filters() {
+            let kept =
+                (0..SLOTS).find(|&slot| placed[slot].is_none() && self.held[slot] == Some(*filter));
             match kept {
                 Some(slot) => placed[slot] = Some(*filter),
                 None => moved.push(*filter),
             }
         }
-        let mut free: Vec<usize> = (0..MAX_FILTERS)
-            .filter(|&slot| placed[slot].is_none())
-            .collect();
+        let mut free: Vec<usize> = (0..SLOTS).filter(|&slot| placed[slot].is_none()).collect();
         free.sort_by_key(|&slot| self.held[slot].is_none());
         for (slot, filter) in free.into_iter().zip(moved) {
             placed[slot] = Some(filter);
@@ -145,7 +169,7 @@ impl EqualizerWriter {
     }
 
     fn publish(&self, edit: Edit) {
-        let preamp = self.curve.preamp_db();
+        let preamp = self.played.preamp_db();
         if self.shared.unprocessed.swap(false, Ordering::Relaxed) {
             log::warn!(
                 "equalizer: a stream with more than {MAX_CHANNELS} channels played unequalized"

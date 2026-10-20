@@ -1,16 +1,14 @@
 use gpui::prelude::*;
-use gpui::{
-    AnyElement, App, Context, Div, Entity, Focusable as _, Pixels, SharedString, Window, div,
-};
+use gpui::{AnyElement, App, Context, Entity, Focusable as _, Pixels, SharedString, Window, div};
 use i18n::t;
 use music::equalizer::{
     Curve, FREQUENCY_RANGE, Filter, GAIN_RANGE, Invalid, Kind, MAX_FILTERS, OCTAVES_RANGE,
     PREAMP_RANGE, Preamp, Q_RANGE, Width, apo,
 };
 use state::{Outcome, Toast, Toasts};
-use ui::{ActiveTheme as _, Button, Input, MenuItem, Picker, Switch, Text, faint, vacant};
+use ui::{ActiveTheme as _, Button, Input, MenuItem, Picker, Switch, Text, vacant};
 
-use super::{EqualizerView, FIELD, blurb};
+use super::{EqualizerView, FILTERS_ICON, heading};
 
 /// One kind picker per filter row, since a popover is known by a static name.
 const KINDS: [&str; MAX_FILTERS] = [
@@ -35,16 +33,18 @@ const KINDS: [&str; MAX_FILTERS] = [
     "equalizer-kind-18",
     "equalizer-kind-19",
 ];
-/// How wide each column of the filter table is, in cover sizes, so the fields and their
-/// headers line up in every row: the switch, the kind picker, and a number with its unit.
-const TOGGLE: f32 = 0.35;
-const KIND: f32 = 0.85;
-const NUMBER: f32 = 0.85;
+/// How wide each part of a filter's row is, in cover sizes, so the parts line up from row to
+/// row: the kind picker, then the frequency, gain and width fields with their units inside.
+const KIND: f32 = 0.86;
+const FREQUENCY: f32 = 0.72;
+const GAIN: f32 = 0.62;
+const WIDTH: f32 = 0.62;
 /// The new filter Add puts in: flat, so adding one changes nothing until it is shaped.
 pub(super) const NEW_FILTER: (Kind, f64, f64, f64) = (Kind::Peak, 1_000., 0., 1.);
 
-/// The number fields of one filter row.
-pub(super) struct Row {
+/// The number fields of one filter row. Each keeps its number against its end with its unit
+/// inside, so the figures of every row line up.
+pub(super) struct Fields {
     frequency: Entity<Input>,
     gain: Entity<Input>,
     width: Entity<Input>,
@@ -64,13 +64,14 @@ pub(super) enum Value {
     Width,
 }
 
-impl Row {
+impl Fields {
     pub(super) fn new(cx: &mut Context<EqualizerView>) -> Self {
-        let mut number = || cx.new(|cx| Input::new("", cx).compact());
+        let mut number =
+            |unit: &'static str| cx.new(|cx| Input::new("", cx).compact().align_end().suffix(unit));
         Self {
-            frequency: number(),
-            gain: number(),
-            width: number(),
+            frequency: number("equalizer-hertz"),
+            gain: number("equalizer-decibels"),
+            width: number("equalizer-q"),
         }
     }
 }
@@ -112,6 +113,21 @@ impl EqualizerView {
             if input.read(cx).text() != text {
                 input.update(cx, |input, cx| input.set_text(text, cx));
             }
+        }
+        let units: Vec<_> = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(index, fields)| {
+                let unit = match curve.filters().get(index).map(Filter::width) {
+                    Some(Width::Octaves(_)) => "equalizer-octaves",
+                    _ => "equalizer-q",
+                };
+                (fields.width.clone(), unit)
+            })
+            .collect();
+        for (input, unit) in units {
+            input.update(cx, |input, cx| input.set_suffix(Some(unit.into()), cx));
         }
         self.shown = Some(curve);
     }
@@ -196,16 +212,21 @@ impl EqualizerView {
         self.apply(curve, cx);
     }
 
+    /// One filter on one line: its switch, its kind, its frequency, gain and width, and a button
+    /// that removes it. The row lights the filter's node on the graph while the pointer is over
+    /// it, a press on it selects that node, and it stands marked while its node is selected.
+    /// Where the line has too little room, the three values move to a line of their own.
     fn filter_row(
         &self,
         index: usize,
         filter: Filter,
+        selected: bool,
         wide: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.theme();
         let cover = theme.metrics.cover;
-        let row = &self.rows[index];
+        let fields = &self.rows[index];
         let enabled = Switch::new(("equalizer-filter-on", index), filter.enabled()).on_click(
             cx.listener(move |this, _, _, cx| {
                 this.change(index, |filter| filter.with_enabled(!filter.enabled()), cx)
@@ -213,7 +234,6 @@ impl EqualizerView {
         );
         let kind = Picker::new(KINDS[index], &self.popovers, kind_name(filter.kind()))
             .width(Picker::NARROW)
-            .w_full()
             .left()
             .items(Kind::ALL.map(|kind| {
                 MenuItem::new(kind.id(), kind_name(kind))
@@ -223,15 +243,8 @@ impl EqualizerView {
                     }))
             }));
         let gain = match filter.kind().has_gain() {
-            true => number(row.gain.clone(), t!("equalizer-decibels"), wide, cx),
-            false => div()
-                .text_color(theme.muted_foreground)
-                .child(t!("equalizer-no-gain"))
-                .into_any_element(),
-        };
-        let width_unit = match filter.width() {
-            Width::Q(_) => t!("equalizer-q"),
-            Width::Octaves(_) => t!("equalizer-octaves"),
+            true => fields.gain.clone().into_any_element(),
+            false => figure_cell(t!("equalizer-no-gain"), cover * GAIN, cx),
         };
         let remove = Button::new(("equalizer-remove", index))
             .small()
@@ -242,71 +255,74 @@ impl EqualizerView {
                 this.graph
                     .update(cx, |graph, cx| graph.remove_filter(index, cx))
             }));
-        let frequency = number(row.frequency.clone(), t!("equalizer-hertz"), wide, cx);
-        let width = number(row.width.clone(), width_unit, wide, cx);
+        let frequency = fields.frequency.clone();
+        let width = fields.width.clone();
 
+        let row = div()
+            .id(("equalizer-filter", index))
+            .flex()
+            .items_center()
+            .gap_2()
+            .mx_neg_3()
+            .px_3()
+            .rounded(theme.radius)
+            .when(selected, |row| row.bg(theme.secondary_active))
+            .when(!selected, |row| {
+                row.hover(|style| style.bg(theme.secondary_hover))
+            })
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                let hovered = *hovered;
+                this.graph
+                    .update(cx, |graph, cx| graph.light(index, hovered, cx));
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.graph
+                    .update(cx, |graph, cx| graph.select_index(index, cx));
+            }));
         match wide {
-            true => div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(cell(cover * TOGGLE).child(enabled))
-                .child(cell(cover * KIND).child(kind))
-                .child(cell(cover * NUMBER).child(frequency))
-                .child(cell(cover * NUMBER).child(gain))
-                .child(cell(cover * NUMBER).child(width))
+            true => row
+                .h(theme.metrics.list_row)
+                .child(enabled)
+                .child(kind.w(cover * KIND))
                 .child(div().flex_1())
+                .child(cell(cover * FREQUENCY).child(frequency))
+                .child(cell(cover * GAIN).child(gain))
+                .child(cell(cover * WIDTH).child(width))
                 .child(remove),
-            // Two lines of one width: the switch, the kind and the remove button over the three
-            // values, which share what the window leaves them.
-            false => div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(div().flex_none().child(enabled))
-                        .child(div().flex_1().min_w_0().child(kind))
-                        .child(remove),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(div().flex_1().min_w_0().child(frequency))
-                        .child(div().flex_1().min_w_0().child(gain))
-                        .child(div().flex_1().min_w_0().child(width)),
-                ),
+            // two lines of one width: the switch, the kind and the remove button over the three
+            // values, which share what the window leaves them
+            false => row.py_2().child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(enabled)
+                            .child(kind.flex_1().min_w_0())
+                            .child(remove),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().child(frequency))
+                            .child(div().flex_1().min_w_0().child(gain))
+                            .child(div().flex_1().min_w_0().child(width)),
+                    ),
+            ),
         }
-        .py_1()
-        .px_2()
-        .rounded(theme.radius)
         .into_any_element()
     }
 
-    /// The names over the filter table's columns, drawn only where a row fits on one line.
-    fn columns(&self, cx: &App) -> AnyElement {
-        let cover = cx.theme().metrics.cover;
-        faint(cx)
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_2()
-            .child(cell(cover * TOGGLE).child(t!("equalizer-enabled")))
-            .child(cell(cover * KIND).child(t!("equalizer-filter-type")))
-            .child(cell(cover * NUMBER).child(t!("equalizer-filter-frequency")))
-            .child(cell(cover * NUMBER).child(t!("equalizer-filter-gain")))
-            .child(cell(cover * NUMBER).child(t!("equalizer-filter-width")))
-            .into_any_element()
-    }
-
     /// The button that appends a flat filter, which does nothing once the curve is full.
-    fn add_button(&self, id: &'static str, full: bool, cx: &mut Context<Self>) -> Button {
-        Button::new(id)
+    fn add_button(&self, full: bool, cx: &mut Context<Self>) -> Button {
+        Button::new("equalizer-add")
             .small()
             .outline()
             .icon("icons/plus.svg")
@@ -321,50 +337,43 @@ impl EqualizerView {
             }))
     }
 
-    /// The filters' card: a table of the filters with the add action above it, or an empty
-    /// state that offers the first filter while there are none.
+    /// The filters' group: a row for each filter under a heading that carries the add button,
+    /// or an empty state while there are none. `wide` puts each filter on one line.
     pub(super) fn filters(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let filters = self.equalizer.read(cx).curve().filters().to_vec();
         let full = filters.len() >= MAX_FILTERS;
-        let empty = filters.is_empty();
+        let selected = self.graph.read(cx).selected_index();
         let rows: Vec<_> = filters
             .into_iter()
             .enumerate()
-            .map(|(index, filter)| self.filter_row(index, filter, wide, cx))
+            .map(|(index, filter)| {
+                self.filter_row(index, filter, selected == Some(index), wide, cx)
+            })
             .collect();
-        let add = (!empty).then(|| {
-            self.add_button("equalizer-add", full, cx)
-                .into_any_element()
-        });
-        let description = t!("equalizer-filters-detail", max = MAX_FILTERS);
+        let add = self.add_button(full, cx).into_any_element();
 
-        let card = super::section(t!("equalizer-filters")).child(blurb(description, add, cx));
-        match empty {
-            true => card.child(
-                vacant(t!("equalizer-no-filters"), cx)
-                    .flex_col()
-                    .gap_3()
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_dashed()
-                    .border_color(theme.border)
-                    .child(self.add_button("equalizer-add-first", full, cx)),
-            ),
-            false => card.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .map(|list| match wide {
-                        true => list.gap_1(),
-                        false => list.gap_4(),
-                    })
-                    .mx_neg_2()
-                    .when(wide, |this| this.child(self.columns(cx)))
-                    .children(rows),
-            ),
-        }
-        .into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .child(heading("equalizer-filters", FILTERS_ICON, Some(add), cx))
+            .map(|group| match rows.is_empty() {
+                true => group.child(
+                    vacant(t!("equalizer-no-filters"), cx)
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_dashed()
+                        .border_color(theme.border),
+                ),
+                false => group.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .when(!wide, |list| list.gap_1())
+                        .children(rows),
+                ),
+            })
+            .into_any_element()
     }
 }
 
@@ -470,52 +479,25 @@ fn kind_name(kind: Kind) -> SharedString {
     i18n::lookup(key, None)
 }
 
-/// A field-wide `value` with `unit` after it, so a read-only figure in place of a number field
-/// takes the same room and nothing beside it moves.
-pub(super) fn measured(value: impl IntoElement, unit: SharedString, cx: &App) -> AnyElement {
+/// `figure` muted against the end of a box as wide and tall as a number field, standing where a
+/// field would when there is nothing to type, so nothing beside it moves.
+pub(super) fn figure_cell(figure: SharedString, width: Pixels, cx: &App) -> AnyElement {
     let theme = cx.theme();
     div()
         .flex()
+        .flex_none()
         .items_center()
-        .gap_1()
-        .child(
-            div()
-                .flex_none()
-                .w(theme.metrics.cover * FIELD)
-                .child(value),
-        )
-        .child(
-            div()
-                .text_size(theme.text(Text::Small))
-                .text_color(theme.muted_foreground)
-                .child(unit),
-        )
+        .justify_end()
+        .w(width)
+        .h(theme.metrics.control_small)
+        .px_3()
+        .text_size(theme.text(Text::Label))
+        .text_color(theme.muted_foreground)
+        .child(figure)
         .into_any_element()
 }
 
-/// A number field with `unit` after it: field-wide where the table lines its columns up, and
-/// filling what it is given where a narrow window stacks a filter's values on a line of their own.
-fn number(value: impl IntoElement, unit: SharedString, wide: bool, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    match wide {
-        true => measured(value, unit, cx),
-        false => div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(div().flex_1().min_w_0().child(value))
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(theme.text(Text::Small))
-                    .text_color(theme.muted_foreground)
-                    .child(unit),
-            )
-            .into_any_element(),
-    }
-}
-
-/// A fixed-width column of the filter table.
-fn cell(width: Pixels) -> Div {
+/// A fixed-width part of a filter's row.
+fn cell(width: Pixels) -> gpui::Div {
     div().flex_none().w(width)
 }

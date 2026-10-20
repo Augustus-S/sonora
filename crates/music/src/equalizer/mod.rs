@@ -7,7 +7,7 @@ mod design;
 mod shared;
 mod stage;
 
-use std::f64::consts::{LN_2, SQRT_2};
+use std::f64::consts::{FRAC_1_SQRT_2, LN_2, SQRT_2};
 use std::fmt;
 use std::ops::RangeInclusive;
 
@@ -28,6 +28,15 @@ pub const Q_RANGE: RangeInclusive<f64> = 0.05..=50.0;
 pub const OCTAVES_RANGE: RangeInclusive<f64> = 0.01..=6.0;
 /// The preamp a user may set by hand, in decibels.
 pub const PREAMP_RANGE: RangeInclusive<f64> = -30.0..=12.0;
+/// The gains the bass and treble shelves of a `Tone` accept, in decibels.
+pub const TONE_RANGE: RangeInclusive<f64> = -12.0..=12.0;
+/// How many filters the audio thread runs at most: a full curve, then a tone's two shelves.
+pub(crate) const SLOTS: usize = MAX_FILTERS + 2;
+/// Where the bass and treble shelves turn, and their Q, the steepest slope a shelf takes
+/// without a bump beside its step.
+const BASS_FREQUENCY: f64 = 100.;
+const TREBLE_FREQUENCY: f64 = 10_000.;
+const TONE_Q: f64 = FRAC_1_SQRT_2;
 
 /// The rates the automatic preamp is read at, so a curve that is safe at one playing rate is
 /// safe at every other. The same filter reads higher near the Nyquist frequency of a higher rate.
@@ -326,14 +335,35 @@ impl Curve {
     pub fn preamp_db(&self) -> f64 {
         match self.preamp {
             Preamp::Manual(db) => db,
-            Preamp::Auto => {
-                let peak = RATES
-                    .into_iter()
-                    .map(|rate| self.response(rate).peak())
-                    .fold(0., f64::max);
-                (0. - peak).min(0.)
-            }
+            Preamp::Auto => (0. - self.boost()).min(0.),
         }
+    }
+
+    /// The curve as it plays under `tone`: its own filters, then the tone's bass and treble
+    /// shelves, which a flat tone leaves at 0 dB so they pass every sample untouched. An automatic
+    /// preamp makes room for the shelves as for any filter, and a manual one is lowered by however
+    /// much they raise the highest boost. The result may hold more than `MAX_FILTERS` filters, so
+    /// it is for playing and drawing, not for storing.
+    pub fn toned(&self, tone: Tone) -> Self {
+        let mut toned = Self {
+            preamp: self.preamp,
+            filters: self.filters.iter().copied().chain(tone.shelves()).collect(),
+        };
+        if let Preamp::Manual(db) = self.preamp
+            && !tone.is_flat()
+        {
+            let raised = (toned.boost() - self.boost()).max(0.);
+            toned.preamp = Preamp::Manual((db - raised).max(*PREAMP_RANGE.start()));
+        }
+        toned
+    }
+
+    /// The curve's highest boost in decibels at any rate it may play at, or 0 when it only cuts.
+    fn boost(&self) -> f64 {
+        RATES
+            .into_iter()
+            .map(|rate| self.response(rate).peak())
+            .fold(0., f64::max)
     }
 
     /// Whether the enabled filters leave every sample untouched at `rate`: there are none, or
@@ -394,6 +424,65 @@ impl Response {
         grid.chain(centres)
             .map(|f| self.db(f))
             .fold(f64::NEG_INFINITY, f64::max)
+    }
+}
+
+/// A bass and a treble shelf laid over whatever sound plays, so a listener can tilt it without
+/// editing the sound. Both gains are 0 dB when the tone is flat, and always within `TONE_RANGE`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tone {
+    bass: f64,
+    treble: f64,
+}
+
+impl Tone {
+    /// A tone with both gains clamped into `TONE_RANGE`. A gain that is not a number is 0 dB.
+    pub fn new(bass: f64, treble: f64) -> Self {
+        let clamp = |db: f64| match db.is_finite() {
+            true => db.clamp(*TONE_RANGE.start(), *TONE_RANGE.end()),
+            false => 0.,
+        };
+        Self {
+            bass: clamp(bass),
+            treble: clamp(treble),
+        }
+    }
+
+    pub fn bass(self) -> f64 {
+        self.bass
+    }
+
+    pub fn treble(self) -> f64 {
+        self.treble
+    }
+
+    pub fn is_flat(self) -> bool {
+        self.bass == 0. && self.treble == 0.
+    }
+
+    /// What the tone's shelves alone do when playing at `rate`, which a graph adds to a filter's
+    /// own gain to set its node on the curve heard.
+    pub fn response(self, rate: u32) -> Response {
+        Curve {
+            preamp: Preamp::Auto,
+            filters: self.shelves().to_vec(),
+        }
+        .response(rate)
+    }
+
+    /// The low shelf for the bass and the high shelf for the treble, in that order.
+    fn shelves(self) -> [Filter; 2] {
+        let shelf = |kind, frequency, gain| Filter {
+            kind,
+            frequency,
+            gain,
+            width: Width::Q(TONE_Q),
+            enabled: true,
+        };
+        [
+            shelf(Kind::LowShelf, BASS_FREQUENCY, self.bass),
+            shelf(Kind::HighShelf, TREBLE_FREQUENCY, self.treble),
+        ]
     }
 }
 

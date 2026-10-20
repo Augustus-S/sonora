@@ -25,7 +25,7 @@ use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::Reader;
 use crate::trim;
-use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
+use crate::{Encoding, PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
 
 /// Priming frames at the head of an Apple AAC encode, before the first frame of music.
 ///
@@ -117,6 +117,16 @@ impl Fetch for Apple {
 
     fn loudness(&self, loaded: &Loaded) -> Option<Loudness> {
         loaded.loudness
+    }
+
+    /// Reports the resolved asset's AAC bitrate, including a fallback to the other flavour.
+    fn encoding(&self, loaded: &Loaded) -> Option<Encoding> {
+        Some(Encoding::Aac {
+            kbps: match loaded.extended {
+                true => 64,
+                false => 256,
+            },
+        })
     }
 
     async fn downloaded(&self, loaded: &Loaded) {

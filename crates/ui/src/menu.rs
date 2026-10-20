@@ -386,6 +386,7 @@ pub struct MenuItem {
     content: Option<AnyElement>,
     face: Option<SharedString>,
     icon: Option<&'static str>,
+    leading: Option<AnyElement>,
     artwork: Option<Option<SharedString>>,
     tooltip: Option<SharedString>,
     press: Option<Action>,
@@ -407,6 +408,7 @@ impl MenuItem {
             separator: false,
             content: None,
             icon: None,
+            leading: None,
             artwork: None,
             tooltip: None,
             press: None,
@@ -436,6 +438,7 @@ impl MenuItem {
             content: None,
             face: None,
             icon: None,
+            leading: None,
             artwork: None,
             tooltip: None,
             press: None,
@@ -472,6 +475,12 @@ impl MenuItem {
 
     pub fn icon(mut self, path: &'static str) -> Self {
         self.icon = Some(path);
+        self
+    }
+
+    /// Draws `leading` before the label, such as a small picture of what the item chooses.
+    pub fn leading(mut self, leading: impl IntoElement) -> Self {
+        self.leading = Some(leading.into_any_element());
         self
     }
 
@@ -722,6 +731,7 @@ impl RenderOnce for Menu {
                 content,
                 face,
                 icon,
+                leading,
                 artwork,
                 tooltip,
                 press,
@@ -749,6 +759,7 @@ impl RenderOnce for Menu {
             let press = press.map(|press| releasing(press, &row_searches));
             let submenu_state = submenu.as_ref().map(|submenu| submenu.state.clone());
             let has_artwork = artwork.is_some();
+            let leading = leading.filter(|_| !has_artwork && icon.is_none());
             let detailed = detail.is_some();
 
             div()
@@ -787,6 +798,9 @@ impl RenderOnce for Menu {
                         .gap_2()
                         .when_some(artwork, |this, artwork| {
                             this.child(Artwork::new(artwork).size(px(20.)).flex_none())
+                        })
+                        .when_some(leading, |this, leading| {
+                            this.child(div().flex_none().child(leading))
                         })
                         .when_some(icon.filter(|_| !has_artwork), |this, icon| {
                             this.child(

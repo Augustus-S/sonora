@@ -7,7 +7,9 @@ use std::collections::HashSet;
 
 use anyhow::{Context as _, Result};
 use gpui::{Context, SharedString};
-use music::equalizer::{Curve, Filter, Kind, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, Width};
+use music::equalizer::{
+    Curve, Filter, Kind, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, Tone, Width,
+};
 use music::output::OutputId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -396,6 +398,17 @@ impl AppSettings {
         self.values.equalizer_advanced
     }
 
+    /// The bass and treble laid over whichever sound plays.
+    pub fn equalizer_tone(&self) -> Tone {
+        Tone::new(self.values.equalizer_bass, self.values.equalizer_treble)
+    }
+
+    pub fn set_equalizer_tone(&mut self, tone: Tone, cx: &mut Context<Self>) {
+        self.values.equalizer_bass = tone.bass();
+        self.values.equalizer_treble = tone.treble();
+        self.schedule_save(cx);
+    }
+
     /// The name of the profile that plays, empty for the one Sonora made.
     pub fn equalizer_profile_name(&self) -> &str {
         self.values
@@ -714,6 +727,19 @@ fn read_rule(item: &serde_json::Value) -> Option<DeviceRule> {
 
 /// The profile index as stored: any number clamped at zero, and anything else as zero, so a
 /// hand-edited mistake picks the first profile instead of making the file unreadable.
+/// A bass or treble gain in decibels, or 0 dB with a warning when the stored value is not a
+/// number. `Tone::new` clamps it into range.
+pub(super) fn read_tone<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let gain = value.as_f64();
+    if gain.is_none() {
+        log::warn!(
+            "settings: equalizer tone gain {value} is not a number, taking 0 dB; the stored value is replaced the next time settings are saved"
+        );
+    }
+    Ok(gain.unwrap_or(0.))
+}
+
 pub(super) fn read_index<'de, D: Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     if !value.is_number() {

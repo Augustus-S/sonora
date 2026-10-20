@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, Hsla, Pixels, SharedString, StyleRefinement, Window, px};
+use gpui::{AnyElement, App, ClickEvent, Hsla, Pixels, SharedString, StyleRefinement, Window, px};
 
 use crate::button::Button;
 use crate::menu::{Menu, MenuItem, TRIGGER_GAP};
@@ -19,6 +19,8 @@ pub struct Picker {
     key: &'static str,
     group: Popovers,
     face: Face,
+    /// A small element drawn before the current choice on the trigger.
+    leading: Option<AnyElement>,
     tooltip: Option<&'static str>,
     above: bool,
     tint: Option<Hsla>,
@@ -46,6 +48,7 @@ impl Picker {
             key,
             group: group.clone(),
             face: Face::Label(current.into()),
+            leading: None,
             tooltip: None,
             above: false,
             tint: None,
@@ -76,6 +79,13 @@ impl Picker {
             face: Face::Plain(label.into()),
             ..Self::new(key, group, "")
         }
+    }
+
+    /// Draws `leading` before the current choice on the trigger, as the menu's items may draw
+    /// one before theirs.
+    pub fn leading(mut self, leading: impl IntoElement) -> Self {
+        self.leading = Some(leading.into_any_element());
+        self
     }
 
     pub fn tooltip(mut self, key: &'static str) -> Self {
@@ -170,6 +180,7 @@ impl RenderOnce for Picker {
             key,
             group,
             face,
+            leading,
             tooltip,
             above,
             tint,
@@ -205,6 +216,7 @@ impl RenderOnce for Picker {
         };
         let button = button
             .when(small, Button::small)
+            .when_some(leading, Button::leading)
             .when_some(tooltip, |button, key| match above {
                 true => button.tooltip_above(key),
                 false => button.tooltip(key),

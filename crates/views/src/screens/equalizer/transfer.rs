@@ -7,12 +7,15 @@ use state::{Outcome, Toast, Toasts, equalizer_profile_label};
 use ui::Button;
 
 use super::rows::invalid_text;
-use super::{EqualizerView, blurb};
+use super::{EqualizerView, heading};
+use crate::screens::settings::Row;
 
 /// How many skipped lines an import toast spells out.
 const REASONS: usize = 3;
 /// What AutoEQ appends to a file name, which a profile named after the file leaves out.
 const AUTOEQ_SUFFIX: &str = " ParametricEQ";
+/// The icon before the group's heading.
+const ICON: &str = "icons/arrow-up-down.svg";
 
 impl EqualizerView {
     /// Makes a new profile from an Equalizer APO text and says what came of it, with the
@@ -153,43 +156,39 @@ impl EqualizerView {
         }));
     }
 
-    /// The import and export card: Equalizer APO text read in from a file or the clipboard on
-    /// the left, and the playing profile written out on the right.
+    /// The import and export group: a row that reads Equalizer APO text in from a file or the
+    /// clipboard, and a row that writes the playing profile out to either.
     pub(super) fn transfer(&self, cx: &mut Context<Self>) -> AnyElement {
         let button =
             |id: &'static str, label: SharedString| Button::new(id).small().outline().label(label);
-        super::section(t!("equalizer-transfer"))
-            .child(blurb(t!("equalizer-transfer-detail"), None, cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        button("equalizer-import-file", t!("equalizer-import-file"))
-                            .on_click(cx.listener(|this, _, _, cx| this.import_file(cx))),
-                    )
-                    .child(
-                        button("equalizer-paste", t!("equalizer-paste"))
-                            .on_click(cx.listener(|this, _, _, cx| this.paste(cx))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .ml_auto()
-                            .child(
-                                button("equalizer-copy", t!("equalizer-copy"))
-                                    .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
-                            )
-                            .child(
-                                button("equalizer-export-file", t!("equalizer-export-file"))
-                                    .on_click(cx.listener(|this, _, _, cx| this.export_file(cx))),
-                            ),
-                    ),
-            )
+        let pair = |first: Button, second: Button| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(first)
+                .child(second)
+                .into_any_element()
+        };
+        let import = pair(
+            button("equalizer-paste", t!("equalizer-paste"))
+                .on_click(cx.listener(|this, _, _, cx| this.paste(cx))),
+            button("equalizer-import-file", t!("equalizer-import-file"))
+                .on_click(cx.listener(|this, _, _, cx| this.import_file(cx))),
+        );
+        let export = pair(
+            button("equalizer-copy", t!("equalizer-copy"))
+                .on_click(cx.listener(|this, _, _, cx| this.copy(cx))),
+            button("equalizer-export-file", t!("equalizer-export-file"))
+                .on_click(cx.listener(|this, _, _, cx| this.export_file(cx))),
+        );
+
+        div()
+            .flex()
+            .flex_col()
+            .child(heading("equalizer-transfer", ICON, None, cx))
+            .child(Row::new(t!("equalizer-import"), import))
+            .child(Row::new(t!("equalizer-export"), export))
             .into_any_element()
     }
 }

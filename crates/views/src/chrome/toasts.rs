@@ -8,7 +8,7 @@ use gpui::{
     Context, DispatchPhase, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     Pixels, Point, Render, Window, canvas, div, point, px, relative,
 };
-use router::{Destination, SettingsTab, navigate};
+use router::{Destination, SettingsPage, navigate};
 use state::{Outcome, Target, Toasts};
 use ui::{ActiveTheme as _, Toast, css_ease, css_ease_out, paced};
 
@@ -631,6 +631,6 @@ fn destination(target: Target) -> Destination {
         Target::Album(id) => Destination::Album(id),
         Target::Artist(id) => Destination::Artist(id),
         Target::Playlist(id) => Destination::Playlist(id),
-        Target::PlaybackSettings => Destination::Settings(SettingsTab::Playback),
+        Target::PlaybackSettings => Destination::Settings(SettingsPage::Playback),
     }
 }
