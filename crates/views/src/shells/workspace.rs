@@ -93,6 +93,8 @@ impl Workspace {
         let strip = PlayerBar::strip(self.playback.read(cx), cx);
         if self.strip != strip {
             self.strip = strip;
+            self.toasts
+                .update(cx, |toasts, cx| toasts.set_strip(strip, cx));
             cx.notify();
         }
     }
