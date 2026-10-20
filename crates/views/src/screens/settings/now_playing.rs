@@ -5,7 +5,7 @@ use state::FullscreenControlsAutohide;
 use ui::{ActiveTheme as _, Levels, OptionCard, Switch, Visualizer, VisualizerStyle};
 
 use super::rows::{grid, segmented};
-use super::{Group, SettingsView, Slot};
+use super::{Group, Row, SettingsView, Slot};
 
 /// How large the cross on the Off card draws.
 const GLYPH: Pixels = px(18.);
@@ -20,11 +20,8 @@ impl SettingsView {
     pub(super) fn now_playing_groups(&self, cx: &App) -> Vec<Group> {
         let settings = self.settings.read(cx);
         vec![
-            Group::new("settings-group-background", "icons/blend.svg").rows(
-                [Slot::Ambient]
-                    .into_iter()
-                    .chain(settings.ambient().then_some(Slot::AmbientMotion)),
-            ),
+            Group::new("settings-group-background", "icons/blend.svg")
+                .rows([Slot::Ambient, Slot::AmbientMotion]),
             Group::new("settings-visualizer", "icons/music-2.svg")
                 .cards(Slot::Visualizer)
                 .rows(
@@ -56,16 +53,20 @@ impl SettingsView {
 
     pub(super) fn ambient_motion_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let on = self.settings.read(cx).ambient_motion();
+        let disabled = !self.settings.read(cx).ambient();
 
-        self.row(
+        Row::new(
             t!("settings-ambient-motion"),
             Switch::new("ambient-motion", on)
+                .disabled(disabled)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_ambient_motion(!on, cx));
                 }))
                 .into_any_element(),
         )
+        .disabled(disabled)
+        .into_any_element()
     }
 
     /// How the spectrum is drawn behind the fullscreen artwork, off included.
