@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Customize the player bar in Settings → Appearance → Player bar. Choose Classic, Compact or
+  Centered from miniature cards, and let pages, lyrics, the queue and pinned items scroll beneath
+  a translucent, frosted bar. Centered puts the cover and playback buttons on the left, track
+  details in the middle and a shorter progress bar below.
 - You can pick a streaming quality for Tidal, Deezer, Spotify, YouTube Music and Apple Music in
   Settings → Playback → Streaming. Each level says what it streams as. Go as low as 48 kbps to
   save data, or choose Hi-res on Tidal for 24-bit FLAC. When your plan or a track has nothing at
@@ -118,6 +122,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Translucent menus and the player bar use a denser surface to keep text and controls readable
+  over bright artwork underneath.
+- Opening or resizing a sidebar no longer changes the player bar's responsive layout. It
+  follows the width of the whole window.
 - Low-bitrate HE-AAC files, in your local library or on a Subsonic server, play with their full
   sound. They used to play muffled, with everything above about 11 kHz missing.
 - When the service you last used cannot sign back in at launch, Sonora switches to another

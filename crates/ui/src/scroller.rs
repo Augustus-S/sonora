@@ -22,6 +22,7 @@ pub struct Scroller {
     children: Vec<AnyElement>,
     present_surface: bool,
     owns_scroll: bool,
+    bottom_inset: Pixels,
 }
 
 impl Scroller {
@@ -34,6 +35,7 @@ impl Scroller {
             children: Vec::new(),
             present_surface: true,
             owns_scroll: true,
+            bottom_inset: Pixels::ZERO,
         }
     }
 
@@ -52,6 +54,14 @@ impl Scroller {
     /// compositor sampling when those children already have their own spring motion.
     pub fn manual_presentation(mut self) -> Self {
         self.present_surface = false;
+        self
+    }
+
+    /// Adds room after the scrollable content so its final item can rise above an overlaid
+    /// control. This is added to caller padding, rather than replacing it. A self-scrolling
+    /// listing keeps only its scrollbar clear; its list must provide its own trailing space.
+    pub fn bottom_inset(mut self, inset: Pixels) -> Self {
+        self.bottom_inset = inset.max(Pixels::ZERO);
         self
     }
 }
@@ -75,7 +85,7 @@ impl ParentElement for Scroller {
 }
 
 impl RenderOnce for Scroller {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self {
             mut base,
             id,
@@ -83,8 +93,10 @@ impl RenderOnce for Scroller {
             children,
             present_surface,
             owns_scroll,
+            bottom_inset,
         } = self;
 
+        bar.update(cx, |bar, cx| bar.set_track_bottom(bottom_inset, cx));
         let scroll = bar.read(cx).scroll().clone();
         let overrides = std::mem::take(base.style());
         bar.read(cx).sync();
@@ -109,6 +121,15 @@ impl RenderOnce for Scroller {
             .children(children);
 
         surface.style().refine(&overrides);
+        if owns_scroll && bottom_inset > Pixels::ZERO {
+            let padding = surface
+                .style()
+                .padding
+                .bottom
+                .unwrap_or_default()
+                .to_pixels(Pixels::ZERO.into(), window.rem_size());
+            surface = surface.pb(padding + bottom_inset);
+        }
         if present_surface {
             surface = surface.layer_translate(presentation);
         }

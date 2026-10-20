@@ -4,7 +4,7 @@ use gpui::prelude::*;
 use gpui::{AnyView, App, Context, Entity, FocusHandle, Render, StyleRefinement};
 use gpui::{Window, deferred, div};
 use input::WORKSPACE_CONTEXT;
-use state::{Playback, Queue, SideTab};
+use state::{AppSettings, Playback, Queue, SideTab, Sonora};
 use ui::{
     Activate, ActiveTheme as _, Deselect, Entrance, Remove, SelectNext, SelectPrevious, entering,
     shown_listing, veiled,
@@ -23,6 +23,7 @@ use crate::shells::Shell;
 pub(crate) struct Workspace {
     sidebar: Entity<SidebarLeft>,
     player_bar: Entity<PlayerBar>,
+    settings: Entity<AppSettings>,
     sidebar_right: Entity<SidebarRight>,
     playlist_editor: Entity<PlaylistEditor>,
     tag_editor: Entity<TagEditor>,
@@ -53,10 +54,13 @@ impl Workspace {
         let sidebar = cx.new(SidebarLeft::new);
         let sidebar_right = cx.new(|cx| SidebarRight::new(queue.clone(), playback.clone(), cx));
         let player_bar = cx.new(|cx| PlayerBar::new(playback, queue, cx));
+        let settings = Sonora::global(cx).settings.clone();
+        cx.observe(&settings, |_, _, cx| cx.notify()).detach();
 
         Self {
             sidebar,
             player_bar,
+            settings,
             sidebar_right,
             playlist_editor: PlaylistEditor::entity(cx),
             tag_editor: TagEditor::entity(cx),
@@ -176,6 +180,12 @@ impl Render for Workspace {
         let covered = self.sidebar_right.read(cx).covers_content(window);
         let overlay = self.sidebar.read(cx).overlays();
         let bar_height = PlayerBar::height(window, cx);
+        let underlap = self.settings.read(cx).player_bar_transparent();
+        let bottom = match underlap {
+            true => bar_height,
+            false => gpui::Pixels::ZERO,
+        };
+        Chrome::set_bottom(bottom, cx);
         // A cached view is laid out from the style given here and its own root
         // style is never consulted, so it can only be cached while it is in the
         // flow at a width this knows: an overlaid sidebar places itself, and a
@@ -343,6 +353,7 @@ impl Render for Workspace {
             .child(
                 div()
                     .relative()
+                    .when(underlap, |bar| bar.absolute().left_0().right_0().bottom_0())
                     .child(
                         self.player_bar
                             .clone()

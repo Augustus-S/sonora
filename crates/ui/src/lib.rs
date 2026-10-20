@@ -72,7 +72,7 @@ pub use filters::{
     Filter, FilterChange, FlagAxis, RangeAxis, RangeScrubber, RangeState, SortAxis, Unit,
 };
 pub use form::{FORM_CONTEXT, Submit};
-pub use glass::{GLASS_BLUR, GLASS_FILL, blurring, frost, glass};
+pub use glass::{GLASS_BLUR, GLASS_FILL, blurring, frost, glass, popover_fill, popover_surface};
 pub use glide::{Glide, ScrollPosition};
 pub use grain::grain;
 pub use info_card::{Fact, InfoCard};

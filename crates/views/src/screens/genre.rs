@@ -138,21 +138,24 @@ impl Render for GenreView {
         });
 
         div().flex().flex_col().size_full().child(
-            Scroller::new("genre", &self.scrollbar).p(pad).child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_8()
-                    .child(
-                        div()
-                            .text_size(theme.text(Text::Display))
-                            .font_weight(FontWeight::BOLD)
-                            .child(SharedString::from(title)),
-                    )
-                    .when(loading, |this| this.child(Skeleton::new().w_full().h(TILE)))
-                    .when(empty, |this| this.child(vacant(t!("genre-empty"), cx)))
-                    .child(shelves),
-            ),
+            Scroller::new("genre", &self.scrollbar)
+                .bottom_inset(crate::chrome::Chrome::bottom(cx))
+                .p(pad)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_8()
+                        .child(
+                            div()
+                                .text_size(theme.text(Text::Display))
+                                .font_weight(FontWeight::BOLD)
+                                .child(SharedString::from(title)),
+                        )
+                        .when(loading, |this| this.child(Skeleton::new().w_full().h(TILE)))
+                        .when(empty, |this| this.child(vacant(t!("genre-empty"), cx)))
+                        .child(shelves),
+                ),
         )
     }
 }

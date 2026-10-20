@@ -65,6 +65,8 @@ pub(crate) struct Chrome {
     /// The width the left sidebar leaves free for an open right sidebar, counted even while
     /// the window is too narrow to show it.
     reserved_right: Pixels,
+    /// The part of a page covered by the translucent player bar.
+    player_bottom: Pixels,
 }
 
 struct Installed(Entity<Chrome>);
@@ -85,6 +87,7 @@ impl Chrome {
             sidebar_left: left,
             sidebar_right: right,
             reserved_right,
+            player_bottom: Self::get(cx).player_bottom,
         };
         let chrome = Self::entity(cx);
         chrome.update(cx, |chrome, cx| {
@@ -105,6 +108,22 @@ impl Chrome {
         Self::get(cx).reserved_right
     }
 
+    /// The extra scroll space needed to bring a page's last item above the player bar.
+    pub fn bottom(cx: &App) -> Pixels {
+        Self::get(cx).player_bottom
+    }
+
+    /// Publishes the player bar's overlap after its responsive height has been resolved.
+    pub(crate) fn set_bottom(bottom: Pixels, cx: &mut App) {
+        Self::entity(cx).update(cx, |chrome, cx| {
+            if chrome.player_bottom != bottom {
+                chrome.player_bottom = bottom;
+                cx.notify();
+                cx.refresh_windows();
+            }
+        });
+    }
+
     pub fn content(window: &Window, cx: &App) -> Pixels {
         let chrome = Self::get(cx);
         (window.viewport_size().width - chrome.sidebar_left - chrome.sidebar_right).max(MIN_CONTENT)
@@ -112,5 +131,10 @@ impl Chrome {
 
     pub fn room(window: &Window, cx: &App) -> Room {
         Room::of(Self::content(window, cx))
+    }
+
+    /// Classifies chrome that spans the whole window, including the space under sidebars.
+    pub fn window_room(window: &Window) -> Room {
+        Room::of(window.viewport_size().width)
     }
 }

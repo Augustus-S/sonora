@@ -387,6 +387,45 @@ struct Values {
     appearance: Appearance,
 }
 
+/// The arrangement of the workspace's player bar, independent of its surface material.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlayerBarLayout {
+    #[default]
+    Classic,
+    Centered,
+    Compact,
+}
+
+impl PlayerBarLayout {
+    pub const ALL: [Self; 3] = [Self::Classic, Self::Centered, Self::Compact];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Centered => "centered",
+            Self::Compact => "compact",
+        }
+    }
+
+    /// The label's Fluent key, resolved by the view when it renders the layout cards.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Classic => "settings-player-bar-classic",
+            Self::Centered => "settings-player-bar-centered",
+            Self::Compact => "settings-player-bar-compact",
+        }
+    }
+
+    /// Reads a saved layout id, keeping the original bar for missing or unknown choices.
+    pub fn from_id(id: &str) -> Self {
+        match id {
+            "centered" => Self::Centered,
+            "compact" => Self::Compact,
+            _ => Self::Classic,
+        }
+    }
+}
+
 /// The `appearance` block of `settings.json`. Fixed choices are stored by id, removed variant
 /// falls back to the default instead of failing the parse.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -400,6 +439,8 @@ struct Appearance {
     visualizer_style: String,
     /// Whether the visualizer draws the track at its own level rather than at the volume.
     visualizer_absolute: bool,
+    player_bar_layout: String,
+    player_bar_transparent: bool,
     icons: String,
     rounding: String,
     /// Whether the app paints its frosted treatments. The key kept its old name, which stood
@@ -684,6 +725,8 @@ impl Default for Appearance {
             visualizer: true,
             visualizer_style: ui::VisualizerStyle::default().id().to_owned(),
             visualizer_absolute: false,
+            player_bar_layout: PlayerBarLayout::default().id().to_owned(),
+            player_bar_transparent: false,
             icons: icons::BASE.to_owned(),
             rounding: Rounding::Rounded.id().to_owned(),
             blur: true,
@@ -1106,6 +1149,16 @@ impl AppSettings {
 
     pub fn adaptive_theme(&self) -> bool {
         self.values.appearance.adaptive_theme
+    }
+
+    /// The arrangement of the workspace's playback controls. Unknown saved ids use Classic.
+    pub fn player_bar_layout(&self) -> PlayerBarLayout {
+        PlayerBarLayout::from_id(&self.values.appearance.player_bar_layout)
+    }
+
+    /// Whether the player bar uses the context-menu material over the scrolling content.
+    pub fn player_bar_transparent(&self) -> bool {
+        self.values.appearance.player_bar_transparent
     }
 
     /// Whether fullscreen paints the ambient background sampled from the cover.
@@ -1797,6 +1850,18 @@ impl AppSettings {
 
     pub fn set_ambient(&mut self, ambient: bool, cx: &mut Context<Self>) {
         self.values.appearance.ambient = ambient;
+        self.schedule_save(cx);
+    }
+
+    /// Applies a player bar layout immediately and saves it in the appearance preferences.
+    pub fn set_player_bar_layout(&mut self, layout: PlayerBarLayout, cx: &mut Context<Self>) {
+        self.values.appearance.player_bar_layout = layout.id().to_owned();
+        self.schedule_save(cx);
+    }
+
+    /// Lets the page scroll under the player bar, or restores the solid bar below the page.
+    pub fn set_player_bar_transparent(&mut self, transparent: bool, cx: &mut Context<Self>) {
+        self.values.appearance.player_bar_transparent = transparent;
         self.schedule_save(cx);
     }
 

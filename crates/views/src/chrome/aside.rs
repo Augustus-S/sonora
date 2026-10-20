@@ -998,17 +998,20 @@ impl Aside {
         }
 
         Some(
-            self.raised(ui::perched(
-                Button::new("resume-pin")
-                    .secondary()
-                    .icon("icons/undo-2.svg")
-                    .tooltip("lyrics-follow")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.anchor_verse();
-                        cx.notify();
-                    })),
+            self.raised(
+                ui::perched(
+                    Button::new("resume-pin")
+                        .secondary()
+                        .icon("icons/undo-2.svg")
+                        .tooltip("lyrics-follow")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.anchor_verse();
+                            cx.notify();
+                        })),
+                    cx,
+                ),
                 cx,
-            )),
+            ),
         )
     }
 
@@ -1025,14 +1028,25 @@ impl Aside {
         };
         let perch = ui::return_to("queue-return-top", &self.scrollbar, goal, tooltip, cx)?;
 
-        Some(self.raised(perch))
+        Some(self.raised(perch, cx))
     }
 
-    /// Lifts a floating control clear of the transport a stripped aside leaves underneath it.
-    fn raised(&self, perch: Div) -> Div {
+    /// Keeps floating controls above the workspace player bar or fullscreen transport.
+    fn raised(&self, perch: Div, cx: &App) -> Div {
         match self.titled {
-            true => perch,
+            true => match self.bottom(cx) > Pixels::ZERO {
+                true => perch.bottom(self.bottom(cx) + cx.theme().metrics.pad * 1.5),
+                false => perch,
+            },
             false => perch.bottom_16(),
+        }
+    }
+
+    /// Only workspace asides sit behind the player bar; fullscreen keeps its own clearance.
+    fn bottom(&self, cx: &App) -> Pixels {
+        match self.titled {
+            true => Chrome::bottom(cx),
+            false => Pixels::ZERO,
         }
     }
 
@@ -1602,6 +1616,7 @@ impl Aside {
         };
 
         let sheet = Scroller::new("lyrics", &self.verse_bar)
+            .bottom_inset(self.bottom(cx))
             .when(lines.is_some(), Scroller::manual_presentation)
             .when(lines.is_some(), |this| {
                 this.capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, cx| {
@@ -1829,10 +1844,11 @@ impl Aside {
         let drop_gap = self.drop_gap;
         let upcoming = sections.upcoming;
         let audible = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
+        let tail = (self.bottom(cx) / cx.theme().metrics.list_row).ceil() as usize;
 
         uniform_list(
             "queue-rows",
-            sections.len() + TAIL_ROWS,
+            sections.len() + TAIL_ROWS + tail,
             cx.processor(move |_, range: Range<usize>, window, cx| {
                 let reach = (range.len() as f32 * PREFETCH_REACH).ceil() as usize;
                 let near = (range.start.saturating_sub(reach)..range.start)
@@ -1978,6 +1994,7 @@ impl Render for Aside {
                     .when(self.tab == SideTab::Queue && !empty, |this| {
                         this.child(
                             Scroller::listing("queue-rows", &self.scrollbar)
+                                .bottom_inset(self.bottom(cx))
                                 .when(effects(), |this| this.fade_edges(px(FADE * 0.5), px(FADE)))
                                 .child(
                                     self.rows(sections, cx)

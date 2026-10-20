@@ -121,6 +121,8 @@ impl SidebarLeft {
         cx.observe(&library, |_, _, cx| cx.notify()).detach();
         cx.observe(&pins, |_, _, cx| cx.notify()).detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
+        let chrome = super::Chrome::entity(cx);
+        cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| ui::Scrollbar::inset().watching(me));
         let scrollbar = cx.new(|_| ui::Scrollbar::new(ScrollHandle::new()).watching(me));
@@ -674,6 +676,7 @@ impl Render for SidebarLeft {
                     .min_h_0()
                     .child(
                         Scroller::new("sidebar-left-rows", &self.scrollbar)
+                            .bottom_inset(super::Chrome::bottom(cx))
                             .size_full()
                             .child(
                                 div()
@@ -688,7 +691,15 @@ impl Render for SidebarLeft {
                                     .children(rows),
                             ),
                     )
-                    .children(ui::return_top("sidebar-return-top", &self.scrollbar, cx)),
+                    .children(
+                        ui::return_top("sidebar-return-top", &self.scrollbar, cx).map(|perch| {
+                            match super::Chrome::bottom(cx) > Pixels::ZERO {
+                                true => perch
+                                    .bottom(super::Chrome::bottom(cx) + theme.metrics.pad * 1.5),
+                                false => perch,
+                            }
+                        }),
+                    ),
             )
             .children(self.menu(cx));
 

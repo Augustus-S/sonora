@@ -875,6 +875,7 @@ impl LibraryView {
         let view = self.me.clone();
 
         Scroller::new("library-cards", &self.card_scrollbar)
+            .bottom_inset(crate::chrome::Chrome::bottom(cx))
             .py(inset)
             .child(
                 Deck::new("library-deck")
@@ -1092,6 +1093,7 @@ impl Render for LibraryView {
                 .into_any_element(),
             (section, Mode::List) if section.listing() => {
                 Scroller::new("library-page", &self.scrollbar)
+                    .bottom_inset(crate::chrome::Chrome::bottom(cx))
                     .pt(inset)
                     .pb(inset)
                     .child(div().px(inset).child(self.header(cx)))
@@ -1100,6 +1102,7 @@ impl Render for LibraryView {
                     .into_any_element()
             }
             (_, Mode::List) => Scroller::new("library-page", &self.scrollbar)
+                .bottom_inset(crate::chrome::Chrome::bottom(cx))
                 .pb(inset)
                 .child(self.table(self.section).element())
                 .when_some(note, |this, note| this.child(note))
