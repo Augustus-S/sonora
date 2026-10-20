@@ -68,6 +68,9 @@ const LAG_LEAST: Pixels = px(0.05);
 const LAG_STALL: f32 = 0.064;
 // Below this a blur is not worth a layer of its own.
 const HAZE_LEAST: Pixels = px(0.05);
+/// The step a row's blur is rounded to. Neighbouring rows that land on the same step share one
+/// offscreen layer in the renderer, where each distinct blur costs a layer of its own.
+const HAZE_STEP: Pixels = px(0.25);
 // How far a verse sinks while it is held.
 const PRESSED: f32 = 0.955;
 // The widest a line of lyrics is set, in multiples of its own size. Left to fill
@@ -1383,7 +1386,7 @@ impl Aside {
                             this.seek_verse(notes_row, instrumental_start, cx);
                         }))
                         .when(softness > 0., |this| this.opacity(1. - VEIL * softness))
-                        .map(|this| match blur * softness {
+                        .map(|this| match stepped(blur * softness) {
                             soft if soft > HAZE_LEAST => this.blur(soft),
                             _ => this,
                         });
@@ -1606,7 +1609,7 @@ impl Aside {
 
                     let verse_line = verse_line
                         .when(softness > 0., |this| this.opacity(1. - VEIL * softness))
-                        .map(|this| match row_blur * softness {
+                        .map(|this| match stepped(row_blur * softness) {
                             soft if soft > HAZE_LEAST => this.blur(soft),
                             _ => this,
                         });
@@ -3133,6 +3136,11 @@ fn viewport_along(scroll: &ScrollHandle, row: usize, view: Bounds<Pixels>, downw
         true => place.along,
         false => 1. - place.along,
     }
+}
+
+/// A row's blur rounded to the nearest `HAZE_STEP`.
+fn stepped(blur: Pixels) -> Pixels {
+    HAZE_STEP * (blur / HAZE_STEP).round()
 }
 
 fn line_has_passed(line: &music::LyricsLine, position: std::time::Duration) -> bool {
