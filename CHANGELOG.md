@@ -31,6 +31,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   controls and the songs you pick play there, the way Spotify's own apps do.
 - Settings → Discord can hide Sonora's status while Spotify Connect plays, for when Discord
   already shows Spotify's own.
+- While Show as a Spotify device is on, a song you like or unlike in Spotify's other apps
+  updates its heart in Sonora right away, without a restart.
 - You can undo clearing the queue or removing songs from it. Press Undo on the toast that
   appears.
 - Adding a whole album, playlist or artist to the queue shows that it is on its way, and

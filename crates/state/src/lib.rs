@@ -313,6 +313,7 @@ pub fn init(
         Devices::new(
             playback.clone(),
             queue.clone(),
+            library.clone(),
             settings.clone(),
             session.clone(),
             io.clone(),
