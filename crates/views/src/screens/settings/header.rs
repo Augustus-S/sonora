@@ -93,6 +93,7 @@ impl Render for SettingsHeader {
 
         div()
             .relative()
+            .w_full()
             .flex()
             .justify_center()
             .px(layout.margin)
