@@ -32,6 +32,9 @@ const FREQUENCY_FIGURES: i32 = 3;
 const SPECTRUM_SCALE: (f32, f32) = (-90., 0.);
 /// How long the spectrum takes to rise in once it arrives, as a fade-in of the sound would.
 const SPECTRUM_RISE: Duration = Duration::from_millis(700);
+/// About how far apart the spectrum's reads arrive. The levels glide from one read to the next
+/// over this long, so they move at the screen's own rate rather than the reads'.
+const SPECTRUM_GLIDE: Duration = Duration::from_millis(16);
 /// How tall the graph is in cover sizes, with the room of a wide window, and with less.
 const GRAPH_TALL: f32 = 2.8;
 const GRAPH_SHORT: f32 = 2.;
@@ -487,10 +490,15 @@ impl Render for EqualizerGraph {
 }
 
 /// The spectrum of what plays, a view of its own that the screen lays under the graph. It redraws
-/// on every read of the spectrum, which leaves the graph over it and the rest of the page cached.
+/// on every frame while a read is gliding in, which leaves the graph over it and the rest of the
+/// page cached.
 pub(super) struct EqualizerSpectrum {
     state: ResponseGraphState,
     levels: Vec<Level>,
+    /// The levels shown when the latest read arrived, in dBFS, which it glides from.
+    from: Vec<f32>,
+    /// When the latest read arrived.
+    arrived: Instant,
     /// When the spectrum last arrived after none, which its rise counts from.
     since: Option<Instant>,
 }
@@ -500,6 +508,8 @@ impl EqualizerSpectrum {
         cx.observe(&signal, |this, signal, cx| {
             let levels = signal.read(cx).levels().unwrap_or_default();
             if this.levels != levels {
+                this.from = this.shown(cx);
+                this.arrived = Instant::now();
                 this.levels = levels.to_vec();
                 cx.notify();
             }
@@ -508,8 +518,32 @@ impl EqualizerSpectrum {
         Self {
             state: ResponseGraphState::new("equalizer-spectrum"),
             levels: Vec::new(),
+            from: Vec::new(),
+            arrived: Instant::now(),
             since: None,
         }
+    }
+
+    /// How far the latest read has glided in, from 0 as it arrives to 1. Reduced motion takes it
+    /// in at once.
+    fn glided(&self, cx: &App) -> f32 {
+        match cx.reduce_motion() {
+            true => 1.,
+            false => (self.arrived.elapsed().as_secs_f32() / SPECTRUM_GLIDE.as_secs_f32()).min(1.),
+        }
+    }
+
+    /// The levels on screen now, in dBFS, part way from the last read to the latest.
+    fn shown(&self, cx: &App) -> Vec<f32> {
+        let glided = self.glided(cx);
+        self.levels
+            .iter()
+            .enumerate()
+            .map(|(index, level)| match self.from.get(index) {
+                Some(from) => from + (level.dbfs - from) * glided,
+                None => level.dbfs,
+            })
+            .collect()
     }
 }
 
@@ -517,7 +551,7 @@ impl EqualizerSpectrum {
 /// in, a gain that climbs from below the plot's floor to none, so it rises from the bottom rather
 /// than appearing at once.
 impl Render for EqualizerSpectrum {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rise = match self.levels.is_empty() {
             true => {
                 self.since = None;
@@ -530,12 +564,16 @@ impl Render for EqualizerSpectrum {
         };
         let (floor, ceiling) = SPECTRUM_SCALE;
         let fade = (floor - ceiling) * (1. - rise);
+        if !self.levels.is_empty() && (rise < 1. || self.glided(cx) < 1.) {
+            window.request_animation_frame();
+        }
         let points: Vec<_> = self
             .levels
             .iter()
-            .map(|level| ResponsePoint {
+            .zip(self.shown(cx))
+            .map(|(level, dbfs)| ResponsePoint {
                 frequency_hz: level.frequency,
-                gain_db: level.dbfs + fade,
+                gain_db: dbfs + fade,
             })
             .collect();
         let (low, high) = GRAPH_FREQUENCIES;
