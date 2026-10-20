@@ -690,6 +690,7 @@ impl Root {
 
         let mut toolbar = None;
         let mut header = None;
+        let cached = destination != Destination::Equalizer;
 
         let content: AnyView = match destination {
             Destination::Fullscreen => return,
@@ -764,7 +765,7 @@ impl Root {
         self.toolbar = toolbar;
 
         self.shells.workspace.update(cx, |workspace, cx| {
-            workspace.set_content(content, header, cx)
+            workspace.set_content(content, header, cached, cx)
         });
         cx.notify();
     }

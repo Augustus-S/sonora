@@ -49,12 +49,9 @@ pub(super) struct EqualizerGraph {
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
     outputs: Entity<Outputs>,
-    signal: Entity<Signal>,
     graph: Graph,
     /// What the graph last drew, so a notify that changed none of it draws nothing.
     drawn: Option<Drawn>,
-    /// When the spectrum last arrived after none, which its rise counts from.
-    spectrum_since: Option<Instant>,
     /// The node the filter list lit while the pointer is over its row.
     lit: Option<u64>,
 }
@@ -65,7 +62,7 @@ pub(super) struct Selected;
 
 impl EventEmitter<Selected> for EqualizerGraph {}
 
-/// What the graph shows from the equalizer, the output and the spectrum.
+/// What the graph shows from the equalizer and the output.
 #[derive(PartialEq)]
 struct Drawn {
     curve: Curve,
@@ -73,7 +70,6 @@ struct Drawn {
     on: bool,
     preamp: f64,
     rate: u32,
-    spectrum: Option<Vec<Level>>,
     /// Whether advanced mode lets nodes be added, removed and widened on the graph.
     advanced: bool,
 }
@@ -225,23 +221,19 @@ impl EqualizerGraph {
         equalizer: Entity<Equalizer>,
         settings: Entity<AppSettings>,
         outputs: Entity<Outputs>,
-        signal: Entity<Signal>,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&equalizer, |this, _, cx| this.redraw(cx))
             .detach();
         cx.observe(&outputs, |this, _, cx| this.redraw(cx)).detach();
-        cx.observe(&signal, |this, _, cx| this.redraw(cx)).detach();
         cx.observe(&settings, |this, _, cx| this.redraw(cx))
             .detach();
         let mut graph = Self {
             equalizer,
             settings,
             outputs,
-            signal,
             graph: Graph::new(),
             drawn: None,
-            spectrum_since: None,
             lit: None,
         };
         graph.redraw(cx);
@@ -258,7 +250,6 @@ impl EqualizerGraph {
             on: equalizer.enabled(),
             preamp: equalizer.preamp_db(),
             rate: rate(&self.outputs, cx),
-            spectrum: self.signal.read(cx).levels().map(<[Level]>::to_vec),
             advanced: self.settings.read(cx).equalizer_advanced(),
         };
         if self.drawn.as_ref() == Some(&drawn) {
@@ -436,28 +427,6 @@ impl Render for EqualizerGraph {
         let rate = rate(&self.outputs, cx);
         let tone = equalizer.tone().response(rate);
         let preamp = equalizer.preamp_db();
-        let levels = self.signal.read(cx).levels().unwrap_or_default();
-        // The spectrum comes in the way sound fades in: a gain that climbs from below the plot's
-        // floor to none, so it rises from the bottom rather than appearing at once.
-        let rise = match levels.is_empty() {
-            true => {
-                self.spectrum_since = None;
-                1.
-            }
-            false => {
-                let since = *self.spectrum_since.get_or_insert_with(Instant::now);
-                ease_out_cubic(since.elapsed().as_secs_f32() / SPECTRUM_RISE.as_secs_f32())
-            }
-        };
-        let (floor, ceiling) = SPECTRUM_SCALE;
-        let fade = (floor - ceiling) * (1. - rise);
-        let spectrum: Vec<_> = levels
-            .iter()
-            .map(|level| ResponsePoint {
-                frequency_hz: level.frequency,
-                gain_db: level.dbfs + fade,
-            })
-            .collect();
         let (ids, selected) = (self.graph.ids.clone(), self.graph.selected);
         let plotted = self.graph.plotted(&played, rate);
         let nodes: Vec<_> = curve
@@ -503,12 +472,8 @@ impl Render for EqualizerGraph {
         let axes = ResponseAxes::new(low as f32..=high as f32, -span..=span)
             .expect("the graph's axes are valid");
 
-        let (bottom, top) = SPECTRUM_SCALE;
         ResponseGraph::new(&self.graph.state, axes)
             .size_full()
-            .when(!spectrum.is_empty(), |graph| {
-                graph.spectrum(spectrum, bottom..=top)
-            })
             .response(points)
             .nodes(nodes)
             .reference(
@@ -518,6 +483,71 @@ impl Render for EqualizerGraph {
             .bypassed(!on)
             .reshape(advanced)
             .on_edit(cx.listener(|this, edit: &GraphEdit, _, cx| this.graph_edit(edit, cx)))
+    }
+}
+
+/// The spectrum of what plays, a view of its own that the screen lays under the graph. It redraws
+/// on every read of the spectrum, which leaves the graph over it and the rest of the page cached.
+pub(super) struct EqualizerSpectrum {
+    state: ResponseGraphState,
+    levels: Vec<Level>,
+    /// When the spectrum last arrived after none, which its rise counts from.
+    since: Option<Instant>,
+}
+
+impl EqualizerSpectrum {
+    pub(super) fn new(signal: Entity<Signal>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&signal, |this, signal, cx| {
+            let levels = signal.read(cx).levels().unwrap_or_default();
+            if this.levels != levels {
+                this.levels = levels.to_vec();
+                cx.notify();
+            }
+        })
+        .detach();
+        Self {
+            state: ResponseGraphState::new("equalizer-spectrum"),
+            levels: Vec::new(),
+            since: None,
+        }
+    }
+}
+
+/// The spectrum alone, in the plot the graph over it draws in. It comes in the way sound fades
+/// in, a gain that climbs from below the plot's floor to none, so it rises from the bottom rather
+/// than appearing at once.
+impl Render for EqualizerSpectrum {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let rise = match self.levels.is_empty() {
+            true => {
+                self.since = None;
+                1.
+            }
+            false => {
+                let since = *self.since.get_or_insert_with(Instant::now);
+                ease_out_cubic(since.elapsed().as_secs_f32() / SPECTRUM_RISE.as_secs_f32())
+            }
+        };
+        let (floor, ceiling) = SPECTRUM_SCALE;
+        let fade = (floor - ceiling) * (1. - rise);
+        let points: Vec<_> = self
+            .levels
+            .iter()
+            .map(|level| ResponsePoint {
+                frequency_hz: level.frequency,
+                gain_db: level.dbfs + fade,
+            })
+            .collect();
+        let (low, high) = GRAPH_FREQUENCIES;
+        let axes = ResponseAxes::new(low as f32..=high as f32, floor..=ceiling)
+            .expect("the spectrum's axes are valid");
+
+        ResponseGraph::new(&self.state, axes)
+            .size_full()
+            .without_grid()
+            .when(!points.is_empty(), |graph| {
+                graph.spectrum(points, floor..=ceiling)
+            })
     }
 }
 

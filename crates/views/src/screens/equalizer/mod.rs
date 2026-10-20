@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Render, ScrollHandle,
-    SharedString, StyleRefinement, Task, Window, div,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable as _, Pixels, Render,
+    ScrollHandle, SharedString, StyleRefinement, Task, WeakEntity, Window, div,
 };
 use i18n::t;
 use music::equalizer::{Curve, MAX_FILTERS, PREAMP_RANGE, Preamp, Preset, TONE_RANGE, Tone};
@@ -20,7 +20,7 @@ use crate::screens::settings::{self, Row};
 use crate::shared::confirm::{self, Confirm};
 use crate::shared::equalizer::{preset_key, sound_picker};
 
-use graph::EqualizerGraph;
+use graph::{EqualizerGraph, EqualizerSpectrum};
 use meter::OutputMeter;
 use rows::{Fields, figure, figure_cell};
 
@@ -76,6 +76,10 @@ pub(crate) struct EqualizerView {
     /// The curve the fields were last filled from, so they are only rewritten when it changes.
     shown: Option<Curve>,
     graph: Entity<EqualizerGraph>,
+    /// The spectrum under the graph, which redraws on its own with every read.
+    spectrum: Entity<EqualizerSpectrum>,
+    /// The rest of the page in parts drawn as views of their own, made on the first render.
+    parts: Option<Parts>,
     /// The level meter and clip warning under the graph, which redraw on their own.
     meter: Entity<OutputMeter>,
     /// What the screen last drew from the equalizer and the output, so a notify
@@ -138,6 +142,64 @@ impl Shelf {
     }
 }
 
+/// The parts of the page that are views of their own.
+#[derive(Clone)]
+struct Parts {
+    controls: Entity<Part>,
+    below: Entity<Part>,
+    advanced: Entity<Part>,
+}
+
+/// What a part draws, from the page's own state.
+type Build = fn(&mut EqualizerView, &mut Window, &mut Context<EqualizerView>) -> AnyElement;
+
+/// A part of the page drawn as a view of its own and laid out cached. The spectrum and the meter
+/// redraw the page every frame, and a cached part is not built again then. It redraws when the
+/// page notifies, and stands as tall as its content measured the last time it drew.
+struct Part {
+    page: WeakEntity<EqualizerView>,
+    build: Build,
+    height: Pixels,
+}
+
+impl Part {
+    fn new(page: &Entity<EqualizerView>, build: Build, cx: &mut Context<Self>) -> Self {
+        cx.observe(page, |_, _, cx| cx.notify()).detach();
+        Self {
+            page: page.downgrade(),
+            build,
+            height: Pixels::ZERO,
+        }
+    }
+}
+
+impl Render for Part {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let build = self.build;
+        let content = self
+            .page
+            .update(cx, |page, cx| build(page, window, cx))
+            .unwrap_or_else(|_| div().into_any_element());
+        let part = cx.entity().downgrade();
+        div()
+            .w_full()
+            .when(self.height == Pixels::ZERO, |this| this.invisible())
+            .child(content)
+            .on_children_prepainted(move |bounds, _, cx| {
+                let Some(height) = bounds.first().map(|bounds| bounds.size.height) else {
+                    return;
+                };
+                part.update(cx, |part, cx| {
+                    if part.height != height {
+                        part.height = height;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+    }
+}
+
 impl EqualizerView {
     pub(crate) fn new(
         equalizer: Entity<Equalizer>,
@@ -157,14 +219,9 @@ impl EqualizerView {
         let rows = (0..MAX_FILTERS).map(|_| Fields::new(cx)).collect();
         let meter = cx.new(|cx| OutputMeter::new(equalizer.clone(), signal.clone(), cx));
         let graph = cx.new(|cx| {
-            EqualizerGraph::new(
-                equalizer.clone(),
-                settings.clone(),
-                outputs.clone(),
-                signal.clone(),
-                cx,
-            )
+            EqualizerGraph::new(equalizer.clone(), settings.clone(), outputs.clone(), cx)
         });
+        let spectrum = cx.new(|cx| EqualizerSpectrum::new(signal.clone(), cx));
 
         cx.observe(&equalizer, |this, _, cx| {
             this.show_curve(cx);
@@ -197,6 +254,8 @@ impl EqualizerView {
             restore: None,
             shown: None,
             graph,
+            spectrum,
+            parts: None,
             meter,
             drawn: None,
             watch: None,
@@ -213,6 +272,18 @@ impl EqualizerView {
         view.show_curve(cx);
         view.drawn = Some(view.drawing(cx));
         view
+    }
+
+    /// The page's parts, made the first time the page draws, when it can be observed.
+    fn parts(&mut self, cx: &mut Context<Self>) -> Parts {
+        let page = cx.entity();
+        self.parts
+            .get_or_insert_with(|| Parts {
+                controls: cx.new(|cx| Part::new(&page, Self::controls, cx)),
+                below: cx.new(|cx| Part::new(&page, Self::below, cx)),
+                advanced: cx.new(|cx| Part::new(&page, Self::advanced, cx)),
+            })
+            .clone()
     }
 
     /// What the screen shows from the equalizer and the output right now.
@@ -418,21 +489,13 @@ impl EqualizerView {
             .into_any_element()
     }
 
-    /// The sound group: the one picker for every preset and profile with the on switch, undo and
-    /// redo beside it, then the response graph with the output meter under it. Advanced mode adds
-    /// what can be done to the playing profile, and the preamp's row.
-    fn sound(&mut self, room: Room, advanced: bool, cx: &mut Context<Self>) -> AnyElement {
-        let graph = self.graph.clone().cached(
-            StyleRefinement::default()
-                .w_full()
-                .h(graph::height(room, cx)),
-        );
+    /// The top of the sound group: its heading, then the one picker for every preset and profile
+    /// with the on switch, undo and redo beside it. Advanced mode adds what can be done to the
+    /// playing profile.
+    fn controls(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let room = settings::Layout::of(window, cx).room();
+        let advanced = self.settings.read(cx).equalizer_advanced();
         let theme = *cx.theme();
-        let meter = self.meter.clone().cached(
-            StyleRefinement::default()
-                .w_full()
-                .h(theme.metrics.control_small),
-        );
         let on = self.equalizer.read(cx).enabled();
         let settings = self.settings.read(cx);
         let only = settings.equalizer_profiles().count() < 2;
@@ -498,8 +561,6 @@ impl EqualizerView {
                 )
         });
         let mode = self.mode(advanced, cx);
-        let preamp = advanced.then(|| self.preamp_row(cx));
-        let tone = (!advanced).then(|| self.tone_rows(cx));
 
         div()
             .flex()
@@ -508,30 +569,49 @@ impl EqualizerView {
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_x_2()
-                            .gap_y_3()
-                            .child(picker)
-                            .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.equalizer
-                                        .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
-                                },
-                            )))
-                            .child(history)
-                            .children(manage),
-                    )
-                    .child(graph)
-                    .child(meter),
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x_2()
+                    .gap_y_3()
+                    .child(picker)
+                    .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.equalizer
+                                .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
+                        },
+                    )))
+                    .child(history)
+                    .children(manage),
             )
-            .children(preamp)
-            .children(tone)
+            .into_any_element()
+    }
+
+    /// The bottom of the sound group under the graph and the meter: the preamp's row in
+    /// advanced mode, and the bass and treble sliders in simple mode.
+    fn below(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        match self.settings.read(cx).equalizer_advanced() {
+            true => self.preamp_row(cx),
+            false => self.tone_rows(cx),
+        }
+    }
+
+    /// The groups only advanced mode shows, the filters, the device rules and Equalizer APO text
+    /// in and out, each built only while it is on screen.
+    fn advanced(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        div()
+            .flex()
+            .flex_col()
+            .gap(settings::GROUPS)
+            .child(card(&view, "equalizer-filters", |this, window, cx| {
+                let row = settings::Layout::of(window, cx).room();
+                let filters = this.filters(row.fits(Room::Roomy), cx);
+                form(filters, cx).into_any_element()
+            }))
+            .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
+            .child(card(&view, "equalizer-transfer", |this, _, cx| {
+                this.transfer(cx)
+            }))
             .into_any_element()
     }
 
@@ -698,25 +778,44 @@ impl Render for EqualizerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let room = settings::Layout::of(window, cx).room();
         let advanced = self.settings.read(cx).equalizer_advanced();
-        let sound = self.sound(room, advanced, cx);
+        let parts = self.parts(cx);
+        let theme = *cx.theme();
+        let layer = || {
+            StyleRefinement::default()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+        };
 
-        let view = cx.entity();
+        let sound = div()
+            .flex()
+            .flex_col()
+            .child(shown(&parts.controls, cx))
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h(graph::height(room, cx))
+                    .mt_3()
+                    .child(self.spectrum.clone().cached(layer()))
+                    .child(self.graph.clone().cached(layer())),
+            )
+            .child(
+                self.meter.clone().cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(theme.metrics.control_small)
+                        .mt_3(),
+                ),
+            )
+            .child(shown(&parts.below, cx));
         let body = div()
             .flex()
             .flex_col()
             .gap(settings::GROUPS)
             .child(sound)
-            .when(advanced, |this| {
-                this.child(card(&view, "equalizer-filters", |this, window, cx| {
-                    let row = settings::Layout::of(window, cx).room();
-                    let filters = this.filters(row.fits(Room::Roomy), cx);
-                    form(filters, cx).into_any_element()
-                }))
-                .child(card(&view, "equalizer-rules", |this, _, cx| this.rules(cx)))
-                .child(card(&view, "equalizer-transfer", |this, _, cx| {
-                    this.transfer(cx)
-                }))
-            });
+            .when(advanced, |this| this.child(shown(&parts.advanced, cx)));
 
         settings::frame(
             &Destination::Equalizer,
@@ -729,6 +828,13 @@ impl Render for EqualizerView {
         )
         .children(self.name_dialog(cx))
     }
+}
+
+/// `part` laid out cached at the height it measured.
+fn shown(part: &Entity<Part>, cx: &App) -> impl IntoElement + use<> {
+    let height = part.read(cx).height;
+    part.clone()
+        .cached(StyleRefinement::default().w_full().h(height))
 }
 
 /// A group's heading as every settings page draws it, its icon before an uppercase eyebrow, with

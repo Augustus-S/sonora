@@ -35,6 +35,10 @@ pub(crate) struct Workspace {
     /// A screen's own header, floated over the top of the page and outside its transition.
     /// The page pads itself to start beneath it.
     header: Option<AnyView>,
+    /// Whether the page is laid out cached. A page that redraws part of itself every frame is
+    /// not, since a cached view that redraws builds every view in it again, and it caches its
+    /// own parts instead.
+    cached: bool,
     transition: Option<Entrance>,
     focus: FocusHandle,
 }
@@ -63,6 +67,7 @@ impl Workspace {
             notice: cx.new(AppNotice::new),
             content,
             header: None,
+            cached: true,
             transition: None,
             focus: cx.focus_handle(),
         }
@@ -90,16 +95,18 @@ impl Workspace {
         &self.content
     }
 
-    /// Shows a page, with the header it wants above it or none. The two arrive together so
-    /// a header can never outlive its screen.
+    /// Shows a page, with the header it wants above it or none, and laid out `cached` or not.
+    /// The three arrive together so a header can never outlive its screen.
     pub fn set_content(
         &mut self,
         content: AnyView,
         header: Option<AnyView>,
+        cached: bool,
         cx: &mut Context<Self>,
     ) {
         self.content = content;
         self.header = header;
+        self.cached = cached;
         cx.notify();
     }
 
@@ -182,6 +189,15 @@ impl Render for Workspace {
                 .cached(StyleRefinement::default().w(sidebar_width).h_full())
                 .into_any_element(),
         };
+        // The header is cached at the height it last measured, so a page that redraws every
+        // frame leaves it be. Until it has measured itself it is laid out as it is.
+        let top = crate::screens::settings::Layout::of(window, cx);
+        let header = self.header.clone().map(|header| match top.measured {
+            true => header
+                .cached(StyleRefinement::default().w_full().h(top.top))
+                .into_any_element(),
+            false => header.into_any_element(),
+        });
         let hidden = self.hidden(window, cx);
         // The scrim is what fades the outgoing page: it is the page's own colour at
         // full strength, so covering the content with it costs no layout and the
@@ -205,7 +221,7 @@ impl Render for Workspace {
         // rendered uncached. Every screen sizes its root `size_full`, so the layout
         // is the one the cache would have used, and only the frames of the
         // transition pay for the render.
-        let content = match dissolving && hidden > 0. {
+        let content = match (dissolving && hidden > 0.) || !self.cached {
             true => self.content.clone().into_any_element(),
             false => self
                 .content
@@ -309,7 +325,7 @@ impl Render for Workspace {
                                     // The header comes last, so it paints over the page and
                                     // the scrim, and spans the same width the page does
                                     // beneath an overlaid sidebar.
-                                    .when_some(self.header.clone(), |this, header| {
+                                    .when_some(header, |this, header| {
                                         this.child(
                                             div()
                                                 .absolute()
