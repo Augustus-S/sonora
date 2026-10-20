@@ -23,12 +23,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - You can rank your lyrics sources by dragging them in Settings → Lyrics → Lyrics sources, and
   Sonora shows the lyrics of the highest one that has them. Word-by-word lyrics still come before
   line-synced ones, and line-synced before plain text, whichever source they come from.
-- Turn on Show as a Spotify device in Settings and Sonora shows up in Spotify's device list, so
-  Spotify and Discord show what you play in it. Your phone can pause, skip, seek, change the
-  volume and start music in Sonora.
+- While you are signed in to Spotify, Sonora shows up in Spotify's device list, so your phone can
+  pause, skip, seek, change the volume and start music in Sonora. Turn it off with Show as a
+  Spotify device in Settings → Playback.
 - A devices button in the player bar moves playback between Sonora and your other Spotify
   devices. While another device plays, the player bar and lyrics follow its song, and Sonora's
   controls and the songs you pick play there, the way Spotify's own apps do.
+- Settings → Discord can hide Sonora's status while Spotify Connect plays, for when Discord
+  already shows Spotify's own.
 - You can undo clearing the queue or removing songs from it. Press Undo on the toast that
   appears.
 - Adding a whole album, playlist or artist to the queue shows that it is on its way, and
