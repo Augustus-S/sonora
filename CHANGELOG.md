@@ -100,6 +100,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Open lyrics, album grids and long text cost less to draw, so scrolling keeps up with high
+  refresh rate screens more often. The equalizer page redraws about half as often while music
+  plays.
 - The explicit filter on track lists now hides explicit songs instead of showing only them.
 - Active shuffle and repeat show a dot beneath their icons in the player bar and fullscreen,
   so their state is visible without relying on color alone.
