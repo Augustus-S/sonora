@@ -9,9 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Customize the player bar in Settings → Appearance → Player bar. Choose Classic, Compact or
-  Centered from miniature cards, and let pages, lyrics, the queue and pinned items scroll beneath
-  a translucent, frosted bar. Centered puts the cover and playback buttons on the left, track
+- Pages, lyrics, the queue and pinned items scroll beneath a translucent, frosted player bar. You
+  can turn it off, and choose a Classic, Compact or Centered layout, in Settings → Appearance →
+  Player bar. Centered puts the cover and playback buttons on the left, track
   details in the middle and a shorter progress bar below.
 - You can pick a streaming quality for Tidal, Deezer, Spotify, YouTube Music and Apple Music in
   Settings → Playback → Streaming. Each level says what it streams as. Go as low as 48 kbps to

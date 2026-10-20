@@ -726,7 +726,7 @@ impl Default for Appearance {
             visualizer_style: ui::VisualizerStyle::default().id().to_owned(),
             visualizer_absolute: false,
             player_bar_layout: PlayerBarLayout::default().id().to_owned(),
-            player_bar_transparent: false,
+            player_bar_transparent: true,
             icons: icons::BASE.to_owned(),
             rounding: Rounding::Rounded.id().to_owned(),
             blur: true,
