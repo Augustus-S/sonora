@@ -2,8 +2,8 @@ use gpui::{App, Context, Menu, MenuItem, OsAction};
 use i18n::t;
 use input::{
     CloseWindow, DecreaseFontSize, Hide, HideOthers, IncreaseFontSize, MinimizeWindow,
-    OpenSettings, Quit, Redo, RefreshLibrary, ResetFontSize, ShowAll, SignOut, SongNext,
-    SongPrevious, TogglePlayback, ToggleRepeat, ToggleShuffle, Undo, ZoomWindow,
+    OpenSettings, Quit, Redo, Refresh, ResetFontSize, ShowAll, SignOut, SongNext, SongPrevious,
+    TogglePlayback, ToggleRepeat, ToggleShuffle, Undo, ZoomWindow,
 };
 use router::Destination;
 use state::{AppSettings, Equalizer, Shelf, Sonora};
@@ -37,8 +37,9 @@ pub fn register(lingers: bool, cx: &mut App) {
         session.update(cx, |session, cx| session.sign_out(cx));
     });
 
+    // Root handles Refresh whenever a window is open; this runs only without one (the macOS menu).
     cx.on_action(
-        |_: &RefreshLibrary, cx: &mut App| match router::trail(cx).read(cx).current() {
+        |_: &Refresh, cx: &mut App| match router::trail(cx).read(cx).current() {
             Destination::History => {
                 let history = Sonora::global(cx).history.clone();
                 history.update(cx, |history, cx| history.refresh(cx));
@@ -46,6 +47,7 @@ pub fn register(lingers: bool, cx: &mut App) {
             at => {
                 let shelf = match at {
                     Destination::Local(_) => Shelf::Local,
+                    Destination::Album(id) | Destination::Playlist(id) => Shelf::of(&id),
                     _ => Shelf::Streaming,
                 };
                 let library = Sonora::global(cx).library.clone();
@@ -108,7 +110,7 @@ fn menus() -> Vec<Menu> {
         true => vec![
             MenuItem::action(t!("app-settings"), OpenSettings),
             MenuItem::separator(),
-            MenuItem::action(t!("app-refresh-library"), RefreshLibrary),
+            MenuItem::action(t!("app-refresh"), Refresh),
             MenuItem::action(t!("app-sign-out"), SignOut),
             MenuItem::separator(),
             MenuItem::action(t!("app-hide"), Hide),
@@ -118,7 +120,7 @@ fn menus() -> Vec<Menu> {
             MenuItem::action(t!("app-quit"), Quit),
         ],
         false => vec![
-            MenuItem::action(t!("app-refresh-library"), RefreshLibrary),
+            MenuItem::action(t!("app-refresh"), Refresh),
             MenuItem::action(t!("app-sign-out"), SignOut),
             MenuItem::separator(),
             MenuItem::action(t!("app-quit"), Quit),

@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A refresh button beside Back and Forward, or Ctrl+R (Cmd+R on macOS), loads the page you are
+  on again from your server, so changes made in another app show up without restarting Sonora.
 - With Blur UI on, pages, lyrics, the queue and pinned items scroll beneath a frosted player bar.
   You can turn it off, and choose a Classic, Compact or Centered layout, in Settings → Appearance
   → Player bar. Centered puts the cover and playback buttons on the left, track details in the

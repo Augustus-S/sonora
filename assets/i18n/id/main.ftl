@@ -55,7 +55,6 @@ library-part-not-loaded = Sebagian dari koleksi Anda gagal dimuat
 library-local-unconfigured = Atur folder musik lokal Anda
 
 # app menu
-app-refresh-library = Segarkan Koleksi
 app-sign-out = Keluar
 app-quit = Tutup Aplikasi
 app-settings = Pengaturan…

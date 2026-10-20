@@ -58,7 +58,7 @@ library-part-not-loaded = Ta część biblioteki się nie wczytała
 library-local-unconfigured = Skonfiguruj lokalną bibliotekę
 
 # app menu
-app-refresh-library = Odśwież bibliotekę
+app-refresh = Odśwież
 app-sign-out = Wyloguj się
 app-quit = Zakończ
 app-settings = Ustawienia…

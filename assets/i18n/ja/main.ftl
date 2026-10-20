@@ -55,7 +55,6 @@ library-part-not-loaded = ライブラリのこの部分を読み込めません
 library-local-unconfigured = ローカルライブラリを設定する
 
 # app menu
-app-refresh-library = ライブラリを更新
 app-sign-out = サインアウト
 app-quit = 終了
 app-settings = 設定…

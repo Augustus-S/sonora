@@ -58,7 +58,6 @@ library-part-not-loaded = Kjo pjesë e bibliotekës nuk u ngarkua
 library-local-unconfigured = Konfiguro bibliotekën lokale
 
 # app menu
-app-refresh-library = Rifresko bibliotekën
 app-sign-out = Dil
 app-quit = Dil nga aplikacioni
 app-settings = Cilësimet…

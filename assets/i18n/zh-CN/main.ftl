@@ -55,7 +55,6 @@ library-part-not-loaded = 音乐库的这部分加载失败
 library-local-unconfigured = 配置本地音乐库
 
 # app menu
-app-refresh-library = 刷新音乐库
 app-sign-out = 退出登录
 app-quit = 退出
 app-settings = 设置…

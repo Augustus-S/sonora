@@ -11,6 +11,7 @@ use ui::WindowControls;
 use ui::{ActiveTheme as _, Button};
 
 use crate::chrome::SidebarRight;
+use input::Refresh;
 use router::Navigation;
 use state::{AppSettings, Sonora};
 
@@ -143,6 +144,17 @@ impl TitleBar {
                     .on_click(move |_, _, cx| {
                         forward.update(cx, |navigation, cx| navigation.forward(cx))
                     }),
+            )
+            .child(
+                Button::new("history-refresh")
+                    .ghost()
+                    .icon("icons/refresh-cw.svg")
+                    .tooltip("app-refresh")
+                    .size_8()
+                    .px_0()
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(hover))
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(Refresh), cx)),
             )
     }
 
