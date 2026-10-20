@@ -8,7 +8,7 @@ use gpui::{
     Context, DispatchPhase, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     Pixels, Point, Render, Window, canvas, div, point, px, relative,
 };
-use router::{Destination, navigate};
+use router::{Destination, SettingsPage, navigate};
 use state::{Outcome, Target, Toasts};
 use ui::{ActiveTheme as _, Toast, css_ease, css_ease_out, paced};
 
@@ -48,6 +48,9 @@ pub struct ToastStack {
     measured: Rc<RefCell<HashMap<usize, Pixels>>>,
     hovered: bool,
     swipe: Option<Swipe>,
+    /// How tall the strip over the player bar stands. The stack clips at the strip's top, so a
+    /// toast slides out from under the strip rather than across it.
+    strip: Pixels,
 }
 
 /// One toast on screen, kept after the toast is dismissed for as long as it takes to leave.
@@ -99,6 +102,15 @@ impl ToastStack {
             measured: Rc::new(RefCell::new(HashMap::new())),
             hovered: false,
             swipe: None,
+            strip: Pixels::ZERO,
+        }
+    }
+
+    /// Takes the height of the strip over the player bar, which the stack hangs above.
+    pub(crate) fn set_strip(&mut self, strip: Pixels, cx: &mut Context<Self>) {
+        if self.strip != strip {
+            self.strip = strip;
+            cx.notify();
         }
     }
 
@@ -356,7 +368,20 @@ impl ToastStack {
                 card.layer_translate(point(px(sway), px(drop)))
             })
             .when_some(toast.name.clone(), Toast::strong)
-            .when_some(toast.detail.clone(), Toast::detail)
+            .when_some(
+                toast
+                    .detail
+                    .clone()
+                    .or_else(|| toast.note.as_ref().map(|key| i18n::lookup(key, None))),
+                Toast::detail,
+            )
+            .when(
+                toast
+                    .action
+                    .as_ref()
+                    .is_some_and(|action| action.target.is_some()),
+                |card| card.action_icon("icons/external-link.svg"),
+            )
             .map(|card| match toast.outcome {
                 Outcome::Plain => card,
                 Outcome::Done => card.icon("icons/circle-check.svg"),
@@ -422,6 +447,9 @@ impl ToastStack {
         match toast.action.clone() {
             Some(action) => card.action(i18n::lookup(&action.key, None), move |_, _, cx| {
                 action.run(cx);
+                if let Some(target) = action.target.clone() {
+                    navigate(destination(target), cx);
+                }
                 toasts.update(cx, |this, cx| this.dismiss(id, cx));
             }),
             None => card,
@@ -497,11 +525,12 @@ impl Render for ToastStack {
             .map(|slot| self.card(slot, now, cx))
             .collect();
 
-        // The stack hangs from the top of the player bar and clips there, so a toast entering
-        // or leaving slides out from under the bar rather than across it.
+        // The stack hangs from the top of the player bar, or of the strip over it, and clips
+        // there, so a toast entering or leaving slides out from under them rather than across.
         div()
             .absolute()
             .bottom(relative(1.))
+            .mb(self.strip)
             .left_0()
             .right_0()
             .h(window.viewport_size().height)
@@ -615,5 +644,6 @@ fn destination(target: Target) -> Destination {
         Target::Album(id) => Destination::Album(id),
         Target::Artist(id) => Destination::Artist(id),
         Target::Playlist(id) => Destination::Playlist(id),
+        Target::PlaybackSettings => Destination::Settings(SettingsPage::Playback),
     }
 }

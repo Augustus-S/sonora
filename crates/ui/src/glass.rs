@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, Pixels, px};
+use gpui::{App, Hsla, Pixels, px};
 
 use crate::theme::ActiveTheme as _;
 
@@ -7,6 +7,8 @@ use crate::theme::ActiveTheme as _;
 pub const GLASS_FILL: f32 = 0.2;
 /// How hard a glass control blurs what is behind it.
 pub const GLASS_BLUR: Pixels = px(8.);
+/// Raised surfaces retain contrast even over bright artwork, while a faint backdrop remains visible.
+const POPOVER_FILL: f32 = 0.82;
 
 /// Whether a surface that only frosts for the look of it should frost at all. A backdrop blur
 /// is the priciest thing the renderer does per frame, so the setting turns those off and each
@@ -26,6 +28,27 @@ pub fn glass<E: Styled>(element: E, cx: &App) -> E {
     element
         .bg(theme.popover.opacity(GLASS_FILL))
         .backdrop_blur(GLASS_BLUR)
+}
+
+/// The fill shared by context menus and raised translucent panels. With blur disabled it
+/// becomes opaque, since there is no wash behind the text to preserve its contrast.
+pub fn popover_fill(cx: &App) -> Hsla {
+    let theme = cx.theme();
+    match blurring(cx) {
+        true => theme.popover.opacity(POPOVER_FILL),
+        false => theme.popover,
+    }
+}
+
+/// Gives a raised panel the same fill, foreground and backdrop blur as a context menu.
+pub fn popover_surface<E: Styled>(element: E, cx: &App) -> E {
+    let element = element
+        .bg(popover_fill(cx))
+        .text_color(cx.theme().popover_foreground);
+    match blurring(cx) {
+        true => frost(element),
+        false => element,
+    }
 }
 
 /// Blurs what is behind an element by the glass width and nothing more, for a hover fill

@@ -206,6 +206,7 @@ impl Render for HomeView {
             });
 
         Scroller::new("home-page", &self.scrollbar)
+            .bottom_inset(crate::chrome::Chrome::bottom(cx))
             .p(theme.metrics.inset)
             .child(
                 div()

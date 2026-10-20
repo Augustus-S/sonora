@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{App, Context, Entity, SharedString, Task};
-use music::{Album, MediaKind, MusicApi, Page, Pages, Playlist, SavedArtist, Shape, Track};
+use music::{
+    Album, Catalog, MediaKind, MusicApi, Page, Pages, Playlist, SavedArtist, Shape, Track,
+};
 use tokio::sync::Semaphore;
 
 use crate::snapshot::{Kind, Remembered, Snapshots};
@@ -19,8 +21,9 @@ const FATAL: [LibraryPart; 3] = [
 ];
 const FATAL_LOCAL: [LibraryPart; 2] = [LibraryPart::Tracks, LibraryPart::Albums];
 
-/// Lets a few playlists have their contents read at a time. Each read holds every track of its
-/// playlist until it is cut down to ids, and a library asks for all of its playlists at once.
+/// Lets a few playlists have their contents or mosaic covers read at a time. A library asks for
+/// all of its playlists at once. Each read holds every track of its playlist until it is cut down,
+/// and unchecked reads would spend the provider's request budget before the liked songs load.
 static READS: Semaphore = Semaphore::const_new(4);
 
 /// Which provider a library page, an id or a playlist belongs to. The streaming shelf follows
@@ -127,7 +130,7 @@ impl Held {
                     artists: &ready.artists,
                 })
             }
-            Shape::Catalog => Some(Favorites {
+            Shape::Catalog(_) => Some(Favorites {
                 tracks: &self.starred.tracks,
                 albums: &self.starred.albums,
                 artists: &self.starred.artists,
@@ -145,7 +148,7 @@ impl Held {
                     artists: &mut ready.artists,
                 })
             }
-            Shape::Catalog => Some(FavoritesMut {
+            Shape::Catalog(_) => Some(FavoritesMut {
                 tracks: &mut self.starred.tracks,
                 albums: &mut self.starred.albums,
                 artists: &mut self.starred.artists,
@@ -829,7 +832,7 @@ impl Savable for Track {
             return;
         };
         let shelf = Shelf::of(&id);
-        if !library.session.read(cx).capabilities_of(shelf).library {
+        if !library.session.read(cx).shape_of(shelf).editable() {
             return;
         }
         let Some(ready) = library.held_mut(shelf).ready_mut() else {
@@ -950,6 +953,8 @@ pub enum LibraryEvent {
         track: String,
     },
     TracksHidden(Vec<String>),
+    /// A playlist a failed change may have altered in part, so a page showing it loads it again.
+    PlaylistChanged(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1192,7 +1197,7 @@ impl Library {
             raised_rows: HashMap::new(),
         };
         library.held_mut(Shelf::Streaming).state = LibraryState::Loading;
-        library.held_mut(Shelf::Local).shape = Shape::Catalog;
+        library.held_mut(Shelf::Local).shape = Shape::Catalog(Catalog::Fixed);
         library.prime(Shelf::Streaming, cx);
         match library.session.read(cx).client_of(Shelf::Local).is_some() {
             true => library.load(Shelf::Local, cx),
@@ -1575,7 +1580,7 @@ impl Library {
     }
 
     /// Whether a track or album is in the shelf's own library, apart from its favorites. Only
-    /// a `Capabilities::library` provider draws the distinction, and there the pages list the
+    /// a `Catalog::Editable` provider draws the distinction, and there the pages list the
     /// library, so this is what they list.
     pub fn in_library(&self, id: &str) -> bool {
         let state = &self.held(Shelf::of(id)).state;
@@ -1782,9 +1787,7 @@ impl Library {
             move |client| async move {
                 let tracks = addition.resolve(&client).await?;
                 let id = client.create_playlist(&name).await?;
-                for track in &tracks {
-                    client.add_track_to_playlist(&id, track).await?;
-                }
+                client.add_tracks_to_playlist(&id, &tracks).await?;
                 let fetched = client.playlist(&id).await.map(|detail| detail.playlist);
                 Ok(fetched.unwrap_or_else(|error| {
                     log::warn!("library: a new playlist is not readable yet: {error:#}");
@@ -1889,9 +1892,9 @@ impl Library {
             move |client| async move {
                 let mut track_ids = addition.resolve(&client).await?;
                 track_ids.retain(|id| !known.contains(id));
-                for track_id in &track_ids {
-                    client.add_track_to_playlist(&playlist_id, track_id).await?;
-                }
+                client
+                    .add_tracks_to_playlist(&playlist_id, &track_ids)
+                    .await?;
                 Ok(track_ids)
             },
             move |this, track_ids, cx| {
@@ -1916,19 +1919,27 @@ impl Library {
     }
 
     /// Takes tracks out of a playlist and reports it once the provider agrees, with an Undo that
-    /// adds them back at the end, the way every provider adds.
+    /// adds them back at the end, the way every provider adds. Every copy of a named track goes,
+    /// the way the page drops every row of it, so `rows` names a track once for each copy the
+    /// playlist holds and the count and the Undo follow it.
     pub fn remove_tracks_from_playlist(
         &mut self,
         playlist_id: String,
-        track_ids: Vec<String>,
+        rows: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        if track_ids.is_empty() {
+        if rows.is_empty() {
             return;
         }
+        let mut seen = HashSet::new();
+        let track_ids: Vec<String> = rows
+            .iter()
+            .filter(|track| seen.insert(track.as_str()))
+            .cloned()
+            .collect();
         let emptied = playlist_id.clone();
-        let dropped = track_ids.clone();
-        let dropped_count = track_ids.len() as u32;
+        let gone = track_ids.clone();
+        let dropped_count = rows.len() as u32;
         let name = self
             .playlist(&playlist_id)
             .map(|playlist| playlist.name.clone());
@@ -1951,7 +1962,7 @@ impl Library {
                 Ok(())
             },
             move |this, (), cx| {
-                this.raise_rows(&emptied, name, dropped.clone(), cx);
+                this.raise_rows(&emptied, name, rows, cx);
                 this.amend_playlist(
                     &emptied,
                     |playlist| {
@@ -1960,11 +1971,11 @@ impl Library {
                     cx,
                 );
                 if let Some(ids) = this.contents.get_mut(&emptied) {
-                    for track in &dropped {
+                    for track in &gone {
                         ids.remove(track);
                     }
                 }
-                for track in dropped {
+                for track in gone {
                     cx.emit(LibraryEvent::TrackDropped {
                         playlist: emptied.clone(),
                         track,
@@ -2238,9 +2249,10 @@ impl Library {
             let asked = id.clone();
             let key = id.clone();
             let task = cx.spawn(async move |this, cx| {
-                let covers = join(
-                    io.spawn(async move { client.playlist_covers(&asked, mosaic::TILES).await }),
-                )
+                let covers = join(io.spawn(async move {
+                    let _turn = READS.acquire().await;
+                    client.playlist_covers(&asked, mosaic::TILES).await
+                }))
                 .await;
                 match covers {
                     Ok(covers) => {
@@ -2417,9 +2429,8 @@ impl Library {
         let io = self.io.clone();
         self.playlist_task = Some(cx.spawn(async move |this, cx| {
             let result = join(io.spawn(async move { mutation(client).await })).await;
-            if result.is_ok()
-                && let Some(catalog) = catalog
-            {
+            // A change that failed part way may still have landed in part.
+            if let Some(catalog) = catalog {
                 for id in &invalidated {
                     catalog.invalidate_playlist(id).await;
                 }
@@ -2440,6 +2451,9 @@ impl Library {
                     Err(error) => {
                         log::warn!("library: cannot {action}: {error:#}");
                         Toasts::show(Outcome::Failed, "toast-playlist-failed", cx);
+                        for id in invalidated {
+                            cx.emit(LibraryEvent::PlaylistChanged(id));
+                        }
                     }
                 }
                 cx.notify();
@@ -2602,7 +2616,7 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => tracks.saved_tracks_paged().await,
-                        Shape::Catalog => tracks.all_tracks_paged().await,
+                        Shape::Catalog(_) => tracks.all_tracks_paged().await,
                     }
                 },
                 Landed::Tracks,
@@ -2619,7 +2633,7 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => albums.saved_albums_paged().await,
-                        Shape::Catalog => albums.all_albums_paged().await,
+                        Shape::Catalog(_) => albums.all_albums_paged().await,
                     }
                 },
                 Landed::Albums,
@@ -2631,14 +2645,14 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => artists.saved_artists_paged().await,
-                        Shape::Catalog => artists.all_artists_paged().await,
+                        Shape::Catalog(_) => artists.all_artists_paged().await,
                     }
                 },
                 Landed::Artists,
                 cx,
             ),
         ];
-        if shape == Shape::Catalog {
+        if shape.is_catalog() {
             let tracks = client.clone();
             let albums = client.clone();
             tasks.extend([

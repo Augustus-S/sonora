@@ -1,5 +1,5 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, Context, Entity, SharedString, Window, div};
+use gpui::{App, ClickEvent, Context, Entity, Window, div};
 use i18n::t;
 use music::connect::{Command, DeviceKind};
 use state::{Devices, Sonora};
@@ -34,9 +34,6 @@ impl Render for DevicePicker {
 
         let theme = *cx.theme();
         let elsewhere = state.elsewhere().cloned();
-        let remote = state
-            .remote_track()
-            .map(|track| SharedString::from(track.name.clone()));
         let devices = self.devices.clone();
 
         let mut items = vec![
@@ -57,9 +54,6 @@ impl Render for DevicePicker {
                 MenuItem::new(("device", at), device.name.clone())
                     .icon(icon(device.kind))
                     .selected(playing)
-                    .when_some(remote.clone().filter(|_| playing), |item, name| {
-                        item.detail(name)
-                    })
                     .on_click({
                         let devices = devices.clone();
                         move |_, _, cx| devices.read(cx).transfer(&id)
