@@ -3,8 +3,8 @@ use std::collections::HashSet;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, FocusHandle, Pixels, Render, ScrollHandle, SharedString,
-    Task, Window, canvas, div, px, svg,
+    AnyElement, App, Context, Div, ElementId, Entity, FocusHandle, Pixels, Render, ScrollHandle,
+    SharedString, Task, Window, canvas, div, px, svg,
 };
 use i18n::{Language, t};
 use music::SignInPrompt;
@@ -14,8 +14,8 @@ use state::{
     Sleep, Sonora,
 };
 use ui::{
-    ActiveTheme as _, Card, Deck, Dismiss, Input, Popovers, Scrollbar, ScrubberState, Vacancy,
-    faint, snapped, upper,
+    ActiveTheme as _, Card, Deck, Dismiss, Input, Lazy, Popovers, Scrollbar, ScrubberState,
+    Vacancy, faint, snapped, upper,
 };
 
 use crate::chrome::{Chrome, OutputPicker};
@@ -52,7 +52,7 @@ const LANGUAGES: &str = "languages";
 const TYPEFACES: &str = "typefaces";
 
 /// One setting, named without building anything. Pages list their settings as slots in groups,
-/// a search scores slots by their title and detail, and only the page on show builds its rows.
+/// a search scores slots by their title and detail, and only visible groups build their rows.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Slot {
     Accounts,
@@ -209,6 +209,11 @@ pub struct SettingsView {
     /// enabled sources. `None` while the drop would leave the order as it is.
     lyrics_drop_gap: Option<usize>,
     scrollbar: Entity<Scrollbar>,
+    /// Invalidates off-screen heights when data changes, without rebuilding them for each
+    /// playback tick, animation frame or scroll update.
+    layout_revision: u64,
+    /// The column width, text size and rounding the cached heights were measured for.
+    geometry: Option<(Pixels, Pixels, Pixels)>,
     opacity: ScrubberState,
     sleep: ScrubberState,
     pending_sleep: Option<Option<Sleep>>,
@@ -262,14 +267,19 @@ impl SettingsView {
         let drm = Sonora::global(cx).drm.clone();
         let equalizer = Sonora::global(cx).equalizer.clone();
         let outputs = Sonora::global(cx).outputs.clone();
-        cx.observe(&drm, |_, _, cx| cx.notify()).detach();
-        cx.observe(&equalizer, |_, _, cx| cx.notify()).detach();
-        cx.observe(&outputs, |_, _, cx| cx.notify()).detach();
-        cx.observe(&session, |_, _, cx| cx.notify()).detach();
-        cx.observe(&scrobbling, |_, _, cx| cx.notify()).detach();
-        cx.observe(&settings, |_, _, cx| cx.notify()).detach();
+        cx.observe(&drm, |this, _, cx| this.remeasure(cx)).detach();
+        cx.observe(&equalizer, |this, _, cx| this.remeasure(cx))
+            .detach();
+        cx.observe(&outputs, |this, _, cx| this.remeasure(cx))
+            .detach();
+        cx.observe(&session, |this, _, cx| this.remeasure(cx))
+            .detach();
+        cx.observe(&scrobbling, |this, _, cx| this.remeasure(cx))
+            .detach();
+        cx.observe(&settings, |this, _, cx| this.remeasure(cx))
+            .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
-        cx.observe(&Scan::global(cx), |_, _, cx| cx.notify())
+        cx.observe(&Scan::global(cx), |this, _, cx| this.remeasure(cx))
             .detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
@@ -290,6 +300,7 @@ impl SettingsView {
         let search = cx.new(|cx| {
             Input::new("settings-search", cx)
                 .icon("icons/search.svg")
+                .blurred()
                 .shortcut("secondary-f")
                 .clearable()
         });
@@ -320,12 +331,14 @@ impl SettingsView {
             settings,
             outputs,
             output_picker,
-            page: SettingsPage::Providers,
+            page: SettingsPage::General,
             search,
             query: String::new(),
             reveal: None,
             lyrics_drop_gap: None,
             scrollbar: cx.new(|_| Scrollbar::new(ScrollHandle::new()).watching(me)),
+            layout_revision: 0,
+            geometry: None,
             opacity: ScrubberState::new("opacity"),
             sleep: ScrubberState::new("sleep"),
             pending_sleep: None,
@@ -448,11 +461,37 @@ impl SettingsView {
         }
     }
 
-    /// What a page shows between its title and its groups, other than a preview.
+    /// Invalidates cached block heights after data or settings change their layout.
+    fn remeasure(&mut self, cx: &mut Context<Self>) {
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+        cx.notify();
+    }
+
+    /// Keeps a block's measured height while it is off screen and builds its content only
+    /// when visible, or once after its layout changes.
+    fn lazy(
+        &self,
+        id: impl Into<ElementId>,
+        cx: &Context<Self>,
+        build: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement + 'static,
+    ) -> Lazy {
+        let view = cx.entity();
+        Lazy::new(id, move |window, cx| {
+            view.update(cx, |this, cx| build(this, window, cx))
+        })
+        .revision(self.layout_revision)
+    }
+
+    /// What a page shows between its title and its groups, built only while visible.
     fn header(&self, page: SettingsPage, cx: &mut Context<Self>) -> Option<AnyElement> {
         match page {
-            SettingsPage::Providers => Some(self.profile(cx).into_any_element()),
-            SettingsPage::About => Some(self.mark(cx).into_any_element()),
+            SettingsPage::Providers | SettingsPage::About => Some(
+                self.lazy((page.id(), 0_usize), cx, move |this, _, cx| match page {
+                    SettingsPage::Providers => this.profile(cx).into_any_element(),
+                    _ => this.mark(cx).into_any_element(),
+                })
+                .into_any_element(),
+            ),
             _ => None,
         }
     }
@@ -461,30 +500,58 @@ impl SettingsView {
     fn footer(&self, page: SettingsPage, cx: &mut Context<Self>) -> Vec<AnyElement> {
         match page {
             SettingsPage::About => vec![
-                self.team(cx).into_any_element(),
-                self.notice(cx).into_any_element(),
+                self.lazy((page.id(), 2_usize), cx, |this, _, cx| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(GROUPS)
+                        .child(this.team(cx))
+                        .child(this.notice(cx))
+                        .into_any_element()
+                })
+                .into_any_element(),
             ],
             _ => Vec::new(),
         }
     }
 
-    /// The live preview above a page's first group, for the pages that have one.
-    fn preview(
-        &self,
-        page: SettingsPage,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let previews = &self.previews;
-        match page {
-            SettingsPage::NowPlaying => {
-                preview::now_playing::preview(&previews.now_playing, self, window, cx)
-            }
-            SettingsPage::Lyrics => preview::lyrics::preview(&previews.lyrics, self, window, cx),
-            SettingsPage::Sound => preview::sound::preview(&previews.sound, self, window, cx),
-            SettingsPage::Discord => preview::discord::preview(&previews.discord, self, window, cx),
-            _ => None,
+    /// The live preview above a page's first group, built and animated only while visible.
+    fn preview(&self, page: SettingsPage, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !matches!(
+            page,
+            SettingsPage::NowPlaying
+                | SettingsPage::Lyrics
+                | SettingsPage::Sound
+                | SettingsPage::Discord
+        ) {
+            return None;
         }
+        let view = cx.entity();
+        Some(
+            self.lazy((page.id(), 1_usize), cx, move |this, window, cx| {
+                let previews = &this.previews;
+                match page {
+                    SettingsPage::NowPlaying => preview::now_playing::preview(this, window, cx),
+                    SettingsPage::Lyrics => {
+                        preview::lyrics::preview(&previews.lyrics, this, window, cx)
+                    }
+                    SettingsPage::Sound => {
+                        preview::sound::preview(&previews.sound, this, window, cx)
+                    }
+                    SettingsPage::Discord => {
+                        preview::discord::preview(&previews.discord, this, window, cx)
+                    }
+                    _ => None,
+                }
+                .unwrap_or_else(|| div().into_any_element())
+            })
+            .on_visibility(move |shown, _, cx| {
+                if !shown && page == SettingsPage::Sound {
+                    view.update(cx, |this, _| this.previews.sound.hide());
+                }
+            })
+            .into_any_element(),
+        )
     }
 
     /// Every setting of every page that answers the query, best match first, with the page it
@@ -726,7 +793,7 @@ impl SettingsView {
         Some(meta)
     }
 
-    /// Builds the slot's row or cards. Asked only for the page on show, every frame it is.
+    /// Builds the slot's row or cards when its group is visible or needs measuring.
     fn slot_element(&self, slot: Slot, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         match slot {
             Slot::Startup => self.startup_row(cx),
@@ -920,7 +987,20 @@ impl SettingsView {
                 let groups = self
                     .groups(page, cx)
                     .into_iter()
-                    .map(|group| self.group(group, window, cx))
+                    .enumerate()
+                    .map(|(index, group)| {
+                        // A search target must lay out even off screen so its reveal marker
+                        // can position the scroll. The other groups keep their cached heights.
+                        if self.reveal.is_some_and(|reveal| {
+                            group.slots().any(|slot| reveal == Reveal::Slot(slot))
+                        }) {
+                            return self.group(group, window, cx);
+                        }
+                        self.lazy((page.id(), index + 3), cx, move |this, window, cx| {
+                            this.group(group, window, cx)
+                        })
+                        .into_any_element()
+                    })
                     .collect::<Vec<_>>();
 
                 div()
@@ -929,7 +1009,7 @@ impl SettingsView {
                     .gap(GROUPS)
                     .children(title)
                     .children(self.header(page, cx))
-                    .children(self.preview(page, window, cx))
+                    .children(self.preview(page, cx))
                     .children(groups)
                     .children(self.footer(page, cx))
             })
@@ -1043,6 +1123,11 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let geometry = (Layout::of(window, cx).width, theme.font_size, theme.radius);
+        if self.geometry.replace(geometry) != Some(geometry) {
+            self.layout_revision = self.layout_revision.wrapping_add(1);
+        }
         if !cx.has_active_drag() {
             self.lyrics_drop_gap = None;
         }

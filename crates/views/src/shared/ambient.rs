@@ -163,11 +163,6 @@ impl Ambient {
         }));
     }
 
-    /// The leading colour of the cover a framed field follows, once sampled.
-    pub(crate) fn tint(&self) -> Option<Hsla> {
-        self.framed.as_ref()?.palette.primary
-    }
-
     /// The theme with the tint this field is painted from: the theme itself behind the window,
     /// and the sampled cover in a frame.
     fn tinted(&self, theme: Theme) -> Theme {

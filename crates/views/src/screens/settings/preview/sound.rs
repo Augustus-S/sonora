@@ -46,6 +46,9 @@ impl SoundPreview {
         cx.observe(&signal, |this, signal, cx| {
             let path = signal.read(cx).path().cloned();
             let preview = &this.previews.sound;
+            if preview.following.borrow().is_none() {
+                return;
+            }
             if *preview.path.borrow() != path {
                 preview.path.replace(path);
                 cx.notify();
@@ -60,7 +63,7 @@ impl SoundPreview {
     }
 
     /// Stops reading the signal path for the preview.
-    pub(super) fn hide(&mut self) {
+    pub(in crate::screens::settings) fn hide(&mut self) {
         self.following.get_mut().take();
     }
 }

@@ -12,9 +12,6 @@ use crate::chrome::Chrome;
 
 /// How wide the content column grows at most.
 const COLUMN: Pixels = px(640.);
-/// How far up into the header the page runs before it is gone, so rows dissolve under the lower
-/// half of the tabs and never show behind the search field.
-const SINK: Pixels = px(40.);
 /// How far past the header the rows keep dissolving, so the handoff under its blur has no hard
 /// edge where sharp content comes out of the haze.
 const FADE_TAIL: Pixels = px(48.);
@@ -74,20 +71,14 @@ impl Layout {
         true
     }
 
-    /// How far the scrolling page reaches up under the header, which is also how far its column
-    /// starts below the page's own top.
-    pub(crate) fn under(&self) -> Pixels {
-        SINK.min(self.top)
-    }
-
     /// How far below the top of the scrolling page content stands clear of the fade, which is
     /// where a revealed setting or section is put.
     pub(crate) fn clear(&self) -> Pixels {
-        self.under() + FADE_TAIL
+        self.top + FADE_TAIL
     }
 
-    /// Fades the scrolling content out across the part of the header it runs under and a little
-    /// past it, so rows rising under the header dissolve rather than meet its blur at a line.
+    /// Uses the original settings treatment across the full header and its tail. The scrolling
+    /// region starts at the content area's top so the fade stays aligned with the header blur.
     pub(crate) fn fade<E: Styled>(&self, element: E) -> E {
         match effects() {
             true => element.fade_edges(self.clear(), Pixels::ZERO),
@@ -159,36 +150,28 @@ pub(crate) fn frame(
     let layout = Layout::of(window, cx);
     let theme = *cx.theme();
     scrollbar.update(cx, |bar, cx| {
-        bar.set_track_top(layout.under(), cx);
+        bar.set_track_top(layout.top, cx);
     });
     div()
         .relative()
         .size_full()
         .when(!layout.measured, |page| page.invisible())
         .child(
-            div()
-                .absolute()
-                .top(layout.top - layout.under())
-                .left_0()
-                .right_0()
-                .bottom_0()
+            layout
+                .fade(Scroller::new(id, scrollbar))
+                .flex()
+                .flex_col()
+                .items_center()
                 .child(
-                    layout
-                        .fade(Scroller::new(id, scrollbar))
+                    div()
                         .flex()
                         .flex_col()
-                        .items_center()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_none()
-                                .w(layout.width)
-                                .pt(layout.under())
-                                .pb(theme.metrics.inset * 2.)
-                                .child(title(destination, named, cx).mb(theme.metrics.inset))
-                                .child(body),
-                        ),
+                        .flex_none()
+                        .w(layout.width)
+                        .pt(layout.top)
+                        .pb(theme.metrics.inset * 2.)
+                        .child(title(destination, named, cx).mb(theme.metrics.inset))
+                        .child(body),
                 ),
         )
 }

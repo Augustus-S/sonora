@@ -19,8 +19,6 @@ struct State {
     shown: Levels,
     armed: bool,
     visible: bool,
-    /// Whether showing lasts one frame only, so a drive whose owner stops drawing it stops too.
-    leased: bool,
     beat: Option<Instant>,
 }
 
@@ -30,15 +28,6 @@ pub struct VisualizerDrive {
 }
 
 impl VisualizerDrive {
-    /// A drive for a visualizer that can drop out of the tree without anyone calling `hide`,
-    /// a settings preview say. Each `show` keeps it running for one more frame, so it winds
-    /// down on the first frame its owner no longer draws it.
-    pub fn leased() -> Self {
-        let drive = Self::default();
-        drive.state.borrow_mut().leased = true;
-        drive
-    }
-
     pub fn levels(&self) -> Levels {
         self.state.borrow().shown.clone()
     }
@@ -68,12 +57,6 @@ impl VisualizerDrive {
                 state.armed = false;
                 return;
             }
-            // The notify below draws the owner within this same frame, and drawing it shows
-            // the drive again before the next step comes round.
-            if state.leased {
-                state.visible = false;
-            }
-
             let now = Instant::now();
             let rate = match state.beat.replace(now) {
                 Some(beat) if now.duration_since(beat) < STALL => {
