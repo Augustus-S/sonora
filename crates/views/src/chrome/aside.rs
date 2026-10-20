@@ -36,7 +36,8 @@ const ADDER_FACE: f32 = 1.4;
 const BULLET: SharedString = SharedString::new_static("·");
 const FADE: f32 = 96.;
 const REST: f32 = FADE * 0.75;
-const TAIL_ROWS: usize = 2;
+/// Blank rows after the last queued song, on top of the ones that clear the player bar.
+const TAIL_ROWS: usize = 1;
 const BLUR: f32 = 0.13;
 const BACKGROUND_SINGING_BLUR: Pixels = px(0.75);
 const VEIL: f32 = 0.3;
@@ -1930,10 +1931,13 @@ impl Aside {
         let upcoming = sections.upcoming;
         let manual = sections.manual;
         let audible = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
+        // A uniform list only draws rows inside its padding, so the space under a see-through
+        // player bar is made of blank rows, which keeps the songs scrolling under it drawn.
+        let under = (self.bottom(cx) / cx.theme().metrics.list_row).ceil() as usize;
 
         uniform_list(
             "queue-rows",
-            sections.len() + TAIL_ROWS,
+            sections.len() + under + TAIL_ROWS,
             cx.processor(move |_, range: Range<usize>, window, cx| {
                 let reach = (range.len() as f32 * PREFETCH_REACH).ceil() as usize;
                 let near = (range.start.saturating_sub(reach)..range.start)
@@ -2093,10 +2097,11 @@ impl Render for Aside {
                         self.tab == SideTab::Queue && steered.is_none() && !empty,
                         |this| {
                             this.child(
-                                div().flex_1().min_h_0().pb(self.bottom(cx)).child(
+                                div().flex_1().min_h_0().child(
                                     Scroller::listing("queue-rows", &self.scrollbar)
+                                        .bottom_inset(self.bottom(cx))
                                         .when(effects(), |this| {
-                                            this.fade_edges(px(FADE * 0.5), px(FADE))
+                                            this.fade_edges(px(FADE * 0.5), Pixels::ZERO)
                                         })
                                         .child(
                                             self.rows(sections, cx)
