@@ -1927,11 +1927,10 @@ impl Aside {
         let upcoming = sections.upcoming;
         let manual = sections.manual;
         let audible = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
-        let tail = (self.bottom(cx) / cx.theme().metrics.list_row).ceil() as usize;
 
         uniform_list(
             "queue-rows",
-            sections.len() + TAIL_ROWS + tail,
+            sections.len() + TAIL_ROWS,
             cx.processor(move |_, range: Range<usize>, window, cx| {
                 let reach = (range.len() as f32 * PREFETCH_REACH).ceil() as usize;
                 let near = (range.start.saturating_sub(reach)..range.start)
@@ -2091,18 +2090,19 @@ impl Render for Aside {
                         self.tab == SideTab::Queue && steered.is_none() && !empty,
                         |this| {
                             this.child(
-                                Scroller::listing("queue-rows", &self.scrollbar)
-                                    .bottom_inset(self.bottom(cx))
-                                    .when(effects(), |this| {
-                                        this.fade_edges(px(FADE * 0.5), px(FADE))
-                                    })
-                                    .child(
-                                        self.rows(sections, cx)
-                                            .px_2()
-                                            .pt(px(FADE * 0.5))
-                                            .track_scroll(&self.scroll)
-                                            .size_full(),
-                                    ),
+                                div().flex_1().min_h_0().pb(self.bottom(cx)).child(
+                                    Scroller::listing("queue-rows", &self.scrollbar)
+                                        .when(effects(), |this| {
+                                            this.fade_edges(px(FADE * 0.5), px(FADE))
+                                        })
+                                        .child(
+                                            self.rows(sections, cx)
+                                                .px_2()
+                                                .pt(px(FADE * 0.5))
+                                                .track_scroll(&self.scroll)
+                                                .size_full(),
+                                        ),
+                                ),
                             )
                         },
                     )
