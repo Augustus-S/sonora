@@ -380,6 +380,29 @@ impl Devices {
         }
     }
 
+    /// Changes the device's volume and shows the requested level until its next report arrives.
+    /// The caller notifies playback, since playback may already be updating when this runs.
+    pub(crate) fn set_volume(&mut self, device: &str, level: f32, cx: &mut Context<Self>) {
+        self.control(device, Command::Volume(level));
+        if let Some(listed) = self
+            .roster
+            .devices
+            .iter_mut()
+            .find(|listed| listed.id == device)
+        {
+            listed.volume = level;
+        }
+        if let Some(elsewhere) = self
+            .roster
+            .elsewhere
+            .as_mut()
+            .filter(|e| e.device.id == device)
+        {
+            elsewhere.device.volume = level;
+        }
+        cx.notify();
+    }
+
     /// Has playback act on this app's own engine, as another device asked, rather than steer
     /// whichever device has playback.
     fn here(

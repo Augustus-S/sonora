@@ -336,7 +336,7 @@ impl FullscreenView {
             true => NOTCH,
             false => -NOTCH,
         };
-        let level = (self.playback.read(cx).volume() + notch).clamp(0., 1.);
+        let level = (self.playback.read(cx).shown_volume(cx) + notch).clamp(0., 1.);
         self.muted = None;
         self.playback
             .update(cx, |playback, cx| playback.set_volume(level, cx));
@@ -367,7 +367,9 @@ impl FullscreenView {
             }
             None => (None, None, false),
         };
-        let cover_large = self.cover.read(cx).large();
+        let cover_large = album
+            .as_deref()
+            .and_then(|album| self.cover.read(cx).large_for(album));
         let local = local_id || small.as_ref().is_some_and(|url| url.starts_with("file://"));
         // Only upgrade resolution for non-local tracks, since a local cover is always
         // the full resolution picture. The track's own embedded cover is prioritized
@@ -854,7 +856,7 @@ impl FullscreenView {
         let frosted = ambient::shown(cx);
         let hazy = frosted && ui::blurring(cx);
         let zone = px(VOLUME_ZONE);
-        let level = self.playback.read(cx).volume();
+        let level = self.playback.read(cx).shown_volume(cx);
         let empty = theme.muted_foreground.opacity(0.3);
         let restore = self.muted.unwrap_or(0.7);
         let span = theme.metrics.control_small + zone * 2.;
@@ -1127,7 +1129,8 @@ impl Render for FullscreenView {
         let staged = self.panel.is_none() || split;
 
         let style = self.settings.read(cx).visualizer_style();
-        let visualizer_on = self.panel.is_none() && style.shown();
+        let visualizer_on =
+            self.panel.is_none() && style.shown() && self.playback.read(cx).steered(cx).is_none();
         match visualizer_on
             .then(|| self.playback.read(cx).spectrum(cx))
             .flatten()

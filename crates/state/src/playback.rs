@@ -647,6 +647,12 @@ impl Playback {
         }
     }
 
+    /// The volume the controls show and change, on the other device while one is steered.
+    pub fn shown_volume(&self, cx: &App) -> f32 {
+        self.steered(cx)
+            .map_or(self.level, |steered| steered.device.volume)
+    }
+
     /// Sends the command `make` builds to the other device that has playback, if one does, and
     /// says whether it did. A caller that got `true` leaves its own engine and queue alone, except
     /// that a `Start` the device refuses is played here once it comes back as an event.
@@ -708,8 +714,11 @@ impl Playback {
     }
 
     /// The playing engine's spectrum, set to hear the track before or after the volume as the
-    /// visualizer setting asks.
+    /// visualizer setting asks. Unavailable while another device has playback.
     pub fn spectrum(&self, cx: &App) -> Option<Spectrum> {
+        if self.steered(cx).is_some() {
+            return None;
+        }
         let spectrum = self.active_engine()?.spectrum()?;
         spectrum.set_absolute(self.settings.read(cx).visualizer_absolute());
         Some(spectrum)
@@ -2309,7 +2318,11 @@ impl Playback {
     }
 
     pub fn set_volume(&mut self, level: f32, cx: &mut Context<Self>) {
-        if self.steer(|_| Command::Volume(level.clamp(0., 1.)), cx) {
+        if let Some((devices, steered)) = self.steering(cx) {
+            devices.update(cx, |devices, cx| {
+                devices.set_volume(&steered.device.id, level.clamp(0., 1.), cx)
+            });
+            cx.notify();
             return;
         }
         self.level = level.clamp(0., 1.);

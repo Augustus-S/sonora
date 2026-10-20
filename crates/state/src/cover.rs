@@ -63,12 +63,11 @@ impl Cover {
         let album = self
             .playback
             .read(cx)
-            .track()
-            .and_then(|track| track.album_id.as_deref());
-        if album == self.album.as_deref() {
+            .shown_track(cx)
+            .and_then(|track| track.album_id);
+        if album == self.album {
             return;
         }
-        let album = album.map(str::to_owned);
         self.task = None;
         self.album = album.clone();
         self.large = album.as_ref().and_then(|id| self.cache.get(id)).cloned();

@@ -140,6 +140,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- While controlling another Spotify device, the volume slider follows that device and responds
+  immediately to changes. Fullscreen shows its album art and hides the local audio visualizer.
 - Spotify liked songs and saved albums now load for accounts with hundreds of playlists, instead
   of failing at startup while Sonora read every playlist at once.
 - Translucent menus and the player bar use a denser surface to keep text and controls readable

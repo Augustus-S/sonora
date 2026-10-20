@@ -152,7 +152,7 @@ impl PlayerBar {
             true => NOTCH,
             false => -NOTCH,
         };
-        let level = (self.playback.read(cx).volume() + notch).clamp(0., 1.);
+        let level = (self.playback.read(cx).shown_volume(cx) + notch).clamp(0., 1.);
         self.muted = None;
         self.playback
             .update(cx, |playback, cx| playback.set_volume(level, cx));
@@ -161,7 +161,7 @@ impl PlayerBar {
     fn sound(&self, width: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.theme();
         let empty = theme.muted_foreground.opacity(0.3);
-        let level = self.playback.read(cx).volume();
+        let level = self.playback.read(cx).shown_volume(cx);
         let showing = self.over_volume.is_some() || self.volume_held;
         let bubble = showing.then(|| (level, percent(level)));
         let restore = self.muted.unwrap_or(0.7);
