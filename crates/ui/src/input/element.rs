@@ -317,11 +317,13 @@ impl Render for Input {
             .h(height)
             .px_3()
             .rounded(radius)
-            .when_else(
-                self.blurred && blurring(cx),
-                |this| glass(this, cx),
-                |this| this.bg(theme.secondary),
-            )
+            // a field tucked into a frosted menu takes the menu's own translucent row fill, since
+            // a flat one would sit on the frost as a solid slab
+            .map(|this| match (self.blurred, self.tucked, blurring(cx)) {
+                (true, _, true) => glass(this, cx),
+                (false, true, true) => this.bg(theme.secondary_hover),
+                _ => this.bg(theme.secondary),
+            })
             .when(self.blurred, |this| this.shadow_sm())
             .when_else(
                 self.tucked,
