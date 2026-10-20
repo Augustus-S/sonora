@@ -12,6 +12,7 @@ use gpui::{
 };
 use i18n::t;
 use state::DiscordName;
+use ui::ActiveTheme as _;
 use ui::{Artwork, tabular};
 
 use super::Tick;
@@ -20,8 +21,6 @@ use crate::shared::{provider_brand, provider_logo};
 
 /// The face Discord's cards are set in here.
 const FONT: &str = "Inter";
-/// The profile popout behind the card, Discord's dark background.
-const SURFACE: u32 = 0x232428;
 /// The activity card's own fill.
 const CARD: u32 = 0x2b2d31;
 /// The card's header line, "Listening to …".
@@ -81,7 +80,7 @@ const BUTTON_RADIUS: Pixels = px(8.);
 const BUTTON_GAP: Pixels = px(8.);
 /// How far through the track the card starts, as a share of its length, before it counts on.
 const START_SHARE: f32 = 0.3;
-/// How much of the card shows while the status would not be up.
+/// How much of the card shows while Discord presence is disabled.
 const DIMMED: f32 = 0.4;
 /// What the status calls itself when the setting names Sonora, Discord's name for the app.
 const SONORA: &str = "Sonora";
@@ -118,7 +117,7 @@ impl DiscordPreview {
 
 /// The Discord page's preview, the card Discord shows for the status Sonora sets. It shows a
 /// track picked from listening history, playing while Sonora plays or has nothing loaded and
-/// paused while Sonora is paused, and dims while that status would not be up.
+/// paused while Sonora is paused, and dims only while Discord presence is disabled.
 pub(in crate::screens::settings) fn preview(
     state: &DiscordPreview,
     view: &SettingsView,
@@ -129,7 +128,7 @@ pub(in crate::screens::settings) fn preview(
     let settings = view.settings.read(cx);
     let playback = view.playback.read(cx);
     let paused = playback.track().is_some() && !playback.wants_playing();
-    let on = settings.discord_presence() && (!paused || settings.discord_show_paused());
+    let on = settings.discord_presence();
     let name = settings.discord_name();
     let badge = settings.discord_badge();
     let hidden = settings.discord_without_details();
@@ -255,7 +254,7 @@ pub(in crate::screens::settings) fn preview(
                 .flex()
                 .justify_center()
                 .p(SURFACE_PAD)
-                .bg(rgb(SURFACE))
+                .bg(cx.theme().background)
                 .child(card.when(!on, |card| card.opacity(DIMMED))),
             cx,
         )
