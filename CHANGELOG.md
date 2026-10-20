@@ -85,11 +85,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Settings open on General the first time.
 - Ambient motion remains visible but disabled when Ambient background is off, keeping its
   saved choice for when the background is enabled again.
-- About places the app icon beside its name, above the full-width information and action rows.
-- The Now playing settings preview shows the artwork and track details over the background,
-  without an animated visualizer.
-- The inactive-window frame rate setting now shows just FPS values and a note that changes
-  apply after restarting Sonora, in every language.
+- The setting that caps the frame rate while Sonora is in the background now lists plain FPS
+  values.
 - The Midnight, Forest, Ocean, Rose, Lavender and Amber themes are no longer built in. If you
   used one, Sonora saved it to your themes folder and keeps it selected, so nothing changes. The
   others can be copied from `themes/legacy` in Sonora's repository.
@@ -121,14 +118,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- The Apple Music source card shows the stream's AAC bitrate alongside its sample rate.
-- The settings search field uses the same frosted material as the tabs below it.
-- Settings content scrolls under the search field and tabs with the same blur as before
-  the redesign, without the extra dimming below the header.
-- Settings no longer rebuild off-screen sections and animated previews while you scroll
-  through the combined tabs.
-- The Discord settings preview stays bright when playback is paused, even with Show while paused
-  turned off. The background around the card now follows your theme.
 - Low-bitrate HE-AAC files, in your local library or on a Subsonic server, play with their full
   sound. They used to play muffled, with everything above about 11 kHz missing.
 - When the service you last used cannot sign back in at launch, Sonora switches to another
