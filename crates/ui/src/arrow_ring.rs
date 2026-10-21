@@ -1,5 +1,5 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
@@ -24,6 +24,12 @@ const TURN: Duration = Duration::from_millis(900);
 const SWEEP: f32 = 0.25;
 /// How strongly the empty part of the ring shows.
 const TRACK: f32 = 0.3;
+/// How quickly the drawn ring closes on the amount done, as the time it takes to cover most of
+/// the way. It is about one redraw of a running download, so steps between redraws blend into
+/// one movement.
+const CATCH_UP: f32 = 0.22;
+/// How near the amount done the drawn ring has to be to stop asking for frames.
+const SETTLED: f32 = 0.0005;
 
 /// A down arrow in a ring that fills clockwise from the top as work goes, and closes into
 /// Lucide's `circle-arrow-down` when it is done. It is drawn rather than loaded, so it looks the
@@ -55,12 +61,20 @@ impl ArrowRing {
 }
 
 impl RenderOnce for ArrowRing {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
         let color = self.color.unwrap_or(theme.muted_foreground);
         let track = theme.muted_foreground.opacity(TRACK);
-        match (self.done, motion::animates(cx)) {
-            (Some(done), _) => mark(Ring::Filled(done), color, track),
+        let animates = motion::animates(cx);
+        match (self.done, animates) {
+            (Some(done), _) => {
+                let fill = window.use_keyed_state((self.id, "fill"), cx, |_, _| Fill::new(done));
+                let drawn = fill.update(cx, |fill, _| fill.toward(done, animates));
+                if drawn != done {
+                    window.request_animation_frame();
+                }
+                mark(Ring::Filled(drawn), color, track)
+            }
             (None, false) => mark(Ring::Turning(0.), color, track),
             (None, true) => mark(Ring::Turning(0.), color, track)
                 .with_animation(self.id, Animation::new(TURN).repeat(), move |_, turned| {
@@ -68,6 +82,40 @@ impl RenderOnce for ArrowRing {
                 })
                 .into_any_element(),
         }
+    }
+}
+
+/// How much of the ring is drawn while the amount done moves. A rise glides, so the steps a
+/// download reports in turn into one smooth fill. A fall jumps, since it means another download
+/// or a reset rather than progress.
+struct Fill {
+    drawn: f32,
+    at: Instant,
+}
+
+impl Fill {
+    fn new(done: f32) -> Self {
+        Self {
+            drawn: done,
+            at: Instant::now(),
+        }
+    }
+
+    /// Moves the drawn amount on by the time since the last frame and returns it. It lands on
+    /// `done` once close enough, at once when nothing may animate.
+    fn toward(&mut self, done: f32, animates: bool) -> f32 {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.at).as_secs_f32();
+        self.at = now;
+        if !animates || done < self.drawn {
+            self.drawn = done;
+            return done;
+        }
+        self.drawn += (done - self.drawn) * (1. - (-elapsed / CATCH_UP).exp());
+        if done - self.drawn < SETTLED {
+            self.drawn = done;
+        }
+        self.drawn
     }
 }
 
