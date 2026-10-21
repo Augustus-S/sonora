@@ -91,6 +91,10 @@ impl Fetch for Apple {
         "apple"
     }
 
+    fn shelf(&self) -> Option<&Shelf> {
+        self.shelf.as_ref()
+    }
+
     /// Resolves and licenses the track, and asks the catalog how long and how loud it is at the
     /// same time.
     /// The length comes back beside the media rather than after it, because the tail trim that
@@ -136,6 +140,10 @@ impl Fetch for Apple {
 
     async fn downloaded(&self, loaded: &Loaded) {
         loaded.media.finished().await;
+    }
+
+    fn progress(&self, loaded: &Loaded) -> Option<f32> {
+        loaded.media.progress()
     }
 
     /// A fragmented stream has no index for symphonia to jump around in, so a seek opens a

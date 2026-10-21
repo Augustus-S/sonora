@@ -1,6 +1,6 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, Pixels, Point, Render, ScrollHandle, SharedString,
+    AnyElement, App, Context, Entity, Hsla, Pixels, Point, Render, ScrollHandle, SharedString,
     WeakEntity, Window, div, px,
 };
 
@@ -11,7 +11,8 @@ use music::{Album, AlbumDetail, Playlist, ReleaseType, Track};
 use router::{Destination, navigate};
 use state::{AppSettings, Collection, Detail, LibraryEvent, Origin, Playback, Progress, Sonora};
 use ui::{
-    ActiveTheme as _, Button, InlineLink, InlineLinks, Menu, Picker, Popovers, Popup, SortAxis,
+    ActiveTheme as _, ArrowRing, Button, InlineLink, InlineLinks, Menu, Picker, Popovers, Popup,
+    SortAxis,
 };
 use ui::{
     ColumnSpec, FilterChange, Listing as _, MIN_CONTENT, Pending, Pin, PinKind, Scrollbar,
@@ -133,6 +134,7 @@ impl DetailView {
 
         let table = cx.new(|cx| {
             let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(id));
+            crate::shared::tracks::follow_downloads(cx);
             let source = TrackSource::new(
                 columns,
                 DetailTracks(detail.clone()),
@@ -547,21 +549,23 @@ impl DetailView {
         let album = detail.album().cloned();
         let playlist = detail.playlist().cloned();
         let tracks = detail.tracks().to_vec();
-        let (icon, tooltip) = match progress {
-            None | Some(Progress::Failed) => ("icons/download.svg", "menu-download"),
-            Some(Progress::Waiting | Progress::Running) => {
-                ("icons/loader-circle.svg", "menu-downloading")
-            }
-            Some(Progress::Done) => ("icons/circle-arrow-down.svg", "menu-remove-download"),
+        let share = downloads.read(cx).share(kind, &id);
+        let ring = |done: f32, color: Hsla| {
+            ArrowRing::new("detail-download-ring", Some(done)).color(color)
         };
-        let button = Button::new("detail-download")
-            .outline()
-            .icon(icon)
-            .tooltip(tooltip);
+        let button = Button::new("detail-download").outline();
         Some(
             match progress {
-                Some(Progress::Done) => button.tint(theme.primary),
-                _ => button,
+                None => button.icon("icons/download.svg").tooltip("menu-download"),
+                Some(Progress::Failed) => button
+                    .leading(ring(share, theme.danger))
+                    .tooltip("menu-download"),
+                Some(Progress::Waiting | Progress::Running) => button
+                    .leading(ring(share, theme.primary))
+                    .tooltip("menu-downloading"),
+                Some(Progress::Done) => button
+                    .leading(ring(1., theme.primary))
+                    .tooltip("menu-remove-download"),
             }
             .on_click(move |_, _, cx| {
                 downloads.update(cx, |downloads, cx| match (progress, &album, &playlist) {

@@ -11,14 +11,15 @@ use ui::{ActiveTheme as _, Filter, FilterChange, FlagAxis, RangeAxis, Unit};
 use crate::shared::menus::{ItemMenu, TrackColumns};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, Entity, Hsla, InteractiveElement as _, IntoElement as _, SharedString,
-    Styled as _, WeakEntity,
+    AnyElement, App, Context, Entity, Hsla, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, SharedString, Styled as _, WeakEntity, div,
 };
 use music::Track;
 use router::Destination;
-use state::{Detail, History, Library, Origin, Playback, Shelf, Sonora};
+use state::{Detail, History, Library, Origin, Playback, Progress, Shelf, Sonora};
 use ui::{
-    Button, Cell, ColumnSpec, Menu, Pending, Pin, ROW_GROUP, Scrollbar, TableSource, TableState,
+    ArrowRing, Button, Cell, ColumnSpec, Menu, Pending, Pin, ROW_GROUP, Scrollbar, TableSource,
+    TableState,
 };
 
 use crate::shared::cells;
@@ -412,6 +413,7 @@ impl TrackSource {
             color,
             track.explicit,
             None,
+            download_mark(cell, track, cx),
             self.liked_button(cell, track, cx),
         )
     }
@@ -726,6 +728,28 @@ impl TableSource for TrackSource {
     fn group(&self, field: TrackField, row: usize, cx: &App) -> Option<SharedString> {
         sort::group(self.provider.tracks(cx), field, row)
     }
+}
+
+/// How far a download the listener asked for has got, shown before the heart. A track that is
+/// only cached because it played shows nothing.
+fn download_mark(cell: &Cell<TrackField>, track: &Track, cx: &App) -> Option<AnyElement> {
+    let id = track.id.as_deref()?;
+    let downloads = Sonora::global(cx).downloads.read(cx);
+    let theme = cx.theme();
+    let mark = ("download-mark", cell.row);
+    let ring = match downloads.track(id)? {
+        Progress::Done => ArrowRing::new(mark, Some(1.)).color(theme.primary),
+        Progress::Running => ArrowRing::new(mark, downloads.fraction(id)).color(theme.primary),
+        Progress::Waiting => ArrowRing::new(mark, Some(0.)),
+        Progress::Failed => ArrowRing::new(mark, Some(0.)).color(theme.danger),
+    };
+    Some(div().flex_none().child(ring).into_any_element())
+}
+
+/// Redraws a track table whenever downloads move, so the marks on its rows keep up.
+pub(crate) fn follow_downloads<T: 'static>(cx: &mut Context<T>) {
+    let downloads = Sonora::global(cx).downloads.clone();
+    cx.observe(&downloads, |_, _, cx| cx.notify()).detach();
 }
 
 #[cfg(test)]

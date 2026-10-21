@@ -658,6 +658,11 @@ impl Fetch for Tidal {
         loaded.stream.finished().await;
     }
 
+    fn progress(&self, loaded: &Loaded) -> Option<f32> {
+        let total = loaded.stream.total().filter(|total| *total > 0)?;
+        Some(loaded.stream.arrived() as f32 / total as f32)
+    }
+
     /// A segmented stream has no index for symphonia to jump around in, so a seek opens a
     /// second decoder at the target. A file is simply opened there.
     fn reopen_to_seek(&self) -> bool {

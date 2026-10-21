@@ -646,7 +646,12 @@ pub trait Player: Send + Sync {
 
     /// Fetches all of a track into the downloads without playing it. The future answers once it
     /// is kept, or why it could not be. A player that cannot download says so at once.
-    fn download(&self, _track_id: &str) -> futures::future::BoxFuture<'static, Result<()>> {
+    /// `progress` follows how much of it has arrived.
+    fn download(
+        &self,
+        _track_id: &str,
+        _progress: Fraction,
+    ) -> futures::future::BoxFuture<'static, Result<()>> {
         Box::pin(async { Err(anyhow::anyhow!("this player cannot download")) })
     }
 
@@ -662,6 +667,33 @@ pub trait Player: Send + Sync {
 #[async_trait]
 pub trait PlaybackEvents: Send {
     async fn next(&mut self) -> Option<PlaybackEvent>;
+}
+
+/// How far a download has got, from 0 to 1, shared between the player that fetches it and the
+/// app that shows it. It reads `None` until the player can tell.
+#[derive(Clone, Debug)]
+pub struct Fraction(Arc<std::sync::atomic::AtomicU32>);
+
+impl Default for Fraction {
+    fn default() -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU32::new(
+            f32::NAN.to_bits(),
+        )))
+    }
+}
+
+impl Fraction {
+    pub fn get(&self) -> Option<f32> {
+        let value = f32::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed));
+        (!value.is_nan()).then_some(value)
+    }
+
+    pub fn set(&self, value: f32) {
+        self.0.store(
+            value.clamp(0.0, 1.0).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
 }
 
 pub trait PlaybackFactory: Send + Sync {
@@ -934,7 +966,8 @@ pub trait MusicProvider: Send + Sync {
         false
     }
     /// A playback factory built from the stored sign-in alone, with no network, for a provider
-    /// whose downloads play offline. The session starts it when the account cannot be reached.
+    /// whose downloads play offline. The session starts it when the account cannot be reached,
+    /// inside the app's tokio runtime.
     fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
         None
     }

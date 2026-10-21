@@ -3757,7 +3757,7 @@ dependencies = [
 [[package]]
 name = "librespot-audio"
 version = "0.8.0"
-source = "git+https://github.com/sonorahq/librespot?rev=f5da0664e93b601cafa48ea41b5f08153b3c4f31#f5da0664e93b601cafa48ea41b5f08153b3c4f31"
+source = "git+https://github.com/sonorahq/librespot?rev=84f551d4afc7823ef12b6b02d09e34e2ddaccf99#84f551d4afc7823ef12b6b02d09e34e2ddaccf99"
 dependencies = [
  "aes",
  "bytes",
@@ -3776,7 +3776,7 @@ dependencies = [
 [[package]]
 name = "librespot-core"
 version = "0.8.0"
-source = "git+https://github.com/sonorahq/librespot?rev=f5da0664e93b601cafa48ea41b5f08153b3c4f31#f5da0664e93b601cafa48ea41b5f08153b3c4f31"
+source = "git+https://github.com/sonorahq/librespot?rev=84f551d4afc7823ef12b6b02d09e34e2ddaccf99#84f551d4afc7823ef12b6b02d09e34e2ddaccf99"
 dependencies = [
  "aes",
  "base64",
@@ -3833,7 +3833,7 @@ dependencies = [
 [[package]]
 name = "librespot-metadata"
 version = "0.8.0"
-source = "git+https://github.com/sonorahq/librespot?rev=f5da0664e93b601cafa48ea41b5f08153b3c4f31#f5da0664e93b601cafa48ea41b5f08153b3c4f31"
+source = "git+https://github.com/sonorahq/librespot?rev=84f551d4afc7823ef12b6b02d09e34e2ddaccf99#84f551d4afc7823ef12b6b02d09e34e2ddaccf99"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3850,7 +3850,7 @@ dependencies = [
 [[package]]
 name = "librespot-oauth"
 version = "0.8.0"
-source = "git+https://github.com/sonorahq/librespot?rev=f5da0664e93b601cafa48ea41b5f08153b3c4f31#f5da0664e93b601cafa48ea41b5f08153b3c4f31"
+source = "git+https://github.com/sonorahq/librespot?rev=84f551d4afc7823ef12b6b02d09e34e2ddaccf99#84f551d4afc7823ef12b6b02d09e34e2ddaccf99"
 dependencies = [
  "log",
  "oauth2",
@@ -3864,7 +3864,7 @@ dependencies = [
 [[package]]
 name = "librespot-playback"
 version = "0.8.0"
-source = "git+https://github.com/sonorahq/librespot?rev=f5da0664e93b601cafa48ea41b5f08153b3c4f31#f5da0664e93b601cafa48ea41b5f08153b3c4f31"
+source = "git+https://github.com/sonorahq/librespot?rev=84f551d4afc7823ef12b6b02d09e34e2ddaccf99#84f551d4afc7823ef12b6b02d09e34e2ddaccf99"
 dependencies = [
  "form_urlencoded",
  "futures-util",
@@ -3885,7 +3885,7 @@ dependencies = [
 [[package]]
 name = "librespot-protocol"
 version = "0.8.0"
-source = "git+https://github.com/sonorahq/librespot?rev=f5da0664e93b601cafa48ea41b5f08153b3c4f31#f5da0664e93b601cafa48ea41b5f08153b3c4f31"
+source = "git+https://github.com/sonorahq/librespot?rev=84f551d4afc7823ef12b6b02d09e34e2ddaccf99#84f551d4afc7823ef12b6b02d09e34e2ddaccf99"
 dependencies = [
  "protobuf",
  "protobuf-codegen",

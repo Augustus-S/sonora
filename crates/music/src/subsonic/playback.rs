@@ -170,6 +170,11 @@ impl Fetch for Subsonic {
         loaded.stream.finished().await;
     }
 
+    fn progress(&self, loaded: &Loaded) -> Option<f32> {
+        let total = loaded.stream.total().filter(|total| *total > 0)?;
+        Some(loaded.stream.arrived() as f32 / total as f32)
+    }
+
     /// Builds a decoder over a stream and places it at `at`. The bytes past the preroll are
     /// still arriving, so this only reads the header.
     ///

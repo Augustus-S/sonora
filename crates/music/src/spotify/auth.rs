@@ -242,7 +242,7 @@ pub fn forget(config: &AuthConfig) {
     credentials::remove(&config.file());
 }
 
-fn session(config: &AuthConfig) -> Result<Session> {
+pub(crate) fn session(config: &AuthConfig) -> Result<Session> {
     // librespot keeps each file as the CDN sent it, still under the key Spotify hands out
     // again on every play, so a kept file is no easier to play than the stream.
     let audio = Vault::foreign("spotify");

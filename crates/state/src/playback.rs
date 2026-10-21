@@ -2418,8 +2418,14 @@ impl Playback {
 
     /// Fetches all of a streaming track into the downloads without playing it, through the
     /// engine that would play it. `None` while there is no streaming engine.
-    pub fn download(&self, id: &str) -> Option<BoxFuture<'static, Result<()>>> {
-        self.engine.as_deref().map(|engine| engine.download(id))
+    pub fn download(
+        &self,
+        id: &str,
+        progress: music::Fraction,
+    ) -> Option<BoxFuture<'static, Result<()>>> {
+        self.engine
+            .as_deref()
+            .map(|engine| engine.download(id, progress))
     }
 
     /// Whether a streaming track has been downloaded, so it plays with no network.

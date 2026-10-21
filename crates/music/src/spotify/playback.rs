@@ -1,23 +1,28 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use librespot_core::{Session, SpotifyUri};
 use librespot_playback::config::{Bitrate, PlayerConfig};
 use librespot_playback::mixer::NoOpVolume;
+use librespot_playback::offline::Offline;
 use librespot_playback::player::{Player, PlayerEvent};
 use librespot_playback::{NUM_CHANNELS, SAMPLE_RATE};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 
 use crate::audio::{Chain, Volume};
 
 use crate::sink::Cue;
 use crate::spectrum::Spectrum;
+use crate::spotify::offline::{self, Kept};
 use crate::spotify::sink::OutputSink;
+use crate::vault::Shelf;
 use crate::{
-    Encoding, Normalisation, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents, PlaybackFactory,
-    Player as MusicPlayer, Quality, TrackSignal,
+    Encoding, Fraction, Normalisation, Offer, PlaybackConfig, PlaybackEvent, PlaybackEvents,
+    PlaybackFactory, Player as MusicPlayer, Quality, TrackSignal,
 };
 
 const TRACK_PREFIX: &str = "spotify:track:";
@@ -140,6 +145,12 @@ pub struct Engine {
     normalisation: bool,
     /// The encoding of the offer the quality asks librespot for.
     encoding: Option<Encoding>,
+    /// The session downloads are fetched on.
+    session: Session,
+    /// Where downloads are kept, which librespot also plays them from.
+    shelf: Option<Shelf>,
+    /// The level downloads are fetched at, the same one plays ask for.
+    bitrate: Bitrate,
 }
 
 impl Engine {
@@ -149,8 +160,13 @@ impl Engine {
         let spectrum = Spectrum::new();
         let (signals, signal_rx) = unbounded_channel();
 
+        let shelf = config.vault.as_ref().map(|vault| vault.shelf("spotify"));
+        let offline = shelf
+            .clone()
+            .map(|shelf| Arc::new(Kept(shelf)) as Arc<dyn Offline>);
         let player_config = PlayerConfig {
             bitrate: bitrate(config.quality),
+            offline,
             normalisation: config.normalisation,
             gapless: config.gapless,
             position_update_interval: Some(config.position_interval),
@@ -166,9 +182,12 @@ impl Engine {
             analyzer: config.analyzer.clone(),
         };
         let (output_tx, output_rx) = unbounded_channel();
-        let player = Player::new(player_config, session, Box::new(NoOpVolume), move || {
-            OutputSink::boxed(sink_cue, chain, output_tx.clone())
-        });
+        let player = Player::new(
+            player_config,
+            session.clone(),
+            Box::new(NoOpVolume),
+            move || OutputSink::boxed(sink_cue, chain, output_tx.clone()),
+        );
 
         let events = Events {
             player: player.get_player_event_channel(),
@@ -188,6 +207,9 @@ impl Engine {
             gapless: config.gapless,
             normalisation: config.normalisation,
             encoding: offered(config.quality),
+            session,
+            shelf,
+            bitrate: bitrate(config.quality),
         };
         (engine, events)
     }
@@ -256,6 +278,34 @@ impl Engine {
 }
 
 impl MusicPlayer for Engine {
+    fn download(&self, track_id: &str, progress: Fraction) -> BoxFuture<'static, Result<()>> {
+        let Some(shelf) = self.shelf.clone() else {
+            return Box::pin(async { Err(anyhow!("spotify keeps no downloads here")) });
+        };
+        let (done, answer) = oneshot::channel();
+        let session = self.session.clone();
+        let id = track_id.to_owned();
+        let bitrate = self.bitrate;
+        self.session.spawn(async move {
+            let fetched = offline::download(&session, &shelf, &id, bitrate).await;
+            progress.set(1.0);
+            done.send(fetched).ok();
+        });
+        Box::pin(async move { answer.await.context("the spotify session stopped")? })
+    }
+
+    fn downloaded(&self, track_id: &str) -> bool {
+        self.shelf
+            .as_ref()
+            .is_some_and(|shelf| shelf.holds(track_id))
+    }
+
+    fn discard(&self, track_id: &str) {
+        if let Some(shelf) = &self.shelf {
+            shelf.discard(track_id);
+        }
+    }
+
     fn load(&self, track_id: &str, at: Duration, seamless: bool) -> Result<()> {
         self.load(track_id, at, seamless)
     }
@@ -289,7 +339,7 @@ impl MusicPlayer for Engine {
     }
 }
 
-fn track_uri(track_id: &str) -> Result<SpotifyUri> {
+pub(crate) fn track_uri(track_id: &str) -> Result<SpotifyUri> {
     SpotifyUri::from_uri(&format!("{TRACK_PREFIX}{track_id}"))
         .with_context(|| format!("{track_id} is not a track id"))
 }

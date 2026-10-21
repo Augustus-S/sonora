@@ -353,6 +353,24 @@ impl Shelf {
         Recording { source, pending }
     }
 
+    /// Keeps a whole track that arrived in one piece as a download, with the provider's `facts`
+    /// beside it.
+    pub(crate) fn pin(&self, id: &str, facts: Vec<u8>, bytes: &[u8]) -> Result<()> {
+        let mut pending = self
+            .begin(Place::Pinned, id, "", Box::new(move || Some(facts)))?
+            .context("the vault is locked")?;
+        pending.write(bytes)?;
+        pending.commit()
+    }
+
+    /// The download of track `id`, ready to be read anywhere in it, for a player that seeks in
+    /// the file itself.
+    pub(crate) fn open_pinned(&self, id: &str) -> Option<(Vec<u8>, SealedReader)> {
+        let prk = self.vault.keys.get()?;
+        let kept = self.find_in(prk, Place::Pinned, id, "")?;
+        Some((kept.facts, kept.source.into_reader(kept.length)))
+    }
+
     /// Marks track `id` as being downloaded, so the next fetch of it is kept as a download.
     pub(crate) fn want(&self, id: &str) {
         self.vault.wanted().insert((self.provider, id.to_owned()));
@@ -609,6 +627,19 @@ impl Source for Sealed {
 }
 
 impl Sealed {
+    /// The same bytes read anywhere in them. `length` is how long the track is.
+    pub(crate) fn into_reader(self, length: u64) -> SealedReader {
+        SealedReader {
+            file: self.file,
+            key: self.key,
+            name: self.name,
+            sealed: self.left,
+            length,
+            position: 0,
+            opened: None,
+        }
+    }
+
     /// Reads and opens the next chunk, or answers `None` once there are none left.
     fn open_next(&mut self) -> Result<Option<Bytes>> {
         if self.left == 0 {
@@ -627,6 +658,80 @@ impl Sealed {
         let opened = open(&self.key, &self.name, block, self.index, &mut self.buffer)?;
         self.index += 1;
         Ok(Some(Bytes::copy_from_slice(opened)))
+    }
+}
+
+/// A kept track read anywhere in it. Every chunk but the last holds [`CHUNK`] bytes, so a
+/// position names its chunk directly, and the chunk last opened is held for the reads after it.
+pub(crate) struct SealedReader {
+    file: File,
+    key: LessSafeKey,
+    name: String,
+    /// The bytes of sealed chunks after the salt.
+    sealed: u64,
+    /// The bytes of the track.
+    length: u64,
+    position: u64,
+    opened: Option<(u64, Vec<u8>)>,
+}
+
+impl SealedReader {
+    /// How long the track is.
+    pub(crate) fn length(&self) -> u64 {
+        self.length
+    }
+
+    /// The plain bytes of chunk `index`.
+    fn chunk(&mut self, index: u64) -> io::Result<&[u8]> {
+        if self.opened.as_ref().is_none_or(|(held, _)| *held != index) {
+            let stride = (CHUNK + TAG) as u64;
+            let start = index * stride;
+            let size = stride.min(self.sealed.saturating_sub(start)) as usize;
+            let block = match start + size as u64 >= self.sealed {
+                true => Block::Last,
+                false => Block::Chunk,
+            };
+            let mut buffer = vec![0; size];
+            self.file.seek(SeekFrom::Start(SALT as u64 + start))?;
+            self.file.read_exact(&mut buffer)?;
+            let plain = open(&self.key, &self.name, block, index, &mut buffer)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+                .to_vec();
+            self.opened = Some((index, plain));
+        }
+        Ok(self
+            .opened
+            .as_ref()
+            .map_or(&[], |(_, plain)| plain.as_slice()))
+    }
+}
+
+impl Read for SealedReader {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if self.position >= self.length || out.is_empty() {
+            return Ok(0);
+        }
+        let index = self.position / CHUNK as u64;
+        let within = (self.position % CHUNK as u64) as usize;
+        let chunk = self.chunk(index)?;
+        let take = chunk.len().saturating_sub(within).min(out.len());
+        out[..take].copy_from_slice(&chunk[within..within + take]);
+        self.position += take as u64;
+        Ok(take)
+    }
+}
+
+impl Seek for SealedReader {
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        let target = match to {
+            SeekFrom::Start(at) => Some(at),
+            SeekFrom::End(by) => self.length.checked_add_signed(by),
+            SeekFrom::Current(by) => self.position.checked_add_signed(by),
+        };
+        self.position = target.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "a seek before the start")
+        })?;
+        Ok(self.position)
     }
 }
 

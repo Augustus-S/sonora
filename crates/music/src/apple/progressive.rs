@@ -413,6 +413,12 @@ impl Media {
         Self(Stream::pulling(source, total, Cenc::default()))
     }
 
+    /// How much of the encrypted file has arrived, from 0 to 1, when its length is known.
+    pub(crate) fn progress(&self) -> Option<f32> {
+        let total = self.0.total().filter(|total| *total > 0)?;
+        Some(self.0.arrived() as f32 / total as f32)
+    }
+
     /// Hands the track its content keys. Until this lands, a read that needs a sample fails
     /// rather than waiting, so it is called before any reader exists.
     ///

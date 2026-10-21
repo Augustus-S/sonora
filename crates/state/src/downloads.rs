@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use gpui::{App, Context, Entity, Task};
-use music::{Album, AlbumDetail, Playlist, PlaylistDetail, Track};
+use music::{Album, AlbumDetail, Fraction, Playlist, PlaylistDetail, Track};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use storage::Database;
@@ -17,6 +17,8 @@ use crate::{
 /// How many tracks download at once. Two keep the line busy without starving a track that is
 /// playing.
 const AT_ONCE: usize = 2;
+/// How often the progress of running downloads is redrawn.
+const TICK: Duration = Duration::from_millis(250);
 
 /// Where one track stands on its way to being downloaded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +69,10 @@ pub struct Downloads {
     tracks: HashMap<String, Entry>,
     sets: HashMap<(Collection, String), Set>,
     queue: VecDeque<String>,
-    running: HashMap<String, Task<()>>,
+    /// The downloads under way, each with how far it has got.
+    running: HashMap<String, (Task<()>, Fraction)>,
+    /// Redraws whoever shows downloads while any is under way, so their progress moves.
+    ticker: Option<Task<()>>,
     failed: HashSet<String>,
     /// Fetches the tracks of an album or playlist asked for from a menu, which has none to hand.
     fetching: HashMap<String, Task<()>>,
@@ -115,6 +120,7 @@ impl Downloads {
             sets: HashMap::new(),
             queue: VecDeque::new(),
             running: HashMap::new(),
+            ticker: None,
             failed: HashSet::new(),
             fetching: HashMap::new(),
             restore: None,
@@ -130,6 +136,12 @@ impl Downloads {
             () if self.failed.contains(id) => Progress::Failed,
             () => Progress::Waiting,
         })
+    }
+
+    /// How much of a track that is downloading has arrived, from 0 to 1, when the provider can
+    /// tell.
+    pub fn fraction(&self, id: &str) -> Option<f32> {
+        self.running.get(id)?.1.get()
     }
 
     /// Whether a track is downloaded and plays with no network.
@@ -164,6 +176,30 @@ impl Downloads {
         let ids = set.tracks.iter().filter_map(|track| track.id.as_deref());
         let done = ids.clone().filter(|id| self.has(id)).count();
         Some((done, ids.count()))
+    }
+
+    /// How much of a downloaded album or playlist is in, from 0 to 1, counting the part of each
+    /// running track that has arrived.
+    pub fn share(&self, kind: Collection, id: &str) -> f32 {
+        let Some(set) = self.sets.get(&(kind, id.to_owned())) else {
+            return 0.;
+        };
+        let ids: Vec<&str> = set
+            .tracks
+            .iter()
+            .filter_map(|track| track.id.as_deref())
+            .collect();
+        if ids.is_empty() {
+            return 0.;
+        }
+        let arrived: f32 = ids
+            .iter()
+            .map(|id| match self.has(id) {
+                true => 1.,
+                false => self.fraction(id).unwrap_or(0.),
+            })
+            .sum();
+        arrived / ids.len() as f32
     }
 
     /// Whether anything at all is downloaded or on its way.
@@ -419,7 +455,8 @@ impl Downloads {
             if self.tracks.get(&id).is_none_or(|entry| entry.done) {
                 continue;
             }
-            let Some(download) = self.playback.read(cx).download(&id) else {
+            let progress = Fraction::default();
+            let Some(download) = self.playback.read(cx).download(&id, progress.clone()) else {
                 self.queue.push_front(id);
                 return;
             };
@@ -432,9 +469,36 @@ impl Downloads {
                         .ok();
                 }
             });
-            self.running.insert(id, task);
+            self.running.insert(id, (task, progress));
+            self.tick(cx);
             cx.notify();
         }
+    }
+
+    /// Keeps the views that show progress redrawing while a download runs, and stops once none
+    /// does.
+    fn tick(&mut self, cx: &mut Context<Self>) {
+        if self.ticker.is_some() {
+            return;
+        }
+        self.ticker = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(TICK).await;
+                let going = this
+                    .update(cx, |this, cx| {
+                        cx.notify();
+                        let going = !this.running.is_empty();
+                        if !going {
+                            this.ticker = None;
+                        }
+                        going
+                    })
+                    .unwrap_or(false);
+                if !going {
+                    return;
+                }
+            }
+        }));
     }
 
     fn finished(&mut self, id: String, fetched: Result<()>, cx: &mut Context<Self>) {
@@ -547,6 +611,7 @@ impl Downloads {
         self.sets.clear();
         self.queue.clear();
         self.running.clear();
+        self.ticker = None;
         self.failed.clear();
         self.fetching.clear();
         self.restore = None;

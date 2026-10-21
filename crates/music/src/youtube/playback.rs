@@ -171,6 +171,11 @@ impl Fetch for YouTube {
         loaded.stream.finished().await;
     }
 
+    fn progress(&self, loaded: &Loaded) -> Option<f32> {
+        let total = loaded.stream.total().filter(|total| *total > 0)?;
+        Some(loaded.stream.arrived() as f32 / total as f32)
+    }
+
     /// A fragmented stream opened unseekable cannot move, so a seek opens a second decoder
     /// spliced to the target.
     fn reopen_to_seek(&self) -> bool {
