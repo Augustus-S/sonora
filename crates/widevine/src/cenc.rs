@@ -116,6 +116,19 @@ pub enum Step {
     Partial,
 }
 
+/// A fragment rewritten to begin at one of its samples, so a decoder can start there without
+/// reading the samples in front of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cut {
+    /// A `moof` listing only the samples kept, then the header of an `mdat` holding them.
+    /// Served in front of `from`, the two read as a fragment of their own.
+    pub head: Vec<u8>,
+    /// Where in the file the first sample kept starts.
+    pub from: usize,
+    /// How long the samples left out last, in media ticks.
+    pub dropped: u64,
+}
+
 fn be16(data: &[u8], at: usize) -> Option<u16> {
     let bytes = data.get(at..at + 2)?;
     Some(u16::from_be_bytes([bytes[0], bytes[1]]))
@@ -347,6 +360,130 @@ pub fn read_fragment(window: &[u8], origin: usize, tracks: &[Encrypted]) -> Step
     }
 }
 
+/// Rewrites the fragment at the front of `window` to begin `lead` samples before the one that
+/// plays `into` ticks after the fragment starts. `window` holds the file from byte `origin` on,
+/// as it does for [`read_fragment`].
+///
+/// `None` when there is nothing in front to leave out, or for a shape this does not rewrite:
+/// more than one track fragment, a data base of its own, or samples with no duration to say
+/// where `into` falls. The caller then starts at the top of the fragment.
+pub fn cut(window: &[u8], origin: usize, into: u64, lead: usize) -> Option<Cut> {
+    let moof = read(window, 0).filter(|bx| &bx.kind == b"moof")?;
+    let mdat = read(window, moof.end).filter(|bx| &bx.kind == b"mdat")?;
+    let mut trafs = children(window, moof.body, moof.end).filter(|(_, bx)| &bx.kind == b"traf");
+    let (_, traf) = trafs.next()?;
+    if trafs.next().is_some() {
+        return None;
+    }
+    let mfhd = child(window, moof.body, moof.end, b"mfhd")?;
+    let tfhd = child(window, traf.body, traf.end, b"tfhd")?;
+    let defaults = read_tfhd(window, &tfhd);
+    if defaults.base.is_some() {
+        return None;
+    }
+
+    let trun = child(window, traf.body, traf.end, b"trun")?;
+    let word = be32(window, trun.body)?;
+    let flags = word & FLAGS;
+    let count = be32(window, trun.body + 4)? as usize;
+    if count > SAMPLE_LIMIT || flags & TRUN_DATA_OFFSET == 0 {
+        return None;
+    }
+    let offset = usize::try_from(be32(window, trun.body + 8)? as i32).ok()?;
+    let mut at = trun.body + 12;
+    let first_flags = match flags & TRUN_FIRST_SAMPLE_FLAGS != 0 {
+        true => {
+            at += 4;
+            Some(be32(window, at - 4)?)
+        }
+        false => None,
+    };
+    let record = [
+        TRUN_SAMPLE_DURATION,
+        TRUN_SAMPLE_SIZE,
+        TRUN_SAMPLE_FLAGS,
+        TRUN_COMPOSITION_OFFSET,
+    ]
+    .iter()
+    .filter(|&&bit| flags & bit != 0)
+    .count()
+        * 4;
+    let records = window
+        .get(at..at.checked_add(count.checked_mul(record)?)?)
+        .filter(|_| at + count * record <= trun.end)?;
+
+    // Each sample's duration and size, in order, from its record or the track defaults.
+    let mut spans = Vec::with_capacity(count);
+    for index in 0..count {
+        let fields = &records[index * record..(index + 1) * record];
+        let (duration, size_at) = match flags & TRUN_SAMPLE_DURATION != 0 {
+            true => (be32(fields, 0)?, 4),
+            false => (defaults.default_duration?, 0),
+        };
+        let size = match flags & TRUN_SAMPLE_SIZE != 0 {
+            true => be32(fields, size_at)?,
+            false => defaults.default_size?,
+        };
+        spans.push((u64::from(duration), size as usize));
+    }
+    let mut ends = spans.iter().scan(0u64, |elapsed, &(duration, _)| {
+        *elapsed += duration;
+        Some(*elapsed)
+    });
+    let landing = ends
+        .position(|end| end > into)
+        .unwrap_or(count.saturating_sub(1));
+    let first = landing.saturating_sub(lead);
+    if first == 0 {
+        return None;
+    }
+    let dropped = spans[..first]
+        .iter()
+        .map(|&(duration, _)| duration)
+        .sum::<u64>();
+    let skipped = spans[..first].iter().map(|&(_, size)| size).sum::<usize>();
+    let from = offset.checked_add(skipped)?;
+    if offset < mdat.body || from > mdat.end {
+        return None;
+    }
+    let decode = decode_time(window, &traf).unwrap_or(0) + dropped;
+
+    let mut trun_body = (word | TRUN_DATA_OFFSET).to_be_bytes().to_vec();
+    trun_body.extend_from_slice(&((count - first) as u32).to_be_bytes());
+    let offset_at = trun_body.len();
+    trun_body.extend_from_slice(&[0; 4]);
+    if let Some(flags) = first_flags {
+        trun_body.extend_from_slice(&flags.to_be_bytes());
+    }
+    trun_body.extend_from_slice(&records[first * record..]);
+    let mut tfdt_body = vec![1, 0, 0, 0];
+    tfdt_body.extend_from_slice(&decode.to_be_bytes());
+
+    // The sample encryption boxes are left behind, since what follows is served as cleartext
+    // under an `mp4a` entry, and their counts would no longer match.
+    let mut traf_body = window[tfhd.end - tfhd.total..tfhd.end].to_vec();
+    traf_body.extend(boxed(b"tfdt", &tfdt_body));
+    let trun_at = traf_body.len() + 8;
+    traf_body.extend(boxed(b"trun", &trun_body));
+    let mut moof_body = window[mfhd.end - mfhd.total..mfhd.end].to_vec();
+    let traf_at = moof_body.len() + 8;
+    moof_body.extend(boxed(b"traf", &traf_body));
+    let mut head = boxed(b"moof", &moof_body);
+
+    // The kept samples sit right behind the new mdat header.
+    let data_offset = u32::try_from(head.len() + 8).ok()?;
+    let patch = 8 + traf_at + trun_at + offset_at;
+    head[patch..patch + 4].copy_from_slice(&data_offset.to_be_bytes());
+    let mdat_len = u32::try_from(mdat.end - from + 8).ok()?;
+    head.extend_from_slice(&mdat_len.to_be_bytes());
+    head.extend_from_slice(b"mdat");
+    Some(Cut {
+        head,
+        from: origin + from,
+        dropped,
+    })
+}
+
 /// Where a fragment starts on the media timeline, from `tfdt`.
 fn decode_time(data: &[u8], traf: &Bx) -> Option<u64> {
     let tfdt = child(data, traf.body, traf.end, b"tfdt")?;
@@ -434,15 +571,16 @@ fn read_traf(
     samples
 }
 
-/// The `tfhd` fields this needs: an explicit data base, and a default sample size for a `trun`
-/// that lists none.
+/// The `tfhd` fields this needs: an explicit data base, and the default sample duration and
+/// size for a `trun` that lists none.
 #[derive(Clone, Copy, Debug, Default)]
 struct Tfhd {
     base: Option<u64>,
+    default_duration: Option<u32>,
     default_size: Option<u32>,
 }
 
-/// Reads the two `tfhd` fields this needs, stepping over the ones in front of them. The box
+/// Reads the `tfhd` fields this needs, stepping over the others. The box
 /// body is the flag word and the track id, then whichever optional fields the flags named.
 fn read_tfhd(data: &[u8], tfhd: &Bx) -> Tfhd {
     let Some(flags) = be32(data, tfhd.body).map(|word| word & FLAGS) else {
@@ -458,6 +596,7 @@ fn read_tfhd(data: &[u8], tfhd: &Bx) -> Tfhd {
         at += 4;
     }
     if flags & TFHD_DEFAULT_SAMPLE_DURATION != 0 {
+        found.default_duration = be32(data, at);
         at += 4;
     }
     if flags & TFHD_DEFAULT_SAMPLE_SIZE != 0 {
@@ -587,17 +726,18 @@ fn fit_senc(raw: &[u8], iv_size: u8, count: usize, subsampled: bool) -> Option<S
     (at == raw.len()).then_some((ivs, subs))
 }
 
+/// A box: four-byte size, four-byte kind, then the body. A body too long for a 32-bit size is
+/// not something a fragment of one track holds.
+fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(body);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A box: four-byte size, four-byte kind, then the body.
-    fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
-        let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
-        out.extend_from_slice(kind);
-        out.extend_from_slice(body);
-        out
-    }
 
     fn joined(parts: &[Vec<u8>]) -> Vec<u8> {
         parts.iter().flatten().copied().collect()

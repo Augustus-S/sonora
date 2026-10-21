@@ -120,6 +120,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Seeking in an Apple Music song lands almost at once, instead of decrypting up to ten seconds
+  of music in front of the new position first.
 - Open lyrics, album grids and long text cost less to draw, so scrolling keeps up with high
   refresh rate screens more often. The equalizer page redraws about half as often while music
   plays.

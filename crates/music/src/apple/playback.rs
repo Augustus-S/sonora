@@ -169,14 +169,14 @@ impl Fetch for Apple {
     ///
     /// Starting anywhere but the beginning splices instead of winding. Asked to seek, symphonia
     /// decodes its way to the target, about forty milliseconds per second of position. So the
-    /// reader hands it the init segment followed by the fragment that covers the position, and
-    /// the remainder inside that fragment is trimmed off the front. Nothing before the target
-    /// is read at all.
+    /// reader hands it the init segment followed by the fragment that covers the position, cut
+    /// to begin a couple of samples before it, and those few are trimmed off the front. Every
+    /// sample costs a call to the CDM, so nothing before them is read at all.
     fn open(&self, id: &str, loaded: &Loaded, at: Duration) -> Option<Self::Source> {
         let media = &loaded.media;
         let opening = Instant::now();
         let entry = (!at.is_zero()).then(|| media.entry(at)).flatten();
-        let reader = match entry {
+        let reader = match &entry {
             Some(entry) => media.reader_at(entry),
             None => media.reader(),
         };
@@ -203,7 +203,7 @@ impl Fetch for Apple {
         let priming =
             Duration::from_secs_f64(f64::from(frames) / f64::from(decoder.sample_rate().get()));
         // Spliced, the priming is behind us and the length no longer lines up with what is
-        // left, so the only thing to drop is the part of the first fragment before the position.
+        // left, so the only thing to drop is what is read before the position.
         let (skip, take) = match entry {
             Some(entry) => (entry.into, None),
             None => (

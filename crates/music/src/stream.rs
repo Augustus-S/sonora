@@ -393,6 +393,7 @@ impl<B: Body> Stream<B> {
         Reader {
             shared: self.shared.clone(),
             head: 0,
+            inset: Bytes::new(),
             from: 0,
             at: 0,
         }
@@ -401,9 +402,16 @@ impl<B: Body> Stream<B> {
     /// A cursor that serves the first `head` bytes and then carries on from `from`, so a
     /// decoder can be opened part way into a file that describes itself up front.
     pub fn spliced(&self, head: usize, from: usize) -> Reader<B> {
+        self.grafted(head, Bytes::new(), from)
+    }
+
+    /// A splice with `inset` served between the head and the rest, for a later part of the file
+    /// that needs framing of its own in front of it to read as a whole.
+    pub fn grafted(&self, head: usize, inset: Bytes, from: usize) -> Reader<B> {
         Reader {
             shared: self.shared.clone(),
             head,
+            inset,
             from,
             at: 0,
         }
@@ -583,6 +591,8 @@ pub struct Reader<B = Plain> {
     shared: Arc<Shared<B>>,
     /// The end of the part served from the front of the file, when this cursor is spliced.
     head: usize,
+    /// Bytes of no place in the file, served between the head and the rest.
+    inset: Bytes,
     /// Where the rest is served from. Zero for a plain cursor.
     from: usize,
     /// Where the cursor is, in what it presents rather than in the file.
@@ -590,17 +600,24 @@ pub struct Reader<B = Plain> {
 }
 
 impl<B: Body> Reader<B> {
-    /// The byte in the file that `at` presents, which differs only past the head of a splice.
+    /// The byte in the file that `at` presents, which differs only past the head of a splice. A
+    /// position inside the inset has no byte in the file and reads as the first one after it.
     fn place(&self, at: u64) -> u64 {
-        match at < self.head as u64 {
+        let head = self.head as u64;
+        match at < head {
             true => at,
-            false => self.from as u64 + (at - self.head as u64),
+            false => self.from as u64 + (at - head).saturating_sub(self.inset.len() as u64),
         }
+    }
+
+    /// Where the inset sits in what this cursor presents.
+    fn inset_span(&self) -> Range<u64> {
+        self.head as u64..(self.head + self.inset.len()) as u64
     }
 
     /// A length in the file, as this cursor presents it.
     fn presented(&self, length: usize) -> u64 {
-        self.head as u64 + length.saturating_sub(self.from) as u64
+        (self.head + self.inset.len()) as u64 + length.saturating_sub(self.from) as u64
     }
 
     /// The end of the track: the announced length, or the final length once the download ends.
@@ -631,6 +648,15 @@ impl<B: Body> Read for Reader<B> {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if out.is_empty() {
             return Ok(0);
+        }
+        // The inset is at hand already, so it never waits on the download.
+        let inset = self.inset_span();
+        if inset.contains(&self.at) {
+            let start = (self.at - inset.start) as usize;
+            let taken = out.len().min(self.inset.len() - start);
+            out[..taken].copy_from_slice(&self.inset[start..start + taken]);
+            self.at += taken as u64;
+            return Ok(taken);
         }
         let mut state = self.shared.held()?;
         loop {

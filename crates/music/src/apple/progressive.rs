@@ -25,6 +25,7 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use bytes::Bytes;
 use widevine::Cdm;
 use widevine::cenc::{self, Encrypted, Sample, Step};
 
@@ -43,6 +44,11 @@ const PACE: Duration = Duration::from_micros(500);
 /// The fewest bytes a sample is assumed to hold when sizing the index, which caps what a
 /// first fragment of implausibly small samples can make it reserve.
 const MIN_SAMPLE: usize = 64;
+
+/// How many samples a seek keeps in front of the one it lands in. AAC overlaps every frame with
+/// the one before, so the first frame a fresh decoder sees comes out wrong, and it is trimmed
+/// away with the rest of what comes before the position.
+const LEAD_IN: usize = 2;
 
 /// Reads that start this far from the end never wait. A decoder probing for the end of the file
 /// would otherwise hold playback until the whole track had downloaded.
@@ -89,18 +95,23 @@ enum Pass {
 #[derive(Clone, Copy, Debug)]
 struct Fragment {
     at: usize,
+    /// One past the end of its `mdat`.
+    end: usize,
     start: Duration,
 }
 
 /// Where to start reading a track, and what part of the first fragment to throw away to land
 /// exactly on the position that was asked for.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Entry {
     /// The byte the fragments should start from, spliced behind the init segment.
     graft: usize,
     /// The end of the init segment, which is what gets spliced in front of it.
     head: usize,
-    /// How far into that fragment the wanted position is.
+    /// A rewritten `moof` and `mdat` header served in front of `graft`, when the fragment was
+    /// cut to start near the position rather than at its top. Empty otherwise.
+    inset: Bytes,
+    /// How far past where reading starts the wanted position is.
     pub into: Duration,
 }
 
@@ -136,6 +147,9 @@ pub struct Cenc {
     /// as it reads, so when a track is slow to start these two numbers say whether the CDM is
     /// the reason.
     spent: (usize, Duration),
+    /// Where the background pass looks next. A seek moves it to where reading starts, so the
+    /// pass clears what is about to play rather than what is behind it.
+    cursor: usize,
 }
 
 impl Cenc {
@@ -174,6 +188,7 @@ impl Cenc {
                     if let Some(start) = self.moment(decode) {
                         self.fragments.push(Fragment {
                             at: self.walked,
+                            end: next,
                             start,
                         });
                     }
@@ -313,12 +328,18 @@ impl Cenc {
         Ok(took)
     }
 
-    /// One step of the background pass: decrypts the first sample at or after `next` that no
-    /// read has reached, or releases the license when there is none. Only called once the
-    /// download is complete, when the index can no longer grow.
-    fn pass(&mut self, spool: &mut Spool, next: &mut usize) -> io::Result<Pass> {
+    /// One step of the background pass: decrypts the first sample at or after the cursor that no
+    /// read has reached, coming round to the start of the track once the end has none, or
+    /// releases the license when no sample is left. Only called once the download is complete,
+    /// when the index can no longer grow.
+    fn pass(&mut self, spool: &mut Spool) -> io::Result<Pass> {
         self.index(spool);
-        let found = (*next..self.seals.len()).find(|&index| self.seals[index] == Seal::Encrypted);
+        let seals = &self.seals;
+        let cursor = self.cursor.min(seals.len());
+        let pending = |index: &usize| seals[*index] == Seal::Encrypted;
+        let found = (cursor..seals.len())
+            .find(pending)
+            .or_else(|| (0..cursor).find(pending));
         let Some(index) = found else {
             let keys = match std::mem::replace(&mut self.license, License::Released) {
                 License::Held(keys) => Some(keys),
@@ -327,7 +348,7 @@ impl Cenc {
             return Ok(Pass::Finished(keys));
         };
         self.clear(spool, index)?;
-        *next = index + 1;
+        self.cursor = index + 1;
         Ok(Pass::Cleared)
     }
 
@@ -340,7 +361,11 @@ impl Cenc {
 
     /// Where to start reading to land on `at`. `None` when the fragment covering it has not
     /// been indexed yet, which leaves the caller to wind there the slow way.
-    fn entry(&self, at: Duration, complete: bool) -> Option<Entry> {
+    ///
+    /// The fragment is cut to start [`LEAD_IN`] samples before the position, so a seek decrypts
+    /// and decodes a few samples rather than everything from the top of the fragment, which is
+    /// ten seconds of music in Apple's encode. A fragment that cannot be cut is read whole.
+    fn entry(&self, spool: &Spool, at: Duration, complete: bool) -> Option<Entry> {
         let last = self.fragments.last()?;
         // Past the end of what is indexed the answer would be the last fragment, which is not
         // where the listener asked to be.
@@ -352,10 +377,26 @@ impl Cenc {
             .iter()
             .rev()
             .find(|fragment| fragment.start <= at)?;
-        Some(Entry {
-            graft: found.at,
-            head: self.init_end?,
-            into: at.saturating_sub(found.start),
+        let head = self.init_end?;
+        let into = at.saturating_sub(found.start);
+        let ticks = (into.as_secs_f64() * f64::from(self.timescale)) as u64;
+        let cut = spool
+            .view(found.at..found.end)
+            .ok()
+            .and_then(|window| cenc::cut(&window, found.at, ticks, LEAD_IN));
+        Some(match cut {
+            Some(cut) => Entry {
+                graft: cut.from,
+                head,
+                inset: Bytes::from(cut.head),
+                into: into.saturating_sub(self.moment(Some(cut.dropped)).unwrap_or_default()),
+            },
+            None => Entry {
+                graft: found.at,
+                head,
+                inset: Bytes::new(),
+                into,
+            },
         })
     }
 }
@@ -495,9 +536,14 @@ impl Media {
     }
 
     /// A cursor that starts at `entry`: the init segment, then the fragment covering the
-    /// position. Nothing before it is read at all.
-    pub fn reader_at(&self, entry: Entry) -> Reader<Cenc> {
-        self.0.spliced(entry.head, entry.graft)
+    /// position. Nothing before it is read at all, and the background pass moves on to it.
+    pub fn reader_at(&self, entry: &Entry) -> Reader<Cenc> {
+        self.0.with(|cenc, _| {
+            cenc.cursor = cenc
+                .samples
+                .partition_point(|sample| sample.start < entry.graft);
+        });
+        self.0.grafted(entry.head, entry.inset.clone(), entry.graft)
     }
 
     /// Where to start reading to land on `at`, waiting for the fragment that covers it when
@@ -510,7 +556,7 @@ impl Media {
     pub fn entry(&self, at: Duration) -> Option<Entry> {
         self.0.awaiting(|cenc, spool, complete| {
             cenc.index(spool);
-            cenc.entry(at, complete)
+            cenc.entry(spool, at, complete)
         })
     }
 
@@ -542,13 +588,12 @@ impl Media {
 /// track is gone, or on a failure, which leaves the keys in place for the reads to use.
 fn clear_rest(weak: &WeakStream<Cenc>) {
     let began = Instant::now();
-    let mut next = 0;
     let mut count = 0usize;
     loop {
         let Some(stream) = weak.upgrade() else {
             return;
         };
-        let step = stream.with(|cenc, spool| cenc.pass(spool, &mut next));
+        let step = stream.with(|cenc, spool| cenc.pass(spool));
         drop(stream);
         match step {
             Some(Ok(Pass::Cleared)) => count += 1,
@@ -607,27 +652,34 @@ mod tests {
             fragments: vec![
                 Fragment {
                     at: 1000,
+                    end: 5000,
                     start: Duration::ZERO,
                 },
                 Fragment {
                     at: 5000,
+                    end: 9000,
                     start: Duration::from_secs(10),
                 },
                 Fragment {
                     at: 9000,
+                    end: 13000,
                     start: Duration::from_secs(20),
                 },
             ],
             ..Cenc::default()
         };
-        let entry = cenc.entry(Duration::from_secs(12), false).unwrap();
+        // An empty spool has no fragment to cut, so every answer starts at the top of one.
+        let spool = Spool::in_memory(None);
+        let entry = cenc.entry(&spool, Duration::from_secs(12), false).unwrap();
         assert_eq!(entry.graft, 5000);
         assert_eq!(entry.head, 1000);
         assert_eq!(entry.into, Duration::from_secs(2));
         // Past the indexed end, only a finished download can answer.
-        assert!(cenc.entry(Duration::from_secs(30), false).is_none());
+        assert!(cenc.entry(&spool, Duration::from_secs(30), false).is_none());
         assert_eq!(
-            cenc.entry(Duration::from_secs(30), true).unwrap().graft,
+            cenc.entry(&spool, Duration::from_secs(30), true)
+                .unwrap()
+                .graft,
             9000
         );
     }
