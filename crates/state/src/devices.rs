@@ -189,9 +189,10 @@ impl Devices {
         &self.roster.devices
     }
 
-    /// The other device that has playback, if one does.
+    /// The other device that has playback, if one does. `None` once this app took playback, even
+    /// before the network's next roster stops naming the device it came from.
     pub fn elsewhere(&self) -> Option<&Elsewhere> {
-        self.roster.elsewhere.as_ref()
+        self.roster.elsewhere.as_ref().filter(|_| !self.claimed)
     }
 
     /// The group session the listener is in, if any.
@@ -570,7 +571,9 @@ impl Devices {
     fn set_roster(&mut self, roster: Roster, cx: &mut Context<Self>) {
         self.roster = roster;
         let wanted = self
-            .elsewhere()
+            .roster
+            .elsewhere
+            .as_ref()
             .and_then(|elsewhere| elsewhere.track.clone());
         if self.remote.as_ref().and_then(|track| track.id.clone()) != wanted {
             self.remote = None;
@@ -579,7 +582,7 @@ impl Devices {
                 self.fetching = Some(self.read_remote(client, id, cx));
             }
         }
-        if self.elsewhere().is_none() {
+        if self.roster.elsewhere.as_ref().is_none() {
             self.listed.clear();
         }
         self.list(cx);
@@ -598,7 +601,9 @@ impl Devices {
             return;
         };
         let upcoming = self
-            .elsewhere()
+            .roster
+            .elsewhere
+            .as_ref()
             .into_iter()
             .flat_map(|elsewhere| &elsewhere.upcoming)
             .collect::<Vec<_>>();
@@ -655,7 +660,12 @@ impl Devices {
 
     /// Whether another device has playback that plays, which is when its position moves on.
     fn moving(&self) -> bool {
-        self.available() && self.elsewhere().is_some_and(|elsewhere| elsewhere.playing)
+        self.available()
+            && self
+                .roster
+                .elsewhere
+                .as_ref()
+                .is_some_and(|elsewhere| elsewhere.playing)
     }
 
     /// Starts the timer that redraws another device's progress while it plays, or drops it once
@@ -696,7 +706,11 @@ impl Devices {
                 this.fetching = None;
                 match found {
                     Ok(track) if track.id.as_deref() == Some(id.as_str()) => {
-                        let current = this.elsewhere().and_then(|e| e.track.as_deref());
+                        let current = this
+                            .roster
+                            .elsewhere
+                            .as_ref()
+                            .and_then(|e| e.track.as_deref());
                         if current == Some(id.as_str()) {
                             this.remote = Some(track);
                             this.redraw(cx);
