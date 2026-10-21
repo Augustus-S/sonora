@@ -79,6 +79,8 @@ pub struct Devices {
     jam: Option<Jam>,
     /// The group session a link named, which the listener is being asked to join.
     invite: Option<Invite>,
+    /// A Jam link asked about before there was a device network to look it up on.
+    asked: Option<String>,
     /// Whether the listener started a Jam that is not up yet, so its code shows once it is.
     awaiting_code: bool,
     /// Whether the code that opens the Jam's link on a phone is on show.
@@ -147,6 +149,7 @@ impl Devices {
             roster: Roster::default(),
             jam: None,
             invite: None,
+            asked: None,
             awaiting_code: false,
             code: false,
             joining: false,
@@ -206,11 +209,17 @@ impl Devices {
     }
 
     /// Looks up the group session a shared link names. It shows up on `invite()` to be accepted
-    /// or dismissed.
-    pub fn peek(&self, link: &str) {
-        if let Some(link_to) = &self.link {
-            link_to.peek(link);
+    /// or dismissed. A link asked about before the device network is up waits for it, and one
+    /// asked about while the listener keeps the app off the device list only gets a toast.
+    pub fn peek(&mut self, link: &str, cx: &mut Context<Self>) {
+        let Some(link_to) = &self.link else {
+            self.asked = Some(link.to_owned());
+            return;
+        };
+        if !self.shown {
+            return Toasts::show(Outcome::Info, "toast-jam-needs-connect", cx);
         }
+        link_to.peek(link);
     }
 
     /// Joins the group session the invite names.
@@ -458,6 +467,11 @@ impl Devices {
             self.events = Some(self.listen(events, cx));
         }
         self.apply(cx);
+        if let Some(asked) = self.asked.take()
+            && self.link.is_some()
+        {
+            self.peek(&asked, cx);
+        }
         cx.notify();
     }
 

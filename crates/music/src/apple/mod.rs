@@ -13,6 +13,7 @@
 
 mod auth;
 mod client;
+mod links;
 mod playback;
 mod progressive;
 mod recommend;
@@ -126,6 +127,10 @@ impl MusicProvider for AppleProvider {
 
     fn slug(&self) -> &'static str {
         "apple"
+    }
+
+    fn link(&self, link: &str) -> Option<crate::link::Linked> {
+        links::read(link)
     }
 
     fn reach(&self) -> Option<String> {

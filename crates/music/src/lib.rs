@@ -12,6 +12,7 @@ pub mod engine;
 pub mod equalizer;
 pub mod escape;
 pub mod kugou;
+pub mod link;
 #[cfg(test)]
 mod live_tests;
 pub mod local;
@@ -988,6 +989,12 @@ pub trait MusicProvider: Send + Sync {
     /// whose downloads play offline. The session starts it when the account cannot be reached,
     /// inside the app's tokio runtime.
     fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        None
+    }
+    /// What `link` points at when it is one of this provider's own, on its website or in its
+    /// app's scheme. It reads the text alone and fetches nothing, so a short link comes back as
+    /// `Linked::Short` for the caller to follow and ask again.
+    fn link(&self, _link: &str) -> Option<link::Linked> {
         None
     }
     async fn restore(&self) -> Result<Option<ProviderSession>>;

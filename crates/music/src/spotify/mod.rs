@@ -6,6 +6,7 @@ mod client;
 mod collection;
 mod collection2;
 mod connect;
+mod links;
 mod lyrics;
 mod offline;
 mod pace;
@@ -92,6 +93,10 @@ impl MusicProvider for SpotifyProvider {
 
     fn public_art(&self) -> bool {
         true
+    }
+
+    fn link(&self, link: &str) -> Option<crate::link::Linked> {
+        links::read(link)
     }
 
     fn sign_in_options(&self) -> Vec<crate::SignIn> {

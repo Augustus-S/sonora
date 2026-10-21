@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Error;
 use gpui::{Context, Entity, EventEmitter, Task};
 use i18n::t;
+use music::link::Linked;
 use music::{
     Capabilities, Catalog, MusicApi, MusicProvider, PlaybackFactory, PromptSink, ProviderSession,
     Shape, SignIn, SignInFailure, SignInProblem, SignInPrompt, UserProfile,
@@ -347,6 +348,22 @@ impl Session {
     /// own, so the check never touches a service the app is not already using.
     pub fn reach(&self) -> Option<String> {
         self.providers.get(self.active?)?.reach()
+    }
+
+    /// What `link` points at, with the slug of the provider whose link it is. Every provider is
+    /// asked, not only the current one.
+    pub fn read_link(&self, link: &str) -> Option<(&'static str, Linked)> {
+        self.providers
+            .iter()
+            .find_map(|provider| Some((provider.slug(), provider.link(link)?)))
+    }
+
+    /// The name of the provider `slug` and whether it has an account stored.
+    pub fn account(&self, slug: &str) -> Option<(&'static str, bool)> {
+        self.providers
+            .iter()
+            .find(|provider| provider.slug() == slug)
+            .map(|provider| (provider.name(), provider.stored()))
     }
 
     pub fn local_slug(&self) -> &'static str {
