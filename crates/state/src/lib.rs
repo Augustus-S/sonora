@@ -241,7 +241,7 @@ pub fn init(
     );
     let session =
         cx.new(|cx| Session::new(providers, local_provider, settings.clone(), io.clone(), cx));
-    let network = cx.new(|_| Network::new(session.clone(), io.clone()));
+    let network = cx.new(|cx| Network::new(session.clone(), settings.clone(), io.clone(), cx));
     // A run that started without a network never signed out, so the account it kept is tried
     // again the moment there is one.
     session.update(cx, |_, cx| {

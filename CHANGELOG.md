@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Offline mode in Settings → Storage keeps Sonora to what you downloaded. Your library lists only
+  downloaded songs, albums, playlists and the artists on them, and a page with nothing
+  downloaded says you are offline, with a Go online button that turns the mode off. Turning it
+  on stops streaming, downloads and lyrics lookups, and a downloaded song keeps playing. It
+  stays on across restarts, and Sonora signs in again once you go online.
 - Download songs, albums and playlists from Spotify, YouTube Music, Tidal, Deezer, Apple Music
   and your Subsonic server with the button beside the heart on album and playlist pages, or from
   any right-click menu. A ring beside each song shows how far its download has got. Downloads

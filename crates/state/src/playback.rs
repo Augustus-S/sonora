@@ -527,6 +527,13 @@ impl Playback {
                 this.rebind(playback, cx);
             }
             SessionEvent::SignedOut => this.teardown(cx),
+            // The online engine gives way to the one that plays downloads, picking the current
+            // track up where it was. A provider with none stops streaming altogether.
+            SessionEvent::WentOffline => match session.read(cx).playback() {
+                Some(playback) if this.local_active() => this.start_engine(playback, cx),
+                Some(playback) => this.rebind(playback, cx),
+                None => this.teardown(cx),
+            },
             SessionEvent::LocalChanged => {
                 if this.local_engine.is_none()
                     && let Some(playback) = session.read(cx).local_playback()
@@ -3089,7 +3096,8 @@ impl Playback {
     /// Turns down a track that has to be streamed while the network is gone. Whatever plays
     /// keeps playing, since a local file needs nothing, and only a track the user picked says
     /// so out loud: the queue moving on by itself would otherwise toast once a track. A download
-    /// that still needs the network, as Apple Music's do, says why instead.
+    /// that still needs the network, as Apple Music's do, says why instead, and offline mode
+    /// says it is the reason.
     fn unreachable(&mut self, id: &str, start: Start, cx: &mut Context<Self>) {
         log::warn!("playback: nothing streams while the network is gone");
         if start != Start::Pick {
@@ -3103,6 +3111,9 @@ impl Playback {
                     .provider_name()
                     .unwrap_or("this provider");
                 Toasts::about(Outcome::Failed, "toast-offline-unsupported", provider, cx);
+            }
+            false if Network::offline(cx) => {
+                Toasts::show(Outcome::Failed, "toast-offline-mode", cx)
             }
             false => Toasts::show(Outcome::Failed, "toast-offline", cx),
         }

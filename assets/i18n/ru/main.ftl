@@ -864,3 +864,6 @@ toast-downloads-cancelled = { $count ->
     [one] Отменено скачивание { $count } трека
    *[other] Отменено скачивание { $count } треков
 }
+toast-offline-mode = Вы офлайн. Перейдите в онлайн, чтобы слушать эту песню.
+offline-title = Вы офлайн.
+offline-go-online = Перейти в онлайн
