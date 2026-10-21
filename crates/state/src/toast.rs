@@ -177,6 +177,15 @@ impl Toast {
         self.linger.map(|linger| linger.saturating_sub(ran))
     }
 
+    /// Whether the toast can act on or lead into the account it was shown for. A loading toast
+    /// counts because whatever settles it may add an Undo.
+    fn bound(&self) -> bool {
+        self.action.is_some()
+            || self.cancel.is_some()
+            || self.target.is_some()
+            || self.outcome == Outcome::Loading
+    }
+
     fn same(&self, other: &Self) -> bool {
         self.outcome == other.outcome
             && self.key == other.key
@@ -290,6 +299,23 @@ impl Toasts {
         toasts.update(cx, |this, cx| {
             this.shown.clear();
             this.clocks.clear();
+            cx.notify();
+        });
+    }
+
+    /// Dismisses every toast bound to the account being signed out of. Plain messages stay, so
+    /// one that explains the sign-out itself is still read.
+    pub fn clear_account(cx: &mut App) {
+        let toasts = Self::entity(cx);
+        toasts.update(cx, |this, cx| {
+            let clocks = &mut this.clocks;
+            this.shown.retain(|toast| {
+                let bound = toast.bound();
+                if bound {
+                    clocks.remove(&toast.id);
+                }
+                !bound
+            });
             cx.notify();
         });
     }

@@ -247,10 +247,11 @@ pub fn init(
         })
         .detach();
     });
-    // A toast can carry an Undo that acts on the account it was shown for, so none outlives it.
+    // A toast can carry an Undo that acts on the account it was shown for, so no such toast
+    // outlives it. A plain one stays, since the sign-out can be what it explains.
     cx.subscribe(&session, |_, event, cx| {
         if let SessionEvent::SignedOut = event {
-            Toasts::clear(cx);
+            Toasts::clear_account(cx);
         }
     })
     .detach();
