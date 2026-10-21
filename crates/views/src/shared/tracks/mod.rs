@@ -738,7 +738,7 @@ fn download_mark(cell: &Cell<TrackField>, track: &Track, cx: &App) -> Option<Any
     let theme = cx.theme();
     let mark = ("download-mark", cell.row);
     let ring = match downloads.track(id)? {
-        Progress::Done => ArrowRing::new(mark, Some(1.)).color(theme.primary),
+        Progress::Done => ArrowRing::new(mark, Some(1.)),
         Progress::Running => ArrowRing::new(mark, downloads.fraction(id)).color(theme.primary),
         Progress::Waiting => ArrowRing::new(mark, Some(0.)),
         Progress::Failed => ArrowRing::new(mark, Some(0.)).color(theme.danger),

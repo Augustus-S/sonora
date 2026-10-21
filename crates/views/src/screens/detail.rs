@@ -564,7 +564,7 @@ impl DetailView {
                     .leading(ring(share, theme.primary))
                     .tooltip("menu-downloading"),
                 Some(Progress::Done) => button
-                    .leading(ring(1., theme.primary))
+                    .leading(ring(1., theme.muted_foreground))
                     .tooltip("menu-remove-download"),
             }
             .on_click(move |_, _, cx| {
