@@ -385,6 +385,18 @@ impl Destination {
             _ => None,
         }
     }
+
+    /// Whether this page shows provider data that Refresh can load again. Settings, search and
+    /// the fullscreen player have nothing to reload, so they get no refresh button.
+    pub fn refreshes(&self) -> bool {
+        !matches!(
+            self,
+            Destination::Search
+                | Destination::Settings(_)
+                | Destination::Equalizer
+                | Destination::Fullscreen
+        )
+    }
 }
 
 #[derive(Clone)]

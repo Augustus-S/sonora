@@ -4,8 +4,8 @@ use crate::chrome::Chrome;
 use crate::shared::menus::{Item, ItemMenu};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, Entity, MouseDownEvent, Pixels, Point, Render, ScrollHandle, WeakEntity,
-    Window, div, px,
+    AnyElement, App, Context, Entity, MouseDownEvent, Pixels, Point, Render, ScrollHandle,
+    WeakEntity, Window, div, px,
 };
 use i18n::t;
 use music::GenreItem;
@@ -108,6 +108,12 @@ impl HomeView {
     /// Fetches the feed and the library it mixes from again.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.home.update(cx, |home, cx| home.refresh(cx));
+    }
+
+    /// Whether Quick picks or the shelves are still on their way.
+    pub(crate) fn is_loading(&self, cx: &App) -> bool {
+        let home = self.home.read(cx);
+        home.is_loading(cx) || home.is_feeding()
     }
 
     /// The Quick picks deck, headed by the name of the account it was drawn from. It is the

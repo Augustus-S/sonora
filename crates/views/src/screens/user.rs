@@ -72,6 +72,7 @@ impl UserView {
         }
 
         PageHero::new("user-hero", title)
+            .pending(user.is_none() && profile.is_loading())
             .cover(user.and_then(|user| user.avatar.clone()))
             .circle()
             .fallback(FALLBACK)

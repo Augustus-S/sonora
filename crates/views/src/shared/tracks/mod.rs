@@ -46,10 +46,10 @@ pub(crate) trait Tracks: 'static {
     fn tracks<'a>(&self, cx: &'a App) -> &'a [Track];
     fn is_loading(&self, cx: &App) -> bool;
 
-    /// The skeleton rows the table draws before the first tracks arrive. A list that
-    /// leaves the default shows nothing while it loads.
-    fn pending(&self, _cx: &App) -> Option<Pending> {
-        None
+    /// The skeleton rows the table draws before the first tracks arrive. A list that leaves
+    /// the default fills the viewport with them while it loads.
+    fn pending(&self, cx: &App) -> Option<Pending> {
+        self.is_loading(cx).then_some(Pending::Screen)
     }
 }
 

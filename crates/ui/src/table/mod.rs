@@ -148,9 +148,10 @@ pub trait TableSource: 'static {
     }
 
     /// The skeleton rows to draw while the source has no rows yet, so the page keeps the
-    /// height it is about to have. `None` leaves the table empty while it waits.
-    fn pending(&self, _cx: &App) -> Option<Pending> {
-        None
+    /// height it is about to have. A loading source fills the viewport by default, and `None`
+    /// leaves the table empty while it waits.
+    fn pending(&self, cx: &App) -> Option<Pending> {
+        self.is_loading(cx).then_some(Pending::Screen)
     }
 }
 
