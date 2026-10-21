@@ -1133,8 +1133,13 @@ fn audio_loop<F: Fetch>(
                                 &events,
                             ) {
                                 Some(fresh) => current = Some(fresh),
+                                // The seek has already cleared the queue, so the old decoder
+                                // would go on unheard. The app moves on as from a failed load.
                                 None => {
                                     log::warn!("playback: cannot seek {id}");
+                                    events
+                                        .send(PlaybackEvent::Unavailable { id: Some(id) })
+                                        .ok();
                                     continue;
                                 }
                             }
