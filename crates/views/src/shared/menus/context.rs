@@ -724,6 +724,9 @@ pub(crate) fn album_menu(
     let nexting = playback.clone();
     let queueing = playback.clone();
     let lasting = playback;
+    let download = (!music::is_local_id(&album_id))
+        .then(|| set_download_item(Collection::Album, Saved::Album(album.clone()), cx))
+        .flatten();
     let add_to_playlist = MenuItem::new("add-album-to-playlist", t!("menu-add-to-playlist"))
         .icon("icons/square-plus.svg")
         .submenu(
@@ -742,11 +745,7 @@ pub(crate) fn album_menu(
             [add_to_playlist, album_library_item(album.clone(), cx)]
                 .into_iter()
                 .chain(album_membership_item(album.clone(), cx))
-                .chain(set_download_item(
-                    Collection::Album,
-                    Saved::Album(album.clone()),
-                    cx,
-                ))
+                .chain(download)
                 .collect(),
             vec![
                 MenuItem::new("play-album-next", t!("menu-play-next"))

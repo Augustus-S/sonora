@@ -263,16 +263,7 @@ impl Downloads {
         let Some(provider) = self.provider else {
             return;
         };
-        let tracks: Vec<Track> = tracks
-            .into_iter()
-            .filter(|track| track.playable)
-            .filter(|track| {
-                track
-                    .id
-                    .as_deref()
-                    .is_some_and(|id| !music::is_local_id(id))
-            })
-            .collect();
+        let tracks: Vec<Track> = tracks.into_iter().filter(downloadable).collect();
         for track in &tracks {
             self.enlist(track, true);
         }
@@ -429,8 +420,7 @@ impl Downloads {
         let tracks: Vec<Track> = set
             .tracks
             .iter()
-            .filter(|track| track.playable)
-            .filter(|track| track.id.is_some())
+            .filter(|track| downloadable(track))
             .cloned()
             .collect();
         for track in &tracks {
@@ -753,6 +743,16 @@ impl Downloads {
 pub fn downloaded(id: &str, cx: &App) -> bool {
     cx.try_global::<crate::Sonora>()
         .is_some_and(|sonora| sonora.downloads.read(cx).has(id))
+}
+
+/// Whether a track can be downloaded at all. It has to play, have an id and come from the
+/// streaming provider rather than from disk.
+fn downloadable(track: &Track) -> bool {
+    track.playable
+        && track
+            .id
+            .as_deref()
+            .is_some_and(|id| !music::is_local_id(id))
 }
 
 /// A playlist with every page of its tracks, since a download of part of one is no use.
