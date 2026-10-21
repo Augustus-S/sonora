@@ -367,6 +367,7 @@ impl ToastStack {
                 card.layer_translate(point(px(sway), px(drop)))
             })
             .when_some(toast.name.clone(), Toast::strong)
+            .when(toast.single_line, Toast::single_line)
             .when_some(
                 toast
                     .detail

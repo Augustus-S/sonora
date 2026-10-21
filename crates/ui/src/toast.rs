@@ -38,6 +38,7 @@ pub struct Toast {
     icon: Option<SharedString>,
     loading: bool,
     progress: Option<f32>,
+    single_line: bool,
     action: Option<(SharedString, Press)>,
     action_icon: Option<SharedString>,
     cancel: Option<(SharedString, Press)>,
@@ -62,6 +63,7 @@ impl Toast {
             icon: None,
             loading: false,
             progress: None,
+            single_line: false,
             action: None,
             action_icon: None,
             cancel: None,
@@ -99,6 +101,12 @@ impl Toast {
     /// and how far that is as a percentage after the message.
     pub fn progress(mut self, done: f32) -> Self {
         self.progress = Some(done.clamp(0., 1.));
+        self
+    }
+
+    /// Keeps the message to one line, cut short with an ellipsis, rather than wrapping it.
+    pub fn single_line(mut self) -> Self {
+        self.single_line = true;
         self
     }
 
@@ -189,6 +197,7 @@ impl RenderOnce for Toast {
             icon,
             loading,
             progress,
+            single_line,
             action,
             action_icon,
             cancel,
@@ -237,6 +246,7 @@ impl RenderOnce for Toast {
                     .min_w_0()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.popover_foreground)
+                    .when(single_line, |message| message.truncate())
                     .child(with_name_emphasised(&id, message, strong, open)),
             )
             .when_some(detail, |text, detail| {

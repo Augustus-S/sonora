@@ -859,8 +859,8 @@ toast-download-set-failed = Не удалось скачать часть тре
 toast-download-song-failed = Не удалось скачать { $name }
 toast-download-songs-failed = Не удалось скачать часть треков
 toast-percent = { $percent }%
-toast-download-cancelled = Скачивание { $name } отменено
+toast-download-cancelled = Отменено скачивание { $name }
 toast-downloads-cancelled = { $count ->
-    [one] Скачивание { $count } трека отменено
-   *[other] Скачивание { $count } треков отменено
+    [one] Отменено скачивание { $count } трека
+   *[other] Отменено скачивание { $count } треков
 }

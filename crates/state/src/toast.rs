@@ -79,6 +79,8 @@ pub struct Toast {
     /// How far the work a loading toast waits on has got, from 0 to 1, which shows a filling
     /// ring in place of the spinner. `None` while there is no telling.
     pub progress: Option<f32>,
+    /// Whether the message keeps to one line, cut short with an ellipsis, rather than wrapping.
+    pub single_line: bool,
     /// Runs when the listener dismisses the toast by its cross or a swipe. Closing it from code
     /// or letting it expire runs nothing.
     dismissed: Option<Run>,
@@ -105,6 +107,7 @@ impl Toast {
             cancel: None,
             progress: None,
             dismissed: None,
+            single_line: false,
             linger: match outcome {
                 Outcome::Loading => None,
                 _ => Some(LINGER),
@@ -176,6 +179,12 @@ impl Toast {
     /// Shows how far the work has got, from 0 to 1, as a ring that fills in place of the spinner.
     pub fn progress(mut self, done: f32) -> Self {
         self.progress = Some(done);
+        self
+    }
+
+    /// Keeps the message to one line, for a toast that names something whose name may run long.
+    pub fn single_line(mut self) -> Self {
+        self.single_line = true;
         self
     }
 
