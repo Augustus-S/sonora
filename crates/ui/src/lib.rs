@@ -86,7 +86,7 @@ pub use input::{
     Backspace, BackspaceToStart, BackspaceWord, Copy, Cut, Delete, DeleteToEnd, DeleteWord,
     Dismiss, End, Home, INPUT_CONTEXT, Input, Left, Paste, Right, SelectAll, SelectEnd, SelectHome,
     SelectLeft, SelectRight, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Space,
-    WordLeft, WordRight,
+    WordLeft, WordRight, refresh_primary_paste,
 };
 pub use kbd::Kbd;
 pub use label::{eyebrow, faint, heading, upper, vacant};
@@ -125,7 +125,7 @@ pub use scrubber::{Scrubber, ScrubberState};
 pub use separator::Separator;
 pub use shield::Shield;
 pub use skeleton::{Initials, Skeleton};
-pub use spinner::Spinner;
+pub use spinner::{Spin, Spinner};
 pub use switch::Switch;
 pub use table::{
     Activate, Cell, ColumnSpec, Deselect, Layout, Listing, Pending, ROW_GROUP, Remove, SelectNext,

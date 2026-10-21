@@ -11,6 +11,8 @@ use super::{Group, Row, SettingsView, Slot};
 const GLYPH: Pixels = px(18.);
 /// How much of a visualizer card's height its spectrum takes.
 const SPECTRUM: f32 = 0.8;
+/// How thick a card's border is, which the spectrum sits inside.
+const EDGE: Pixels = px(1.);
 /// The band levels a visualizer card draws, a spectrum caught at one moment.
 const STILL: [f32; 16] = [
     0.42, 0.66, 0.84, 0.7, 0.5, 0.58, 0.76, 0.6, 0.44, 0.52, 0.64, 0.46, 0.34, 0.4, 0.28, 0.22,
@@ -75,6 +77,9 @@ impl SettingsView {
         let theme = *cx.theme();
         let chosen = self.settings.read(cx).visualizer_style();
         let height = theme.metrics.list_row * 1.5;
+        // the card clips only to a rectangle, so the spectrum cuts itself to the inside of the
+        // card's rounded border
+        let corner = (theme.radius - EDGE).max(Pixels::ZERO);
 
         grid(VisualizerStyle::ALL.len() as u16, window, cx)
             .children(VisualizerStyle::ALL.map(|style| {
@@ -95,6 +100,7 @@ impl SettingsView {
                             .style_kind(style)
                             .tint(theme.foreground)
                             .behind(theme.secondary)
+                            .corner_radius(corner)
                             .w_full(),
                     ),
                 };

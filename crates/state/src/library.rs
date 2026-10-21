@@ -2579,6 +2579,17 @@ impl Library {
         self.load(shelf, cx);
     }
 
+    /// Drops what a shelf shows and loads it again from its provider, so the page goes back to
+    /// its loading state until the new rows land. This is the Refresh a user asks for, while
+    /// `refresh` is the quiet one that keeps rows on screen.
+    pub fn reload(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
+        if shelf == Shelf::Streaming {
+            self.sync_pin_targets(cx);
+        }
+        self.held_mut(shelf).stale.clear();
+        self.load(shelf, cx);
+    }
+
     /// Loads a shelf from its provider. A `Saved` shape reads the `saved_*` lists; a `Catalog`
     /// shape reads the `all_*` lists and the `saved_*` ones beside them for hearts and filters.
     /// Rows a snapshot primed stay on screen while this runs, each part until all of its own rows

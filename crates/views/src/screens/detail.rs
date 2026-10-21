@@ -359,6 +359,7 @@ impl DetailView {
         let header = self.detail.read(cx).header();
         let kind = header
             .map(|header| header.kind)
+            .or(self.detail.read(cx).kind())
             .unwrap_or(Collection::Album);
         let release = header
             .and_then(|header| header.release)
@@ -455,6 +456,7 @@ impl DetailView {
 
         let view = self.me.clone();
         PageHero::new("detail-hero", title)
+            .pending(header.is_none() && self.detail.read(cx).is_loading())
             .pin(pin)
             .cover(cover)
             .eyebrow(eyebrow)

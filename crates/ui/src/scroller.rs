@@ -145,32 +145,32 @@ impl RenderOnce for Scroller {
 
 /// Adds browser-style middle-button auto-scrolling to a scrollable surface. A middle click
 /// turns the mode on until the next press of any button. A middle press that is held and
-/// dragged scrolls only while held, and `Root` ends it on the release.
+/// dragged scrolls only while held, and `Root` ends it on the release. A middle press that a
+/// child handles itself, such as a text field pasting on Linux, does not start it. A middle
+/// press never moves focus or shows a pressed style on the children it passes through.
 pub fn middle_scroll(surface: Div, bar: &Entity<Scrollbar>) -> Div {
     surface
-        .capture_any_mouse_down({
+        .capture_any_mouse_down(|event, window, cx| {
+            if event.button == MouseButton::Middle {
+                window.prevent_default();
+            } else if cancel_middle_scroll(cx) {
+                window.refresh();
+                cx.stop_propagation();
+            }
+        })
+        .on_mouse_down(MouseButton::Middle, {
             let gliding = bar.clone();
             move |event, window, cx| {
-                if event.button == MouseButton::Middle {
-                    let started = gliding.update(cx, |bar, cx| {
-                        bar.middle_scroll_start(event.position, window, cx)
-                    });
-                    if started {
-                        activate_middle_scroll(&gliding, cx);
-                    } else {
-                        cancel_middle_scroll(cx);
-                    }
-                    window.refresh();
-                    cx.stop_propagation();
-                } else if event.button == MouseButton::Left {
-                    if cancel_middle_scroll(cx) {
-                        window.refresh();
-                        cx.stop_propagation();
-                    }
-                } else if cancel_middle_scroll(cx) {
-                    window.refresh();
-                    cx.stop_propagation();
+                let started = gliding.update(cx, |bar, cx| {
+                    bar.middle_scroll_start(event.position, window, cx)
+                });
+                if started {
+                    activate_middle_scroll(&gliding, cx);
+                } else {
+                    cancel_middle_scroll(cx);
                 }
+                window.refresh();
+                cx.stop_propagation();
             }
         })
         .on_mouse_move({

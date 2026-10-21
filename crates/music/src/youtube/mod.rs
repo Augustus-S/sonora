@@ -52,14 +52,34 @@ enum Saved {
     Guest,
 }
 
+/// How long a track waits on a minting page that is already attested. Minting there takes
+/// milliseconds and the rest is the app's polling, so a track usually starts on a real token.
+const WARM_WAIT: Duration = Duration::from_secs(2);
+/// How often a track waiting on a warm page looks for its token.
+const WARM_POLL: Duration = Duration::from_millis(50);
+
 /// Asks the app for the proof-of-origin token the client needs. Every answer comes out of
-/// `music::potoken`, so the client never waits on the browser window that fills it.
+/// `music::potoken`. The client waits up to [`WARM_WAIT`] when the app has an attested page open,
+/// and never on a page that still has to load.
 struct Minter;
 
 #[async_trait]
 impl ytmusic::Minter for Minter {
     async fn mint(&self, binding: &str) -> Option<String> {
-        crate::potoken::token(binding)
+        if let Some(token) = crate::potoken::token(binding) {
+            return Some(token);
+        }
+        if !crate::potoken::warm() {
+            return None;
+        }
+        let deadline = std::time::Instant::now() + WARM_WAIT;
+        while std::time::Instant::now() < deadline {
+            tokio::time::sleep(WARM_POLL).await;
+            if let Some(token) = crate::potoken::minted(binding) {
+                return Some(token);
+            }
+        }
+        None
     }
 }
 

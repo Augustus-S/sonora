@@ -498,6 +498,17 @@ impl History {
         self.state = HistoryState::Ready;
     }
 
+    /// Drops the list and loads it again, so the page shows its skeleton until the plays land.
+    /// A load already under way is left to finish and fills the list in its place.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.tracks.clear();
+        self.state = HistoryState::Loading;
+        cx.notify();
+        self.refresh(cx);
+    }
+
+    /// Loads the plays again and keeps the list on screen until they land, which is how the
+    /// history picks up plays from other devices in the background.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         if self.task.is_some() {
             return;

@@ -825,6 +825,47 @@ impl LibraryView {
         }
     }
 
+    /// Whether the shown section is still loading its first rows, the one time the page draws
+    /// skeletons in place of its cards.
+    fn waiting(&self, cx: &App) -> bool {
+        loading(&self.library, self.shelf, self.section, cx)
+            && self.table(self.section).row_count(cx) == 0
+    }
+
+    /// Skeleton cards laid out like the deck that will replace them, enough rows to fill the
+    /// window. Artists get round ones, like their cards.
+    fn pending_cards(&self, window: &Window, cx: &App) -> AnyElement {
+        let inset = cx.theme().metrics.inset;
+        let room = cells::content_width(window, page::reserved(inset), cx);
+        let layout = CardGrid::layout(room);
+        let gap = deck_gap(window);
+        let tile = Card::tile_height(layout.card, window, cx);
+        let rows = (window.viewport_size().height / (tile + gap))
+            .ceil()
+            .max(1.) as usize;
+        let circle = self.section == Section::Artists;
+
+        Scroller::new("library-cards", &self.card_scrollbar)
+            .bottom_inset(crate::chrome::Chrome::bottom(cx))
+            .py(inset)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .px(inset)
+                    .gap(gap)
+                    .children((0..rows).map(|row| {
+                        CardGrid::new(room).children((0..layout.columns).map(move |column| {
+                            Card::skeleton(("library-pending", row * layout.columns + column))
+                                .tile(layout.card)
+                                .when(circle, Card::circle)
+                                .into_any_element()
+                        }))
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn cards(&mut self, window: &Window, cx: &App) -> AnyElement {
         let theme = *cx.theme();
         let inset = theme.metrics.inset;
@@ -1120,6 +1161,7 @@ impl Render for LibraryView {
                 .child(self.table(self.section).element())
                 .when_some(note, |this, note| this.child(note))
                 .into_any_element(),
+            (_, Mode::Grid) if note.is_none() && self.waiting(cx) => self.pending_cards(window, cx),
             (_, Mode::Grid) => match note {
                 Some(note) => note.size_full().into_any_element(),
                 None => self.cards(window, cx),

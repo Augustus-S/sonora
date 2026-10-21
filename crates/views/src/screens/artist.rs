@@ -15,8 +15,8 @@ use state::{AppSettings, ArtistDetail, Origin, Playback, Sonora};
 use ui::ActiveTheme as _;
 use ui::Listing as _;
 use ui::{
-    Button, Card, Deck, MIN_CONTENT, Mode, Picker, Pin, PinKind, Popovers, Popup, Scrollbar,
-    Scroller, Skeleton, TableDelegate, TableEvent, TableState, Text, scrolled, snapped, table,
+    Button, Card, Deck, MIN_CONTENT, Mode, Pending, Picker, Pin, PinKind, Popovers, Popup,
+    Scrollbar, Scroller, TableDelegate, TableEvent, TableState, Text, scrolled, snapped, table,
 };
 
 use crate::chrome::tools;
@@ -51,6 +51,11 @@ impl Tracks for ArtistTracks {
 
     fn is_loading(&self, cx: &App) -> bool {
         self.detail.read(cx).is_loading()
+    }
+
+    /// As many rows as the list shows before it is expanded.
+    fn pending(&self, cx: &App) -> Option<Pending> {
+        self.is_loading(cx).then_some(Pending::Rows(LISTED))
     }
 }
 
@@ -322,6 +327,7 @@ impl ArtistView {
             .map(|id| Pin::new(PinKind::Artist, id, title.clone()).cover(cover.clone()));
 
         PageHero::new("artist-hero", title)
+            .pending(artist.is_none() && self.detail.read(cx).is_loading())
             .pin(pin)
             .cover(cover)
             .eyebrow(t!("artist-eyebrow"))
@@ -755,38 +761,6 @@ impl ArtistView {
         .collect()
     }
 
-    fn tracks_loading(&self, cx: &Context<Self>) -> AnyElement {
-        let theme = *cx.theme();
-        let line = || Skeleton::new().w_full().h(theme.metrics.pad);
-
-        div()
-            .w_full()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(theme.border)
-            .overflow_hidden()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h(theme.metrics.header)
-                    .px(theme.metrics.pad)
-                    .bg(theme.table_head)
-                    .child(line()),
-            )
-            .children((0..5).map(|_| {
-                div()
-                    .flex()
-                    .items_center()
-                    .h(theme.metrics.row)
-                    .px(theme.metrics.pad)
-                    .border_t_1()
-                    .border_color(theme.table_row_border)
-                    .child(line())
-            }))
-            .into_any_element()
-    }
-
     fn listed(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let expanded = self.shown.get() > LISTED;
@@ -813,14 +787,12 @@ impl ArtistView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(match self.detail.read(cx).is_loading() {
-                true => self.tracks_loading(cx),
-                false => table(&self.table)
+            .child(
+                table(&self.table)
                     .rounded(theme.radius)
                     .border_1()
-                    .border_color(theme.border)
-                    .into_any_element(),
-            })
+                    .border_color(theme.border),
+            )
             .children(more)
             .into_any_element()
     }

@@ -22,6 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Playback, which also deletes them.
 - A refresh button beside Back and Forward, or Ctrl+R (Cmd+R on macOS), loads the page you are
   on again from your server, so changes made in another app show up without restarting Sonora.
+  The page shows its loading state until the fresh data arrives. Settings and search have no
+  refresh button, since there is nothing on them to reload.
+- The library, history, artist, genre and profile pages show placeholder rows and cards while
+  they load, the way album pages already did.
 - With Blur UI on, pages, lyrics, the queue and pinned items scroll beneath a frosted player bar.
   You can turn it off, and choose a Classic, Compact or Centered layout, in Settings → Appearance
   → Player bar. Centered puts the cover and playback buttons on the left, track details in the
@@ -156,6 +160,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A Spotify song you skip to, or seek back to the start of, now plays from the start instead of
   sometimes picking up seconds in.
+- YouTube Music songs play to the end again instead of skipping after about a minute. YouTube
+  stopped serving most songs to the guest stream and now wants a token for each song.
 - While controlling another Spotify device, the volume slider follows that device and responds
   immediately to changes. Fullscreen shows its album art and hides the local audio visualizer.
 - Spotify liked songs and saved albums now load for accounts with hundreds of playlists, instead
@@ -194,6 +200,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Songs on YouTube Music and Apple Music no longer sometimes play with left and right swapped
   after you seek or pick up partway through.
 - The fullscreen visualizer no longer mixes up the left and right channels after a mono track.
+- On Linux, middle-clicking a text field such as the search box pastes the text you last
+  selected in any app, and text you select in Sonora's fields can be middle-click pasted
+  elsewhere. On GNOME it follows the middle-click paste switch in Tweaks.
 
 ## [0.43.0] - 2026-10-13
 

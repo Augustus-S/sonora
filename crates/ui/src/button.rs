@@ -1,7 +1,10 @@
+use std::f32::consts::TAU;
+
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Div, ElementId, Hsla, Interactivity, MouseButton, Pixels,
-    SharedString, Stateful, StyleRefinement, Window, div, px, relative, svg,
+    SharedString, Stateful, StyleRefinement, Transformation, Window, div, px, radians, relative,
+    svg,
 };
 
 use crate::glass::{blurring, frost};
@@ -45,6 +48,7 @@ pub struct Button {
     backgroundless: bool,
     hoverless: bool,
     frosted: bool,
+    turn: f32,
     hovered: Option<StyleRefinement>,
     fill: Option<(Hsla, Hsla)>,
     pressed: Option<StyleRefinement>,
@@ -71,6 +75,7 @@ impl Button {
             backgroundless: false,
             hoverless: false,
             frosted: false,
+            turn: 0.,
             hovered: None,
             fill: None,
             pressed: None,
@@ -189,6 +194,12 @@ impl Button {
         self
     }
 
+    /// Rotates the icon by `turn` of a full turn, for an owner that animates it with `Spin`.
+    pub fn turned(mut self, turn: f32) -> Self {
+        self.turn = turn;
+        self
+    }
+
     pub fn tooltip(mut self, key: impl Into<SharedString>) -> Self {
         self.tooltip = Some((key.into(), Perch::Pointer));
         self
@@ -257,6 +268,7 @@ impl RenderOnce for Button {
             backgroundless,
             hoverless,
             frosted,
+            turn,
             hovered,
             fill,
             pressed,
@@ -383,7 +395,8 @@ impl RenderOnce for Button {
                         .path(icons::path(path))
                         .size(px(16.))
                         .flex_none()
-                        .text_color(foreground),
+                        .text_color(foreground)
+                        .with_transformation(Transformation::rotate(radians(turn * TAU))),
                 )
             })
             .children(leading)
