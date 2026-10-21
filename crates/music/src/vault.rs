@@ -215,6 +215,22 @@ impl Vault {
         (footprint(&self.root), footprint(&self.pinned))
     }
 
+    /// Whether any download is on disk, whatever key it was sealed under. It walks the downloads
+    /// folder, so call it off the main thread.
+    pub fn holds_downloads(&self) -> bool {
+        fs::read_dir(&self.pinned)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|shelf| {
+                fs::read_dir(shelf.path())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|item| !item.file_name().to_string_lossy().starts_with('.'))
+            })
+    }
+
     /// Removes every download.
     pub fn forget_downloads(&self) {
         match fs::remove_dir_all(&self.pinned) {
