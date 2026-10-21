@@ -9,7 +9,10 @@ use std::rc::Rc;
 use i18n::t;
 use music::{Album, AlbumDetail, Playlist, ReleaseType, Track};
 use router::{Destination, navigate};
-use state::{AppSettings, Collection, Detail, LibraryEvent, Origin, Playback, Progress, Sonora};
+use state::{
+    AppSettings, Collection, Detail, DownloadsChanged, LibraryEvent, Origin, Playback, Progress,
+    Sonora,
+};
 use ui::{
     ActiveTheme as _, ArrowRing, Button, InlineLink, InlineLinks, Menu, Picker, Popovers, Popup,
     SortAxis,
@@ -226,8 +229,11 @@ impl DetailView {
             .detach();
         }
 
+        // Progress only redraws the download button. A filtered table rebuilds when what it
+        // shows may have changed, since a rebuild drops the open menu and the selection.
         let downloads = Sonora::global(cx).downloads.clone();
-        cx.observe(&downloads, |this, _, cx| {
+        cx.observe(&downloads, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&downloads, |this, _, _: &DownloadsChanged, cx| {
             if this.table.narrowed(cx) {
                 this.rebuild(cx);
             }

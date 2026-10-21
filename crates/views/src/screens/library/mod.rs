@@ -19,8 +19,8 @@ use i18n::t;
 use music::{Shape, Track};
 use router::{Destination, LibraryTab, navigate};
 use state::{
-    Addition, AppSettings, Library, LibraryPart, LibraryState, Origin, Playback, Scan, Shelf,
-    Sonora,
+    Addition, AppSettings, DownloadsChanged, Library, LibraryPart, LibraryState, Origin, Playback,
+    Scan, Shelf, Sonora,
 };
 use ui::{
     ActiveTheme as _, Button, Card, Deck, FilterChange, LEADING, Mode, Pinnable, Popovers, Popup,
@@ -308,9 +308,10 @@ impl LibraryView {
             cx.notify();
         })
         .detach();
-        // The Downloaded filter follows downloads as they land.
+        // The Downloaded filter follows downloads as they land, and not each redraw of their
+        // progress, which would drop the open menu and the selection every time.
         let downloads = Sonora::global(cx).downloads.clone();
-        cx.observe(&downloads, |this, _, cx| {
+        cx.subscribe(&downloads, |this, _, _: &DownloadsChanged, cx| {
             for table in this.tables() {
                 if table.narrowed(cx) {
                     table.rebuild(cx);

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
-use gpui::{App, Context, Entity, Task};
+use gpui::{App, Context, Entity, EventEmitter, Task};
 use music::{Album, AlbumDetail, Fraction, Playlist, PlaylistDetail, Track};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,11 @@ pub enum Progress {
     /// The last try did not work. The next sign-in tries again.
     Failed,
 }
+
+/// Raised when what a Downloaded filter shows may have changed, which is when a track finished
+/// or went, or an album or playlist was added or removed. Progress alone never raises it, so a
+/// filtered list rebuilds on this rather than on every redraw of a running download.
+pub struct DownloadsChanged;
 
 /// An album or playlist that was downloaded whole, kept with its tracks so its page opens with
 /// no network.
@@ -110,6 +115,8 @@ pub struct Downloads {
     fetching: HashMap<String, Task<()>>,
     restore: Option<Task<()>>,
 }
+
+impl EventEmitter<DownloadsChanged> for Downloads {}
 
 impl Downloads {
     pub fn new(
@@ -274,6 +281,7 @@ impl Downloads {
         }
         self.persist(provider, None, tracks);
         self.pump(cx);
+        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
@@ -377,6 +385,7 @@ impl Downloads {
             }
             Ok(())
         });
+        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
@@ -400,6 +409,7 @@ impl Downloads {
         self.drop_tracks(provider, &gone, cx);
         let id = id.to_owned();
         self.write(move |store| store.forget_set(provider, kind, &id));
+        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
@@ -415,6 +425,7 @@ impl Downloads {
         self.playback
             .update(cx, |playback, cx| playback.remove_downloads(cx));
         self.write(|store| store.forget_everything());
+        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
@@ -434,6 +445,7 @@ impl Downloads {
         self.sets.insert((kind, id.clone()), set.clone());
         self.persist(provider, Some((kind, id, set)), tracks);
         self.pump(cx);
+        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
@@ -568,6 +580,7 @@ impl Downloads {
                     entry.done = true;
                     let done = id.clone();
                     self.write(move |store| store.done(provider, &done));
+                    cx.emit(DownloadsChanged);
                 }
             }
             Err(error) if error.downcast_ref::<music::Throttled>().is_some() => {
@@ -708,6 +721,7 @@ impl Downloads {
                     Err(error) => log::warn!("downloads: cannot read the list: {error:#}"),
                 }
                 this.pump(cx);
+                cx.emit(DownloadsChanged);
                 cx.notify();
             })
             .ok();
@@ -729,6 +743,7 @@ impl Downloads {
         self.failed.clear();
         self.fetching.clear();
         self.restore = None;
+        cx.emit(DownloadsChanged);
         cx.notify();
     }
 
