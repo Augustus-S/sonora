@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -98,6 +98,9 @@ pub struct Devices {
     /// People who queued songs and are not in the Jam's member list, read from their profiles,
     /// by the id the queue names them by.
     people: HashMap<String, Arc<Contributor>>,
+    /// Queued tracks and people whose read failed, by id. They are not asked for again until the
+    /// other device moves to another track, so one that never reads cannot keep `list` going.
+    unreadable: HashSet<String>,
     /// Whether this app took playback, which only the listener pressing play does. A track
     /// restored paused at launch must not pull playback off another device.
     claimed: bool,
@@ -157,6 +160,7 @@ impl Devices {
             remote: None,
             listed: HashMap::new(),
             people: HashMap::new(),
+            unreadable: HashSet::new(),
             listing: None,
             claimed: false,
             sent: None,
@@ -456,6 +460,7 @@ impl Devices {
         self.remote = None;
         self.listed.clear();
         self.people.clear();
+        self.unreadable.clear();
         self.listing = None;
         self.claimed = false;
         self.sent = None;
@@ -513,6 +518,7 @@ impl Devices {
             self.leaving = false;
             self.remote = None;
             self.listed.clear();
+            self.unreadable.clear();
             self.listing = None;
         }
         cx.notify();
@@ -583,13 +589,26 @@ impl Devices {
     }
 
     fn set_roster(&mut self, roster: Roster, cx: &mut Context<Self>) {
-        self.roster = roster;
-        let wanted = self
-            .roster
+        let wanted = roster
             .elsewhere
             .as_ref()
             .and_then(|elsewhere| elsewhere.track.clone());
-        if self.remote.as_ref().and_then(|track| track.id.clone()) != wanted {
+        let moved = self
+            .roster
+            .elsewhere
+            .as_ref()
+            .and_then(|elsewhere| elsewhere.track.as_ref())
+            != wanted.as_ref();
+        self.roster = roster;
+        // what failed to read is asked for again once the other device plays something else
+        if moved {
+            self.unreadable.clear();
+        }
+        let unread = self.remote.as_ref().and_then(|track| track.id.clone()) != wanted;
+        let failed = wanted
+            .as_ref()
+            .is_some_and(|id| self.unreadable.contains(id));
+        if unread && !failed && (moved || self.fetching.is_none()) {
             self.remote = None;
             self.fetching = None;
             if let (Some(id), Some(client)) = (wanted, self.session.read(cx).client()) {
@@ -606,7 +625,7 @@ impl Devices {
 
     /// Reads in the tracks on the other device's queue that are not yet, one request after the
     /// other so a long queue does not flood the provider. A change that comes meanwhile is taken
-    /// up when this one is done.
+    /// up when this one is done, and whatever failed to read is left out of it.
     fn list(&mut self, cx: &mut Context<Self>) {
         if self.listing.is_some() {
             return;
@@ -625,39 +644,54 @@ impl Devices {
             .iter()
             .filter(|listed| !self.listed.contains_key(&listed.id))
             .map(|listed| listed.id.clone())
+            .filter(|id| !self.unreadable.contains(id))
             .collect::<Vec<_>>();
         let mut strangers = upcoming
             .iter()
             .filter_map(|listed| listed.added_by.clone())
-            .filter(|adder| self.known(adder).is_none())
+            .filter(|adder| self.known(adder).is_none() && !self.unreadable.contains(adder))
             .collect::<Vec<_>>();
         strangers.sort();
         strangers.dedup();
         if missing.is_empty() && strangers.is_empty() {
             return;
         }
+        let asked = missing
+            .iter()
+            .chain(&strangers)
+            .cloned()
+            .collect::<Vec<_>>();
         let io = self.io.clone();
         self.listing = Some(cx.spawn(async move |this, cx| {
             let read = join(io.spawn(async move {
                 let mut read = Vec::new();
+                let mut failed = Vec::new();
                 for id in missing {
                     match client.track(&id).await {
                         Ok(track) => read.push((id, track)),
-                        Err(error) => log::warn!("connect: cannot read a queued track: {error:#}"),
+                        Err(error) => {
+                            log::warn!("connect: cannot read a queued track: {error:#}");
+                            failed.push(id);
+                        }
                     }
                 }
                 let mut people = Vec::new();
                 for adder in strangers {
-                    people.extend(person(&*client, adder).await);
+                    match person(&*client, adder.clone()).await {
+                        Some(found) => people.push(found),
+                        None => failed.push(adder),
+                    }
                 }
-                Ok((read, people))
+                Ok((read, people, failed))
             }))
             .await;
             this.update(cx, |this, cx| {
                 this.listing = None;
-                let (read, people) = read.unwrap_or_default();
+                // a read that never finished counts as failed, so it is not asked for at once
+                let (read, people, failed) = read.unwrap_or((Vec::new(), Vec::new(), asked));
                 this.listed.extend(read);
                 this.people.extend(people);
+                this.unreadable.extend(failed);
                 this.list(cx);
                 this.redraw(cx);
             })
@@ -706,6 +740,8 @@ impl Devices {
         moving
     }
 
+    /// Reads in the track the other device plays. One that does not read is kept in
+    /// `unreadable`, so the next roster does not ask for it again.
     fn read_remote(
         &self,
         client: Arc<dyn MusicApi>,
@@ -730,8 +766,13 @@ impl Devices {
                             this.redraw(cx);
                         }
                     }
-                    Ok(_) => {}
-                    Err(error) => log::warn!("connect: cannot read the remote track: {error:#}"),
+                    Ok(_) => {
+                        this.unreadable.insert(id);
+                    }
+                    Err(error) => {
+                        log::warn!("connect: cannot read the remote track: {error:#}");
+                        this.unreadable.insert(id);
+                    }
                 }
             })
             .ok();
@@ -993,8 +1034,6 @@ fn differs(a: &NowPlaying, b: &NowPlaying) -> &'static str {
     }
 }
 
-/// Reads in what a start names: the collection if it has one the track is in, otherwise the
-/// track and the tracks that follow it.
 /// The profile of someone a queue names by an id the Jam's members do not list, keyed by that id.
 async fn person(client: &dyn MusicApi, id: String) -> Option<(String, Arc<Contributor>)> {
     match client.user(&id).await {
@@ -1013,6 +1052,8 @@ async fn person(client: &dyn MusicApi, id: String) -> Option<(String, Arc<Contri
     }
 }
 
+/// Reads in what a start names: the collection if it has one the track is in, otherwise the
+/// track and the tracks that follow it.
 async fn load(client: Arc<dyn MusicApi>, start: Start) -> Result<Loaded> {
     let (tracks, origin) = match &start.collection {
         Some(Collection::Album(id)) => (client.album_tracks(id).await?, Some(Origin::album(id))),
