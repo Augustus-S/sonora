@@ -2665,9 +2665,13 @@ impl Playback {
     }
 
     /// Moves playback onto a fresh engine, as after a reconnect, and resumes where it was if it
-    /// was playing or waiting to.
+    /// was playing, loading to play, or waiting to.
     fn rebind(&mut self, playback: Arc<dyn PlaybackFactory>, cx: &mut Context<Self>) {
-        let resume = self.state == PlaybackState::Playing || self.awaiting_reconnect;
+        let resume = match self.state {
+            PlaybackState::Playing => true,
+            PlaybackState::Loading => self.intent == Intent::Play,
+            _ => false,
+        } || self.awaiting_reconnect;
         self.awaiting_reconnect = false;
         let at = self.live_position();
         self.task = None;
