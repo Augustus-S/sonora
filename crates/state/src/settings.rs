@@ -931,8 +931,11 @@ impl AppSettings {
         self.values.keep_tracks
     }
 
+    /// The cache limit in gigabytes, held within the setting's bounds whatever a hand-edited
+    /// settings file says.
     pub fn cache_gb(&self) -> u32 {
-        self.values.cache_gb
+        let (low, high) = crate::vault::CACHE_GB_RANGE;
+        self.values.cache_gb.clamp(low, high)
     }
 
     /// Whether Sonora shows up as a Spotify Connect device while a Spotify account is signed in.
