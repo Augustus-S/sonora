@@ -359,7 +359,7 @@ impl stream::Source for Resuming {
                     }
                     _ => return Ok(None),
                 },
-                Err(error) => error.into(),
+                Err(error) => error.without_url().into(),
             };
             self.response = None;
             backoff
@@ -432,11 +432,14 @@ impl Failure {
 
 impl From<reqwest::Error> for Failure {
     /// A request that could not be built fails the same way every time. Anything else went
-    /// wrong on the way and may not again.
+    /// wrong on the way and may not again. The url is dropped, since it is signed and the error
+    /// ends up in the log.
     fn from(error: reqwest::Error) -> Self {
-        match error.is_builder() {
-            true => Self::Final(error.into()),
-            false => Self::Passing(error.into()),
+        let lasting = error.is_builder();
+        let error = error.without_url().into();
+        match lasting {
+            true => Self::Final(error),
+            false => Self::Passing(error),
         }
     }
 }
