@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::StatusCode;
 use rodio::Source as _;
+use serde::{Deserialize, Serialize};
 
 use crate::aac::Aac;
 use crate::audio::Trimmed;
@@ -22,6 +23,7 @@ use crate::stream::{self, Reader, Stream};
 use crate::tidal::client::TidalClient;
 use crate::tidal::lock;
 use crate::tidal::manifest::Manifest;
+use crate::vault::{Recording, Shelf};
 use crate::{PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
 
 /// How long one part keeps being asked for, with the wait between asks doubling from
@@ -164,6 +166,21 @@ struct Tidal {
     media: reqwest::Client,
     /// The level every track is asked for at.
     quality: Quality,
+    /// Where played tracks are kept, so playing one again asks Tidal for nothing.
+    shelf: Option<Shelf>,
+}
+
+/// What Tidal said about a track, kept beside it in the vault, and for a segmented track the
+/// timeline its download built.
+#[derive(Serialize, Deserialize)]
+struct Facts {
+    duration_ms: Option<u64>,
+    lufs: Option<f32>,
+    peak: Option<f32>,
+    /// When each media segment starts in the music, in nanoseconds. Empty for one file.
+    starts_ns: Vec<u64>,
+    /// Where each part starts in the stream, the init segment first. Empty for one file.
+    offsets: Vec<usize>,
 }
 
 impl Timeline {
@@ -447,6 +464,7 @@ impl PlaybackFactory for Factory {
                 client: self.client.clone(),
                 media: self.media.clone(),
                 quality: config.quality,
+                shelf: config.vault.as_ref().map(|vault| vault.shelf("tidal")),
             },
             config,
         )
@@ -454,11 +472,70 @@ impl PlaybackFactory for Factory {
 }
 
 impl Tidal {
-    /// Starts the download a manifest describes and waits for the preroll.
+    /// The track from the vault, when it was kept at the level asked for. A segmented track
+    /// gets back the timeline it was kept with, so a seek splices exactly as it did then.
+    async fn recall(&self, id: &str) -> Option<Loaded> {
+        let kept = self.shelf.as_ref()?.find(id, self.quality.id())?;
+        let facts = serde_json::from_slice::<Facts>(&kept.facts)
+            .inspect_err(|error| {
+                log::warn!("playback: the kept facts of {id} do not read: {error}")
+            })
+            .ok()?;
+        let timeline = (!facts.offsets.is_empty()).then(|| {
+            Arc::new(Mutex::new(Timeline {
+                starts: facts
+                    .starts_ns
+                    .iter()
+                    .copied()
+                    .map(Duration::from_nanos)
+                    .collect(),
+                offsets: facts.offsets.clone(),
+            }))
+        });
+        let total = timeline.is_none().then_some(kept.length);
+        let stream = Stream::pulling(kept.source, total, Long)
+            .primed()
+            .await
+            .inspect_err(|error| log::warn!("playback: the kept copy of {id} broke: {error:#}"))
+            .ok()?;
+        log::debug!("playback: {id} started from the vault");
+        Some(Loaded {
+            stream,
+            timeline,
+            duration: facts.duration_ms.map(Duration::from_millis),
+            loudness: facts.lufs.map(|lufs| Loudness {
+                lufs,
+                peak: facts.peak,
+            }),
+        })
+    }
+
+    /// Wraps `source` so the track is kept once all of it has arrived, when keeping is on.
+    /// `facts` runs then and answers `None` when the download cannot have been whole.
+    fn record<S: stream::Source>(
+        &self,
+        id: &str,
+        source: S,
+        facts: impl FnOnce() -> Option<Facts> + Send + 'static,
+    ) -> Recording<S> {
+        match &self.shelf {
+            Some(shelf) => shelf.keep(
+                id,
+                self.quality.id(),
+                move || facts().and_then(|facts| serde_json::to_vec(&facts).ok()),
+                source,
+            ),
+            None => Recording::through(source),
+        }
+    }
+
+    /// Starts the download a manifest describes and waits for the preroll. `facts` is what
+    /// Tidal said about the track, kept beside it if it is kept.
     async fn arrive(
         &self,
         id: &str,
         manifest: Manifest,
+        facts: Facts,
     ) -> Result<(Stream<Long>, Option<Arc<Mutex<Timeline>>>)> {
         let renewal = Renewal {
             client: self.client.clone(),
@@ -471,6 +548,7 @@ impl Tidal {
             Manifest::File { url, .. } => {
                 let file = Resuming::open(self.media.clone(), url, renewal).await?;
                 let total = file.total;
+                let file = self.record(id, file, move || Some(facts));
                 (Stream::pulling(file, total, Long), None)
             }
             Manifest::Segments {
@@ -491,6 +569,22 @@ impl Tidal {
                     timeline: Arc::downgrade(&timeline),
                     renewal,
                 };
+                // The parts also end when nothing holds the timeline any more, so a track is
+                // only whole when every part has a place in it.
+                let held = Arc::downgrade(&timeline);
+                let parts = self.record(id, parts, move || {
+                    let timeline = held.upgrade()?;
+                    let timeline = lock(&timeline);
+                    (timeline.offsets.len() == timeline.starts.len() + 1).then(|| Facts {
+                        starts_ns: timeline
+                            .starts
+                            .iter()
+                            .map(|start| start.as_nanos() as u64)
+                            .collect(),
+                        offsets: timeline.offsets.clone(),
+                        ..facts
+                    })
+                });
                 (Stream::pulling(parts, None, Long), Some(timeline))
             }
         };
@@ -507,16 +601,33 @@ impl Fetch for Tidal {
         "tidal"
     }
 
+    fn shelf(&self) -> Option<&Shelf> {
+        self.shelf.as_ref()
+    }
+
     /// Asks for the chosen quality, or the best below it the account may play, and starts the
     /// download, waiting only for the preroll, and for that no longer than `PRIMING`.
     async fn load(&self, id: &str) -> Result<Loaded> {
+        if let Some(loaded) = self.recall(id).await {
+            return Ok(loaded);
+        }
         let playback = self.client.playback(id, self.quality).await?;
         log::info!(
             "tidal: {id} streams as {} {}",
             playback.quality,
             playback.manifest.codec()
         );
-        let (stream, timeline) = tokio::time::timeout(PRIMING, self.arrive(id, playback.manifest))
+        let facts = Facts {
+            duration_ms: playback
+                .duration
+                .map(|duration| duration.as_millis() as u64),
+            lufs: playback.loudness.map(|loudness| loudness.lufs),
+            peak: playback.loudness.and_then(|loudness| loudness.peak),
+            starts_ns: Vec::new(),
+            offsets: Vec::new(),
+        };
+        let arriving = self.arrive(id, playback.manifest, facts);
+        let (stream, timeline) = tokio::time::timeout(PRIMING, arriving)
             .await
             .context("the tidal track did not start arriving in time")??;
         Ok(Loaded {
@@ -545,6 +656,11 @@ impl Fetch for Tidal {
     /// than taking bandwidth from this one.
     async fn downloaded(&self, loaded: &Loaded) {
         loaded.stream.finished().await;
+    }
+
+    fn progress(&self, loaded: &Loaded) -> Option<f32> {
+        let total = loaded.stream.total().filter(|total| *total > 0)?;
+        Some(loaded.stream.arrived() as f32 / total as f32)
     }
 
     /// A segmented stream has no index for symphonia to jump around in, so a seek opens a

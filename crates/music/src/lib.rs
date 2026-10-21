@@ -32,6 +32,7 @@ pub mod subsonic;
 pub mod tidal;
 mod trim;
 pub mod trouble;
+pub mod vault;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -372,6 +373,8 @@ pub struct PlaybackConfig {
     /// Shared like `equalizer`: every output the engine opens lets it hear the music ahead of the
     /// equalizer while it is watched.
     pub analyzer: Analyzer,
+    /// Where tracks are kept, the downloads and, while caching is on, the ones that played.
+    pub vault: Option<Arc<vault::Vault>>,
 }
 
 /// How good a stream to ask a streaming service for. Each provider lists the levels it serves in
@@ -640,11 +643,57 @@ pub trait Player: Send + Sync {
     fn spectrum(&self) -> Option<Spectrum> {
         None
     }
+
+    /// Fetches all of a track into the downloads without playing it. The future answers once it
+    /// is kept, or why it could not be. A player that cannot download says so at once.
+    /// `progress` follows how much of it has arrived.
+    fn download(
+        &self,
+        _track_id: &str,
+        _progress: Fraction,
+    ) -> futures::future::BoxFuture<'static, Result<()>> {
+        Box::pin(async { Err(anyhow::anyhow!("this player cannot download")) })
+    }
+
+    /// Whether a track has been downloaded.
+    fn downloaded(&self, _track_id: &str) -> bool {
+        false
+    }
+
+    /// Removes the download of a track.
+    fn discard(&self, _track_id: &str) {}
 }
 
 #[async_trait]
 pub trait PlaybackEvents: Send {
     async fn next(&mut self) -> Option<PlaybackEvent>;
+}
+
+/// How far a download has got, from 0 to 1, shared between the player that fetches it and the
+/// app that shows it. It reads `None` until the player can tell.
+#[derive(Clone, Debug)]
+pub struct Fraction(Arc<std::sync::atomic::AtomicU32>);
+
+impl Default for Fraction {
+    fn default() -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU32::new(
+            f32::NAN.to_bits(),
+        )))
+    }
+}
+
+impl Fraction {
+    pub fn get(&self) -> Option<f32> {
+        let value = f32::from_bits(self.0.load(std::sync::atomic::Ordering::Relaxed));
+        (!value.is_nan()).then_some(value)
+    }
+
+    pub fn set(&self, value: f32) {
+        self.0.store(
+            value.clamp(0.0, 1.0).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
 }
 
 pub trait PlaybackFactory: Send + Sync {
@@ -705,9 +754,17 @@ pub struct Capabilities {
     pub pins: bool,
     /// The server converts tracks on request, as [`Transcode`] asks.
     pub transcode: bool,
+    /// Played tracks can be kept in the [`vault`], so playing one again downloads nothing.
+    pub keeps: bool,
+    /// Tracks can be downloaded, and a downloaded track plays with no network at all.
+    pub downloads: bool,
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.
     pub qualities: &'static [Offer],
+    /// For a service that refuses a burst of downloads, the pause between them once it has refused
+    /// one. Such a service downloads one track at a time, with no pause until it first refuses.
+    /// Zero lets downloads run side by side.
+    pub download_gap: Duration,
 }
 
 impl Capabilities {
@@ -720,7 +777,10 @@ impl Capabilities {
         playcounts: true,
         pins: false,
         transcode: false,
+        keeps: true,
+        downloads: true,
         qualities: &[],
+        download_gap: Duration::ZERO,
     };
 
     /// Nothing beyond listing and playing.
@@ -730,7 +790,10 @@ impl Capabilities {
         playcounts: false,
         pins: false,
         transcode: false,
+        keeps: false,
+        downloads: false,
         qualities: &[],
+        download_gap: Duration::ZERO,
     };
 }
 
@@ -765,6 +828,19 @@ pub enum SignInProblem {
     Cancelled,
     Refused,
 }
+
+/// A provider refusing for now because too much was asked of it too quickly. Whoever asked can
+/// try again later, and finds this in the error's chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Throttled;
+
+impl std::fmt::Display for Throttled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the provider is refusing for now")
+    }
+}
+
+impl std::error::Error for Throttled {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SignInFailure(pub SignInProblem);
@@ -907,6 +983,12 @@ pub trait MusicProvider: Send + Sync {
     /// it, so the default is no.
     fn public_art(&self) -> bool {
         false
+    }
+    /// A playback factory built from the stored sign-in alone, with no network, for a provider
+    /// whose downloads play offline. The session starts it when the account cannot be reached,
+    /// inside the app's tokio runtime.
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        None
     }
     async fn restore(&self) -> Result<Option<ProviderSession>>;
     async fn sign_in(

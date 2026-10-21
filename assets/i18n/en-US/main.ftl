@@ -128,6 +128,17 @@ menu-remove-tracks-from-history = { $count ->
 }
 menu-delete-track-file = Delete track file
 menu-delete-track-files = Delete { $count } track files
+menu-download = Download
+menu-download-tracks = { $count ->
+    [one] Download { $count } track
+   *[other] Download { $count } tracks
+}
+menu-remove-download = Remove download
+menu-remove-downloads = { $count ->
+    [one] Remove { $count } download
+   *[other] Remove { $count } downloads
+}
+menu-downloading = Downloading. Click to stop
 menu-play-next = Play next
 menu-play-tracks-next = { $count ->
     [one] Play { $count } track next
@@ -291,6 +302,7 @@ filter-year = Year
 filter-hide-explicit = Hide explicit
 filter-playable = Playable only
 filter-favorites = Favorites only
+filter-downloaded = Downloaded
 filter-owned = By you
 
 # view
@@ -542,6 +554,7 @@ settings-page-now-playing = Now playing
 settings-page-lyrics = Lyrics
 settings-page-playback = Playback
 settings-page-sound = Sound
+settings-page-storage = Storage
 settings-page-discord = Discord
 settings-page-scrobbling = Scrobbling
 settings-page-general = General
@@ -558,6 +571,8 @@ settings-group-display = Display
 settings-group-sources = Sources
 settings-group-lyrics-order = Priority
 settings-group-playing = Playing
+settings-group-cache = Played tracks
+settings-group-downloads = Downloads
 settings-group-protected = Protected playback
 settings-group-output = Output
 settings-group-status = Status
@@ -702,6 +717,20 @@ settings-normalisation = Normalize loudness
 settings-normalisation-detail = Keeps tracks at a consistent volume
 settings-gapless = Gapless playback
 settings-gapless-detail = Runs one track into the next without a pause, the way an album was sequenced
+settings-keep-tracks = Keep played tracks
+settings-keep-tracks-detail = Saves what you play, locked to this computer, so playing it again downloads nothing. Turning this off deletes it and leaves your downloads alone. Spotify follows a change the next time Sonora starts
+settings-cache-size = Cache size
+settings-cache-size-detail = How much space the tracks you played may take. The ones played longest ago make room first, and downloads do not count toward it
+settings-cache-size-value = { $count } GB
+settings-cache-used = Space used
+settings-cache-used-detail = What the tracks kept after playing take on this computer. Clearing them leaves your downloads alone
+settings-cache-clear = Clear
+settings-downloads-used = Space used
+settings-downloads-used-detail = What the songs you downloaded take on this computer
+settings-downloads-remove = Remove all
+settings-size-gb = { $size } GB
+settings-size-mb = { $size } MB
+settings-size-measuring = Measuring…
 settings-stream-quality = Streaming quality
 settings-stream-quality-detail = Higher levels sound better and use more data. When your plan or a track has less, the next level down plays
 settings-stream-quality-hi-res = Hi-res
@@ -775,6 +804,8 @@ settings-widevine-fetch = Download
 settings-widevine-uninstall = Uninstall
 confirm-uninstall-widevine-title = Uninstall the Widevine module?
 confirm-uninstall-widevine = Sonora deletes the copy it downloaded from Google. Apple Music tracks stop playing until it is downloaded again.
+confirm-remove-downloads-title = Remove all downloads?
+confirm-remove-downloads = Every song you downloaded is deleted from this computer, from every service. They stream again until you download them once more.
 widevine-prompt-title = Widevine module
 widevine-prompt-wanted = Apple Music tracks are encrypted and need Google's Widevine module. No browser on this computer has one. Sonora can download it from Google's servers, the same file Chrome installs, and keep it in its own folder.
 widevine-prompt-replace = Apple Music tracks are encrypted and need Google's Widevine module. A browser on this computer has one, and Sonora can download Google's own copy to use instead, the same file Chrome installs, kept in its own folder.
@@ -1210,6 +1241,7 @@ trouble-offline-detail = Check your internet connection and try again.
 trouble-not-loaded = Could not load
 trouble-retry = Try again
 toast-offline = No connection. Nothing will stream until it is back.
+toast-download-failed = Could not list the tracks to download.
 toast-settings-broken = Fix line { $name } of settings.json to save changes
 toast-tray-unavailable = There is no system tray to put the icon in
 toast-undo = Undo

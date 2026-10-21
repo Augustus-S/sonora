@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
@@ -38,6 +39,7 @@ mod preview;
 mod rows;
 mod scrobbling;
 mod sound;
+mod storage;
 mod themes;
 
 pub use header::SettingsHeader;
@@ -52,6 +54,8 @@ const TITLE_WEIGHT: u32 = 2;
 /// The picker keys the page's render watches, shared with the rows that open them.
 const LANGUAGES: &str = "languages";
 const TYPEFACES: &str = "typefaces";
+/// How often the storage section measures the cache and the downloads again while its tab shows.
+const STORAGE_POLL: Duration = Duration::from_secs(2);
 
 /// One setting, named without building anything. Pages list their settings as slots in groups,
 /// a search scores slots by their title and detail, and only visible groups build their rows.
@@ -87,6 +91,10 @@ enum Slot {
     LyricsForLocal,
     Normalisation,
     Gapless,
+    KeepTracks,
+    CacheSize,
+    CacheUsage,
+    DownloadsUsage,
     Sleep,
     StayAwake,
     StreamQuality,
@@ -200,6 +208,9 @@ impl Group {
 pub struct SettingsView {
     session: Entity<Session>,
     playback: Entity<Playback>,
+    /// Measures the cache and the downloads again every so often while the storage section's
+    /// tab is on screen, since tracks are kept and evicted as they play.
+    _storage: Task<()>,
     drm: Entity<Drm>,
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -225,6 +236,9 @@ pub struct SettingsView {
     opacity: ScrubberState,
     sleep: ScrubberState,
     pending_sleep: Option<Option<Sleep>>,
+    cache: ScrubberState,
+    /// The cache size a drag of its slider points at, until it lets go.
+    pending_cache: Option<u32>,
     popovers: Popovers,
     /// The theme family whose variant menu opened last, which owns that menu's popover.
     theme_variants: Option<String>,
@@ -289,6 +303,22 @@ impl SettingsView {
         cx.observe(&settings, |this, _, cx| this.remeasure(cx))
             .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
+        playback.update(cx, |playback, cx| playback.measure_storage(cx));
+        let storage = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(STORAGE_POLL).await;
+                let measured = this.update(cx, |this, cx| {
+                    let shown = router::trail(cx).read(cx).current();
+                    if matches!(shown, Destination::Settings(page) if page.tab() == SettingsTab::Playback) {
+                        this.playback
+                            .update(cx, |playback, cx| playback.measure_storage(cx));
+                    }
+                });
+                if measured.is_err() {
+                    return;
+                }
+            }
+        });
         cx.observe(&Scan::global(cx), |this, _, cx| this.remeasure(cx))
             .detach();
         let chrome = Chrome::entity(cx);
@@ -347,6 +377,7 @@ impl SettingsView {
 
         Self {
             session,
+            _storage: storage,
             playback,
             drm,
             equalizer,
@@ -364,6 +395,8 @@ impl SettingsView {
             opacity: ScrubberState::new("opacity"),
             sleep: ScrubberState::new("sleep"),
             pending_sleep: None,
+            cache: ScrubberState::new("cache-size"),
+            pending_cache: None,
             popovers,
             theme_variants: None,
             server: cx.new(|cx| Input::new("login-server-hint", cx)),
@@ -476,6 +509,7 @@ impl SettingsView {
             SettingsPage::Lyrics => self.lyrics_groups(),
             SettingsPage::Playback => self.playback_groups(cx),
             SettingsPage::Sound => self.sound_groups(cx),
+            SettingsPage::Storage => self.storage_groups(cx),
             SettingsPage::Discord => self.discord_groups(cx),
             SettingsPage::Scrobbling => self.scrobbling_groups(cx),
             SettingsPage::General => self.general_groups(cx),
@@ -733,6 +767,16 @@ impl SettingsView {
                 t!("settings-normalisation-detail"),
             ),
             Slot::Gapless => (t!("settings-gapless"), t!("settings-gapless-detail")),
+            Slot::KeepTracks => (
+                t!("settings-keep-tracks"),
+                t!("settings-keep-tracks-detail"),
+            ),
+            Slot::CacheSize => (t!("settings-cache-size"), t!("settings-cache-size-detail")),
+            Slot::CacheUsage => (t!("settings-cache-used"), t!("settings-cache-used-detail")),
+            Slot::DownloadsUsage => (
+                t!("settings-downloads-used"),
+                t!("settings-downloads-used-detail"),
+            ),
             Slot::StreamQuality => (
                 t!("settings-stream-quality"),
                 t!("settings-stream-quality-detail"),
@@ -891,6 +935,10 @@ impl SettingsView {
             Slot::AdaptiveMenu => self.adaptive_menu_row(cx),
             Slot::Normalisation => self.playback_row(cx),
             Slot::Gapless => self.gapless_row(cx),
+            Slot::KeepTracks => self.keep_tracks_row(cx),
+            Slot::CacheSize => self.cache_size_row(cx),
+            Slot::CacheUsage => self.cache_usage_row(cx),
+            Slot::DownloadsUsage => self.downloads_usage_row(cx),
             Slot::StreamQuality => self.stream_quality_row(cx),
             Slot::StreamFormat => self.stream_format_row(cx),
             Slot::StreamBitrate => self.stream_bitrate_row(cx),

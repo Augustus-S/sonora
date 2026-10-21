@@ -21,8 +21,8 @@ use ytmusic::YtMusic;
 use crate::youtube::playback::Factory;
 
 use crate::{
-    Capabilities, InputSource, MusicProvider, PromptSink, ProviderSession, Shape, SignIn,
-    SignInPrompt, UserProfile, WebSignIn, credentials,
+    Capabilities, InputSource, MusicProvider, PlaybackFactory, PromptSink, ProviderSession, Shape,
+    SignIn, SignInPrompt, UserProfile, WebSignIn, credentials,
 };
 pub use client::YouTubeClient;
 pub use lyrics::YouTubeLyrics;
@@ -344,6 +344,18 @@ impl MusicProvider for YouTubeProvider {
 
     fn stored_guest(&self) -> bool {
         matches!(self.saved(), Some(Saved::Guest))
+    }
+
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        let api = match self.saved()? {
+            Saved::Cookies {
+                cookies,
+                authuser,
+                page_id,
+            } => self.cookie_client(&cookies, authuser, page_id.as_deref()),
+            Saved::Guest => self.guest_client(),
+        };
+        Some(Arc::new(Factory::new(api)))
     }
 
     async fn restore(&self) -> Result<Option<ProviderSession>> {

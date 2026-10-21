@@ -310,6 +310,7 @@ fn open_window(cx: &mut App) {
         session,
         cover: _,
         devices: _,
+        downloads: _,
         drm: _,
         equalizer: _,
         library,

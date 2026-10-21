@@ -21,18 +21,24 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use rodio::Source as _;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 
 use crate::audio::{Chain, Volume};
 use crate::sink::{Cue, Paced, packet, watch_for_output};
 use crate::spectrum::Spectrum;
+use crate::vault::Shelf;
 use crate::{
-    Encoding, Normalisation, PlaybackConfig, PlaybackEvent, PlaybackEvents, Player, TrackSignal,
+    Encoding, Fraction, Normalisation, PlaybackConfig, PlaybackEvent, PlaybackEvents, Player,
+    TrackSignal,
 };
 
+/// How often a download reports how far it has got.
+const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 /// How many frames the decoder hands over at a time. Small enough that a skip is heard at once,
 /// large enough that the queue is not rebuilt for every few samples.
 const CHUNK: usize = 4096;
@@ -83,6 +89,12 @@ pub trait Fetch: Send + Sync + 'static {
     /// What to call this engine's threads.
     fn name(&self) -> &'static str;
 
+    /// Where this provider keeps tracks, when it keeps any. A provider with a shelf can download
+    /// a track without playing it.
+    fn shelf(&self) -> Option<&Shelf> {
+        None
+    }
+
     /// Fetches a track: enough of it to start decoding, not all of it.
     async fn load(&self, id: &str) -> Result<Self::Loaded>;
 
@@ -113,6 +125,12 @@ pub trait Fetch: Send + Sync + 'static {
     /// The engine reports it so the next track can be fetched without taking bandwidth from
     /// this one. The default answers at once, which suits a track that is already on disk.
     async fn downloaded(&self, _loaded: &Self::Loaded) {}
+
+    /// How much of the track has arrived, from 0 to 1, when the fetch can tell. A download shows
+    /// it as it goes.
+    fn progress(&self, _loaded: &Self::Loaded) -> Option<f32> {
+        None
+    }
 
     /// Opens a decoder placed at `at`. `None` means the track cannot be played, which the
     /// engine reports as unavailable.
@@ -149,6 +167,7 @@ pub fn start<F: Fetch>(
     let spectrum = Spectrum::new();
     let engine_spectrum = spectrum.clone();
     let name = fetch.name();
+    let shelf = fetch.shelf().cloned();
     let spawned = std::thread::Builder::new()
         .name(format!("{name}-playback"))
         .spawn(move || run(Arc::new(fetch), config, command_rx, events, engine_spectrum));
@@ -156,7 +175,11 @@ pub fn start<F: Fetch>(
         log::error!("playback: cannot spawn the {name} engine thread: {error}");
     }
     (
-        Box::new(Handle { commands, spectrum }),
+        Box::new(Handle {
+            commands,
+            spectrum,
+            shelf,
+        }),
         Box::new(Events(event_rx)),
     )
 }
@@ -176,6 +199,12 @@ enum Command {
     Pause,
     Seek(Duration),
     Gain(f32),
+    /// Fetch a whole track into the downloads without playing it, and say how that went.
+    Download {
+        id: String,
+        progress: Fraction,
+        done: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// What the audio thread is told to do. Everything that touches the network has happened by the
@@ -206,6 +235,9 @@ enum Job<F: Fetch> {
 struct Handle {
     commands: UnboundedSender<Command>,
     spectrum: Spectrum,
+    /// Where the provider keeps tracks, which says what is downloaded without asking the
+    /// engine thread.
+    shelf: Option<Shelf>,
 }
 
 impl Player for Handle {
@@ -258,6 +290,37 @@ impl Player for Handle {
 
     fn spectrum(&self) -> Option<Spectrum> {
         Some(self.spectrum.clone())
+    }
+
+    fn download(&self, track_id: &str, progress: Fraction) -> BoxFuture<'static, Result<()>> {
+        let (done, answer) = oneshot::channel();
+        let sent = match self.shelf {
+            Some(_) => self
+                .commands
+                .send(Command::Download {
+                    id: track_id.to_owned(),
+                    progress,
+                    done,
+                })
+                .context("cannot reach the playback engine"),
+            None => Err(anyhow!("this provider cannot download")),
+        };
+        Box::pin(async move {
+            sent?;
+            answer.await.context("the playback engine stopped")?
+        })
+    }
+
+    fn downloaded(&self, track_id: &str) -> bool {
+        self.shelf
+            .as_ref()
+            .is_some_and(|shelf| shelf.holds(track_id))
+    }
+
+    fn discard(&self, track_id: &str) {
+        if let Some(shelf) = &self.shelf {
+            shelf.discard(track_id);
+        }
     }
 }
 
@@ -514,6 +577,12 @@ async fn engine_loop<F: Fetch>(
                     }
                     Command::Gain(level) => {
                         jobs.send(Job::Gain(level)).ok();
+                    }
+                    Command::Download { id, progress, done } => {
+                        let fetch = fetch.clone();
+                        tokio::spawn(async move {
+                            done.send(download(&*fetch, &id, &progress).await).ok();
+                        });
                     }
                 }
             }
@@ -1144,6 +1213,39 @@ fn normalisation(enabled: bool, loudness: Option<Loudness>) -> f32 {
         .peak
         .map_or(1.0, |peak| (1.0 / peak).clamp(1.0, BOOST_CAP));
     wanted.min(headroom)
+}
+
+/// Fetches all of track `id` into the downloads, the way a play would fetch it, and holds on to
+/// it until the last byte is in. A track already downloaded costs nothing.
+async fn download<F: Fetch>(fetch: &F, id: &str, progress: &Fraction) -> Result<()> {
+    let shelf = fetch.shelf().context("this provider keeps nothing")?;
+    if shelf.holds(id) {
+        return Ok(());
+    }
+    shelf.want(id);
+    let fetched = async {
+        let loaded = fetch.load(id).await?;
+        let arrived = fetch.downloaded(&loaded);
+        tokio::pin!(arrived);
+        let mut ticks = tokio::time::interval(PROGRESS_EVERY);
+        loop {
+            tokio::select! {
+                () = &mut arrived => break,
+                _ = ticks.tick() => {
+                    if let Some(fraction) = fetch.progress(&loaded) {
+                        progress.set(fraction);
+                    }
+                }
+            }
+        }
+        progress.set(1.0);
+        anyhow::Ok(())
+    }
+    .await;
+    shelf.unwant(id);
+    fetched?;
+    ensure!(shelf.holds(id), "the download of {id} did not finish");
+    Ok(())
 }
 
 #[cfg(test)]

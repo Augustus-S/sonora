@@ -129,6 +129,9 @@ struct Inner {
 pub struct Opened {
     pub response: reqwest::Response,
     pub key: decrypt::Secret,
+    /// The id the stream belongs to, which differs from the one asked for when Deezer
+    /// substitutes another release of the same recording. The key is derived from it.
+    pub effective_id: String,
     pub duration: Option<Duration>,
     /// The gateway's `GAIN`. Despite the name it is the track's integrated loudness rather than
     /// an adjustment, and it lands within about a decibel of Apple's LUFS for the same
@@ -140,6 +143,27 @@ impl DeezerClient {
     /// Signs in with an `arl` cookie: fetches the user data (which validates the cookie) and
     /// the stream secret. An invalid or expired arl answers a user id of 0.
     pub async fn connect(arl: &str) -> Result<Self> {
+        let client = Self::unopened(arl)?;
+        client.ping().await?;
+        client.refresh().await?;
+        if client.inner.session.read().await.profile.id.is_empty() {
+            bail!("the arl was refused; sign in to deezer.com again");
+        }
+        let secret = decrypt::secret(&client.inner.http).await;
+        // set once here, before the client is cloned anywhere
+        client.inner.secret.set(secret).ok();
+        Ok(client)
+    }
+
+    /// A client for `arl` that has not reached Deezer, holding the last known stream secret. It
+    /// can derive the key of a downloaded track and do nothing else until it connects.
+    pub fn offline(arl: &str) -> Result<Self> {
+        let client = Self::unopened(arl)?;
+        client.inner.secret.set(decrypt::FALLBACK).ok();
+        Ok(client)
+    }
+
+    fn unopened(arl: &str) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0")
             .build()
@@ -163,14 +187,6 @@ impl DeezerClient {
                 portraits: Mutex::new(HashMap::new()),
             }),
         };
-        client.ping().await?;
-        client.refresh().await?;
-        if client.inner.session.read().await.profile.id.is_empty() {
-            bail!("the arl was refused; sign in to deezer.com again");
-        }
-        let secret = decrypt::secret(&client.inner.http).await;
-        // set once here, before the client is cloned anywhere
-        client.inner.secret.set(secret).ok();
         Ok(client)
     }
 
@@ -488,11 +504,11 @@ impl DeezerClient {
                         .context("cannot stream the deezer track")?
                         .error_for_status()
                         .context("the deezer cdn refused the stream")?;
-                    let secret = self.inner.secret.get().copied().unwrap_or_default();
-                    let key = decrypt::track_key(&effective_id, &secret);
+                    let key = self.track_key(&effective_id);
                     return Ok(Opened {
                         response,
                         key,
+                        effective_id,
                         duration,
                         loudness,
                     });
@@ -502,6 +518,12 @@ impl DeezerClient {
             }
         }
         Err(last.context("the deezer track has no playable stream"))
+    }
+
+    /// The Blowfish key of the stream with id `effective_id`, which needs nothing from the network.
+    pub fn track_key(&self, effective_id: &str) -> decrypt::Secret {
+        let secret = self.inner.secret.get().copied().unwrap_or_default();
+        decrypt::track_key(effective_id, &secret)
     }
 
     /// One `get_url` attempt for one format. None when the license does not cover it.

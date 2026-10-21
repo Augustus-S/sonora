@@ -13,7 +13,10 @@ pub use client::SubsonicClient;
 pub use lyrics::SubsonicLyrics;
 
 use crate::subsonic::playback::Factory;
-use crate::{Capabilities, Catalog, MusicApi as _, MusicProvider, ProviderSession, Shape, SignIn};
+use crate::{
+    Capabilities, Catalog, MusicApi as _, MusicProvider, PlaybackFactory, ProviderSession, Shape,
+    SignIn,
+};
 
 /// The name the provider and its lyrics source go by. It is saved in settings and in the lyrics
 /// cache, so it must not change.
@@ -141,6 +144,23 @@ impl MusicProvider for SubsonicProvider {
             .map_or(server.as_str(), |(_, rest)| rest);
         let host = host.split(['/', ':', '?']).next()?;
         (!host.is_empty()).then(|| host.to_owned())
+    }
+
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        let remembered = auth::load()?;
+        let signature = remembered
+            .signature
+            .clone()
+            .unwrap_or_else(|| auth::sign(&remembered.username, &remembered.password));
+        let client = SubsonicClient::new(
+            remembered.server,
+            remembered.username,
+            remembered.password,
+            &signature,
+        )
+        .inspect_err(|error| log::warn!("subsonic: cannot build an offline client: {error:#}"))
+        .ok()?;
+        Some(Arc::new(Factory::new(client)))
     }
 
     async fn restore(&self) -> Result<Option<ProviderSession>> {

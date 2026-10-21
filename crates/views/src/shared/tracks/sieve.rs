@@ -8,11 +8,17 @@ pub(crate) struct TrackSieve {
     pub playable: bool,
     /// Keep only starred tracks. `keeps` cannot see the library, so the source applies it.
     pub favorites: bool,
+    /// Keep only downloaded tracks, which the source applies for the same reason.
+    pub downloaded: bool,
 }
 
 impl TrackSieve {
     pub(crate) fn active(&self) -> bool {
-        self.duration.is_some() || self.hide_explicit || self.playable || self.favorites
+        self.duration.is_some()
+            || self.hide_explicit
+            || self.playable
+            || self.favorites
+            || self.downloaded
     }
 
     pub(super) fn keeps(&self, track: &Track) -> bool {
@@ -59,6 +65,7 @@ mod tests {
             hide_explicit: true,
             playable: true,
             favorites: false,
+            downloaded: false,
         };
 
         assert!(sieve.keeps(&track(120, false, true)));

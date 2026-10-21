@@ -1,7 +1,8 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, Interactivity, Pixels, SharedString,
-    Stateful, StyleRefinement, Window, div, px, svg,
+    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, HighlightStyle, InteractiveText,
+    Interactivity, Pixels, SharedString, Stateful, StyleRefinement, StyledText, UnderlineStyle,
+    Window, div, px, svg,
 };
 
 use crate::button::Button;
@@ -13,8 +14,12 @@ use crate::theme::ActiveTheme as _;
 const ICON: Pixels = px(16.);
 /// The card's border width, which the height it reports has to count on both edges.
 const BORDER: Pixels = px(1.);
+/// How thick the line under a name that opens something is.
+const LINK_UNDERLINE: Pixels = px(1.);
 
 type Press = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+/// Opens what a toast names.
+type Open = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 type Measure = Box<dyn Fn(Pixels, &mut Window, &mut App) + 'static>;
 
 /// One toast card: an optional icon, a message with an optional muted line under it, up to two
@@ -36,7 +41,7 @@ pub struct Toast {
     cancel: Option<(SharedString, Press)>,
     shown: f32,
     dismiss: Option<Press>,
-    open: Option<Press>,
+    open: Option<Open>,
     measure: Option<Measure>,
     inert: bool,
 }
@@ -135,10 +140,7 @@ impl Toast {
         self
     }
 
-    pub fn on_open(
-        mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
+    pub fn on_open(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.open = Some(Box::new(handler));
         self
     }
@@ -215,9 +217,11 @@ impl RenderOnce for Toast {
             .min_w_0()
             .gap_0p5()
             .child(
-                with_name_emphasised(&id, message, strong, open)
+                div()
+                    .min_w_0()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.popover_foreground),
+                    .text_color(theme.popover_foreground)
+                    .child(with_name_emphasised(&id, message, strong, open)),
             )
             .when_some(detail, |text, detail| {
                 text.child(div().text_color(theme.muted_foreground).child(detail))
@@ -303,47 +307,33 @@ impl RenderOnce for Toast {
     }
 }
 
+/// The message as one run of text that wraps where it needs to, with the name in it bold, and
+/// underlined and clickable when it opens something.
 fn with_name_emphasised(
     id: &ElementId,
     message: SharedString,
     strong: Option<SharedString>,
-    open: Option<Press>,
-) -> Div {
-    let split = strong
+    open: Option<Open>,
+) -> AnyElement {
+    let named = strong
         .as_ref()
-        .and_then(|name| message.find(name.as_ref()).map(|at| (at, name)));
-
-    let Some((at, name)) = split else {
-        return div().min_w_0().child(message);
+        .and_then(|name| message.find(name.as_ref()).map(|at| at..at + name.len()));
+    let Some(named) = named else {
+        return message.into_any_element();
     };
-
-    div()
-        .flex()
-        .min_w_0()
-        .child(
-            div()
-                .flex_none()
-                .child(SharedString::from(message[..at].to_owned())),
-        )
-        .child(name_span(id, name.clone(), open))
-        .child(
-            div()
-                .flex_none()
-                .child(SharedString::from(message[at + name.len()..].to_owned())),
-        )
-}
-
-fn name_span(id: &ElementId, name: SharedString, open: Option<Press>) -> AnyElement {
-    let span = div().min_w_0().truncate().font_weight(FontWeight::BOLD);
-
+    let emphasis = HighlightStyle {
+        font_weight: Some(FontWeight::BOLD),
+        underline: open.is_some().then_some(UnderlineStyle {
+            thickness: LINK_UNDERLINE,
+            ..UnderlineStyle::default()
+        }),
+        ..HighlightStyle::default()
+    };
+    let text = StyledText::new(message).with_highlights([(named.clone(), emphasis)]);
     let Some(open) = open else {
-        return span.child(name).into_any_element();
+        return text.into_any_element();
     };
-
-    span.id((id.clone(), "link"))
-        .cursor_pointer()
-        .hover(|style| style.underline())
-        .on_click(move |event, window, cx| open(event, window, cx))
-        .child(name)
+    InteractiveText::new((id.clone(), "link"), text)
+        .on_click(vec![named], move |_, window, cx| open(window, cx))
         .into_any_element()
 }

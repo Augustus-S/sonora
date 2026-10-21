@@ -896,6 +896,12 @@ impl Session {
         }
         if restoring && failure.offline() && self.stored_active() {
             log::warn!("session: the account could not be reached, carrying on offline");
+            // Downloads still play, through an engine built from the stored sign-in alone. A
+            // provider may need the runtime to build one.
+            let _runtime = self.io.handle().enter();
+            self.playback = self
+                .active
+                .and_then(|active| self.providers[active].offline_playback());
             self.state = SessionState::Offline(failure);
             cx.notify();
             return;

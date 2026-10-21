@@ -432,7 +432,7 @@ impl ToastStack {
                 move |_, _, cx| toasts.update(cx, |this, cx| this.dismiss(id, cx))
             })
             .when_some(toast.target.clone().map(destination), |card, dest| {
-                card.on_open(move |_, _, cx| navigate(dest.clone(), cx))
+                card.on_open(move |_, cx| navigate(dest.clone(), cx))
             });
         let card = match toast.cancel.clone() {
             Some(cancel) => {

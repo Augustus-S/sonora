@@ -9,6 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Download songs, albums and playlists from Spotify, YouTube Music, Tidal, Deezer, Apple Music
+  and your Subsonic server with the button beside the heart on album and playlist pages, or from
+  any right-click menu. A ring beside each song shows how far its download has got. Downloads
+  play with no connection at all, except Apple Music's, which still check your subscription each
+  time. A Downloaded filter on every library page shows only what you saved.
+- Sonora keeps the tracks you play from YouTube Music, Tidal, Deezer, Apple Music and your
+  Subsonic server, up to 2 GB or whatever you set under Cache size, plus 1 GB from Spotify, so
+  playing one again starts at once and downloads nothing. Downloads and kept tracks are locked to
+  your computer and no other player can open them. Apple Music and Spotify still check your
+  subscription each time a kept track plays. Turn it off with Keep played tracks in Settings →
+  Playback, which also deletes them.
 - A refresh button beside Back and Forward, or Ctrl+R (Cmd+R on macOS), loads the page you are
   on again from your server, so changes made in another app show up without restarting Sonora.
   The page shows its loading state until the fresh data arrives. Settings and search have no
@@ -147,6 +158,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A Spotify song you skip to, or seek back to the start of, now plays from the start instead of
+  sometimes picking up seconds in.
 - YouTube Music songs play to the end again instead of skipping after about a minute. YouTube
   stopped serving most songs to the guest stream and now wants a token for each song.
 - While controlling another Spotify device, the volume slider follows that device and responds

@@ -328,6 +328,10 @@ struct Held {
 struct Values {
     normalisation: bool,
     gapless: bool,
+    /// Whether played tracks are kept, sealed, so playing one again downloads nothing.
+    keep_tracks: bool,
+    /// How many gigabytes the cache of played tracks may take. Downloads do not count.
+    cache_gb: u32,
     equalizer: bool,
     /// The ten band gains an older Sonora saved. Read once to seed the profiles when there are
     /// none, never written back, and read leniently like the keys that replaced it.
@@ -557,6 +561,8 @@ impl Default for Values {
         Self {
             normalisation: false,
             gapless: true,
+            keep_tracks: true,
+            cache_gb: crate::vault::CACHE_GB,
             equalizer: false,
             equalizer_bands: Vec::new(),
             equalizer_profiles: Vec::new(),
@@ -913,6 +919,14 @@ impl AppSettings {
 
     pub fn gapless(&self) -> bool {
         self.values.gapless
+    }
+
+    pub fn keep_tracks(&self) -> bool {
+        self.values.keep_tracks
+    }
+
+    pub fn cache_gb(&self) -> u32 {
+        self.values.cache_gb
     }
 
     pub fn sleep_timer(&self) -> bool {
@@ -1410,6 +1424,16 @@ impl AppSettings {
 
     pub fn set_gapless(&mut self, gapless: bool, cx: &mut Context<Self>) {
         self.values.gapless = gapless;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_keep_tracks(&mut self, keep_tracks: bool, cx: &mut Context<Self>) {
+        self.values.keep_tracks = keep_tracks;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_cache_gb(&mut self, cache_gb: u32, cx: &mut Context<Self>) {
+        self.values.cache_gb = cache_gb;
         self.schedule_save(cx);
     }
 

@@ -141,7 +141,7 @@ impl Screen {
     }
 }
 
-/// One page of settings. The first eleven are sections of the six tabs, each tab showing its sections
+/// One page of settings. The first twelve are sections of the six tabs, each tab showing its sections
 /// one after another on one scrolling page, and the last two are drill-ins that open from a row
 /// on their parent page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +154,7 @@ pub enum SettingsPage {
     Lyrics,
     Playback,
     Sound,
+    Storage,
     Discord,
     Scrobbling,
     About,
@@ -163,7 +164,7 @@ pub enum SettingsPage {
 
 impl SettingsPage {
     /// Every page, the sections first and the drill-ins after them.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Providers,
         Self::General,
         Self::Appearance,
@@ -172,6 +173,7 @@ impl SettingsPage {
         Self::Lyrics,
         Self::Playback,
         Self::Sound,
+        Self::Storage,
         Self::Discord,
         Self::Scrobbling,
         Self::About,
@@ -189,6 +191,7 @@ impl SettingsPage {
             Self::Lyrics => "lyrics",
             Self::Playback => "playback",
             Self::Sound => "sound",
+            Self::Storage => "storage",
             Self::Discord => "discord",
             Self::Scrobbling => "scrobbling",
             Self::About => "about",
@@ -208,6 +211,7 @@ impl SettingsPage {
             Self::Lyrics => "settings-page-lyrics",
             Self::Playback => "settings-page-playback",
             Self::Sound => "settings-page-sound",
+            Self::Storage => "settings-page-storage",
             Self::Discord => "settings-page-discord",
             Self::Scrobbling => "settings-page-scrobbling",
             Self::About => "settings-page-about",
@@ -236,7 +240,7 @@ impl SettingsPage {
             Self::Providers | Self::MusicFolders => SettingsTab::Providers,
             Self::Appearance | Self::PlayerBar | Self::NowPlaying => SettingsTab::Appearance,
             Self::Lyrics | Self::LyricsSources => SettingsTab::Lyrics,
-            Self::Playback | Self::Sound => SettingsTab::Playback,
+            Self::Playback | Self::Sound | Self::Storage => SettingsTab::Playback,
             Self::Discord | Self::Scrobbling => SettingsTab::Integrations,
         }
     }
@@ -311,7 +315,11 @@ impl SettingsTab {
                 SettingsPage::NowPlaying,
             ],
             Self::Lyrics => &[SettingsPage::Lyrics],
-            Self::Playback => &[SettingsPage::Playback, SettingsPage::Sound],
+            Self::Playback => &[
+                SettingsPage::Playback,
+                SettingsPage::Sound,
+                SettingsPage::Storage,
+            ],
             Self::Integrations => &[SettingsPage::Discord, SettingsPage::Scrobbling],
         }
     }

@@ -11,14 +11,15 @@ use ui::{ActiveTheme as _, Filter, FilterChange, FlagAxis, RangeAxis, Unit};
 use crate::shared::menus::{ItemMenu, TrackColumns};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, Entity, Hsla, InteractiveElement as _, IntoElement as _, SharedString,
-    Styled as _, WeakEntity,
+    AnyElement, App, Context, Entity, Hsla, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, SharedString, Styled as _, WeakEntity, div,
 };
 use music::Track;
 use router::Destination;
-use state::{Detail, History, Library, Origin, Playback, Shelf, Sonora};
+use state::{Detail, History, Library, Origin, Playback, Progress, Shelf, Sonora};
 use ui::{
-    Button, Cell, ColumnSpec, Menu, Pending, Pin, ROW_GROUP, Scrollbar, TableSource, TableState,
+    ArrowRing, Button, Cell, ColumnSpec, Menu, Pending, Pin, ROW_GROUP, Scrollbar, TableSource,
+    TableState,
 };
 
 use crate::shared::cells;
@@ -32,6 +33,9 @@ pub(crate) use sieve::TrackSieve;
 pub(crate) use sort::initial;
 
 use sort::hits;
+
+/// How strongly a finished download's mark shows on its row.
+const SETTLED: f32 = 0.5;
 
 /// The current track and its `Playback::control`. A screen keeps the last one and redraws only
 /// when it changes.
@@ -412,6 +416,7 @@ impl TrackSource {
             color,
             track.explicit,
             None,
+            download_mark(cell, track, cx),
             self.liked_button(cell, track, cx),
         )
     }
@@ -529,6 +534,14 @@ impl TableSource for TrackSource {
             if self.sieve.favorites && !self.starred(track, cx) {
                 return false;
             }
+            if self.sieve.downloaded
+                && !track
+                    .id
+                    .as_deref()
+                    .is_some_and(|id| state::downloaded(id, cx))
+            {
+                return false;
+            }
             hits(track, query)
         })
     }
@@ -568,6 +581,13 @@ impl TableSource for TrackSource {
                 on: self.sieve.favorites,
             }));
         }
+        if self.sieve.downloaded || !Sonora::global(cx).downloads.read(cx).is_empty() {
+            axes.push(Filter::Flag(FlagAxis {
+                key: "filter-downloaded",
+                label: t!("filter-downloaded"),
+                on: self.sieve.downloaded,
+            }));
+        }
         axes
     }
 
@@ -587,6 +607,10 @@ impl TableSource for TrackSource {
             }
             FilterChange::Flag("filter-favorites", value) => {
                 self.sieve.favorites = value;
+                true
+            }
+            FilterChange::Flag("filter-downloaded", value) => {
+                self.sieve.downloaded = value;
                 true
             }
             FilterChange::Reset => {
@@ -707,6 +731,31 @@ impl TableSource for TrackSource {
     fn group(&self, field: TrackField, row: usize, cx: &App) -> Option<SharedString> {
         sort::group(self.provider.tracks(cx), field, row)
     }
+}
+
+/// How far a download the listener asked for has got, shown before the heart. A finished one
+/// stays faint so a downloaded list does not shout, and one still waiting its turn shows nothing,
+/// as does a track only cached because it played.
+fn download_mark(cell: &Cell<TrackField>, track: &Track, cx: &App) -> Option<AnyElement> {
+    let id = track.id.as_deref()?;
+    let downloads = Sonora::global(cx).downloads.read(cx);
+    let theme = cx.theme();
+    let mark = ("download-mark", cell.row);
+    let ring = match downloads.track(id)? {
+        Progress::Done => {
+            ArrowRing::new(mark, Some(1.)).color(theme.muted_foreground.opacity(SETTLED))
+        }
+        Progress::Running => ArrowRing::new(mark, downloads.fraction(id)).color(theme.primary),
+        Progress::Waiting => return None,
+        Progress::Failed => ArrowRing::new(mark, Some(0.)).color(theme.danger),
+    };
+    Some(div().flex_none().child(ring).into_any_element())
+}
+
+/// Redraws a track table whenever downloads move, so the marks on its rows keep up.
+pub(crate) fn follow_downloads<T: 'static>(cx: &mut Context<T>) {
+    let downloads = Sonora::global(cx).downloads.clone();
+    cx.observe(&downloads, |_, _, cx| cx.notify()).detach();
 }
 
 #[cfg(test)]

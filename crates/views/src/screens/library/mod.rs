@@ -238,6 +238,7 @@ impl LibraryView {
 
         let songs = cx.new(|cx| {
             let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(id));
+            crate::shared::tracks::follow_downloads(cx);
             let from = origin(shelf);
             let source = TrackSource::new(
                 LIBRARY_COLUMNS,
@@ -304,6 +305,18 @@ impl LibraryView {
         cx.observe(&library, |this, _, cx| {
             this.rebuild(cx);
             this.restore(cx);
+            cx.notify();
+        })
+        .detach();
+        // The Downloaded filter follows downloads as they land.
+        let downloads = Sonora::global(cx).downloads.clone();
+        cx.observe(&downloads, |this, _, cx| {
+            for table in this.tables() {
+                if table.narrowed(cx) {
+                    table.rebuild(cx);
+                }
+            }
+            this.cards_dirty = true;
             cx.notify();
         })
         .detach();

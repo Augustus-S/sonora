@@ -4,6 +4,7 @@ mod cover;
 mod detail;
 mod devices;
 mod discord;
+mod downloads;
 mod drm;
 mod equalizer;
 mod genre;
@@ -36,6 +37,7 @@ mod tags;
 mod toast;
 mod updates;
 mod usage;
+mod vault;
 mod wake;
 mod window_shape;
 
@@ -43,6 +45,7 @@ pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
 pub use devices::{Devices, Steered, Upcoming};
+pub use downloads::{Downloads, Progress, downloaded};
 pub use drm::{CdmState, Drm};
 pub use equalizer::{DeviceRule, Equalizer, RuleDevice, Sound};
 pub use genre::{GenreDetails, Genres};
@@ -77,6 +80,7 @@ pub use tags::{TagState, Tags};
 pub use toast::{Outcome, Target, Toast, ToastAction, Toasts};
 pub use updates::{Release, UpdateState, Updates};
 pub use usage::Usage;
+pub use vault::CACHE_GB_RANGE;
 pub use wake::Wake;
 pub use window_shape::{apply_window_rounding, install_rounded_window_hook};
 
@@ -179,6 +183,7 @@ pub struct Sonora {
     pub session: Entity<Session>,
     pub cover: Entity<Cover>,
     pub devices: Entity<Devices>,
+    pub downloads: Entity<Downloads>,
     pub drm: Entity<Drm>,
     pub equalizer: Entity<Equalizer>,
     pub library: Entity<Library>,
@@ -225,6 +230,9 @@ pub fn init(
         settings.report_broken(cx);
         settings
     });
+    // Spotify sets up its own file cache when its session opens, which can be before Playback
+    // exists, so it hears the setting first.
+    music::vault::Vault::set_keeping(settings.read(cx).keep_tracks());
     let session =
         cx.new(|cx| Session::new(providers, local_provider, settings.clone(), io.clone(), cx));
     let network = cx.new(|_| Network::new(session.clone(), io.clone()));
@@ -259,6 +267,15 @@ pub fn init(
         )
     });
     let outputs = cx.new(|cx| Outputs::new(settings.clone(), playback.clone(), cx));
+    let downloads = cx.new(|cx| {
+        Downloads::new(
+            session.clone(),
+            playback.clone(),
+            database.clone(),
+            io.clone(),
+            cx,
+        )
+    });
     equalizer.update(cx, |equalizer, cx| {
         equalizer.follow(&playback, &outputs, cx)
     });
@@ -334,6 +351,7 @@ pub fn init(
         session,
         cover,
         devices,
+        downloads,
         drm,
         equalizer,
         library,

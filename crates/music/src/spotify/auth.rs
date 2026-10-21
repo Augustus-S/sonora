@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow};
 
+use crate::vault::Vault;
 use crate::{PromptSink, SignInFailure, SignInProblem, SignInPrompt, credentials};
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
@@ -18,6 +19,8 @@ pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
 
 const PRODUCT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const PRODUCT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+/// What librespot may keep of Spotify's own files while keeping played tracks is on.
+const KEPT_FILES: u64 = 1024 * 1024 * 1024;
 
 pub const SCOPES: &[&str] = &[
     "playlist-read-collaborative",
@@ -239,9 +242,17 @@ pub fn forget(config: &AuthConfig) {
     credentials::remove(&config.file());
 }
 
-fn session(config: &AuthConfig) -> Result<Session> {
-    let cache = Cache::new(Some(config.cache_dir.as_path()), None, None, None)
-        .with_context(|| format!("cannot open cache at {}", config.cache_dir.display()))?;
+pub(crate) fn session(config: &AuthConfig) -> Result<Session> {
+    // librespot keeps each file as the CDN sent it, still under the key Spotify hands out
+    // again on every play, so a kept file is no easier to play than the stream.
+    let audio = Vault::foreign("spotify");
+    let cache = Cache::new(
+        Some(config.cache_dir.as_path()),
+        None,
+        audio.as_deref(),
+        audio.is_some().then_some(KEPT_FILES),
+    )
+    .with_context(|| format!("cannot open cache at {}", config.cache_dir.display()))?;
 
     let session_config = SessionConfig {
         client_id: config.client_id.clone(),
