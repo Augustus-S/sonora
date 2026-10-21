@@ -2441,8 +2441,10 @@ impl Playback {
         self.measuring = Some(cx.spawn(async move |this, cx| {
             let usage = cx.background_executor().spawn(async move { work() }).await;
             this.update(cx, |this, cx| {
-                this.usage = Some(usage);
-                cx.notify();
+                if this.usage != Some(usage) {
+                    this.usage = Some(usage);
+                    cx.notify();
+                }
             })
             .ok();
         }));

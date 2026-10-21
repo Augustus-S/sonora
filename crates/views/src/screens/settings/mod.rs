@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
@@ -53,6 +54,8 @@ const TITLE_WEIGHT: u32 = 2;
 /// The picker keys the page's render watches, shared with the rows that open them.
 const LANGUAGES: &str = "languages";
 const TYPEFACES: &str = "typefaces";
+/// How often the storage section measures the cache and the downloads again while its tab shows.
+const STORAGE_POLL: Duration = Duration::from_secs(2);
 
 /// One setting, named without building anything. Pages list their settings as slots in groups,
 /// a search scores slots by their title and detail, and only visible groups build their rows.
@@ -205,6 +208,9 @@ impl Group {
 pub struct SettingsView {
     session: Entity<Session>,
     playback: Entity<Playback>,
+    /// Measures the cache and the downloads again every so often while the storage section's
+    /// tab is on screen, since tracks are kept and evicted as they play.
+    _storage: Task<()>,
     drm: Entity<Drm>,
     equalizer: Entity<Equalizer>,
     settings: Entity<AppSettings>,
@@ -298,6 +304,21 @@ impl SettingsView {
             .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
         playback.update(cx, |playback, cx| playback.measure_storage(cx));
+        let storage = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(STORAGE_POLL).await;
+                let measured = this.update(cx, |this, cx| {
+                    let shown = router::trail(cx).read(cx).current();
+                    if matches!(shown, Destination::Settings(page) if page.tab() == SettingsTab::Playback) {
+                        this.playback
+                            .update(cx, |playback, cx| playback.measure_storage(cx));
+                    }
+                });
+                if measured.is_err() {
+                    return;
+                }
+            }
+        });
         cx.observe(&Scan::global(cx), |this, _, cx| this.remeasure(cx))
             .detach();
         let chrome = Chrome::entity(cx);
@@ -356,6 +377,7 @@ impl SettingsView {
 
         Self {
             session,
+            _storage: storage,
             playback,
             drm,
             equalizer,
