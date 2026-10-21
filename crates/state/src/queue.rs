@@ -124,7 +124,9 @@ struct Taken {
 #[derive(Clone, Copy)]
 enum Spot {
     Manual(usize),
-    Source(usize),
+    /// A track of the source, with `Queue::rebuilt` at the time, since a rebuild since may have
+    /// brought it back already.
+    Source(usize, u64),
     /// A suggestion, with `Queue::suggested` at the time, since one from a batch replaced since
     /// is not put back.
     Similar(usize, u64),
@@ -907,7 +909,7 @@ impl Queue {
         };
         let spot = match index < self.manual {
             true => Spot::Manual(index),
-            false => Spot::Source(index - self.manual),
+            false => Spot::Source(index - self.manual, self.rebuilt),
         };
         self.manual -= usize::from(index < self.manual);
         self.changed(cx);
@@ -974,8 +976,9 @@ impl Queue {
     }
 
     /// Puts removed tracks back where they sat, newest first, so each lands where it was before
-    /// the ones after it were taken. Spots are clamped to what each run holds now, and
-    /// suggestions from a batch replaced since are left out.
+    /// the ones after it were taken. Spots are clamped to what each run holds now, a copy a
+    /// rebuild brought back is dropped so nothing plays twice, and suggestions from a batch
+    /// replaced since are left out.
     fn put_back(&mut self, removed: Vec<Taken>, cx: &mut Context<Self>) {
         for Taken { entry, spot } in removed.into_iter().rev() {
             match spot {
@@ -983,7 +986,10 @@ impl Queue {
                     self.upcoming.insert(index.min(self.manual), entry);
                     self.manual += 1;
                 }
-                Spot::Source(index) => {
+                Spot::Source(index, rebuilt) => {
+                    if rebuilt != self.rebuilt {
+                        self.drop_copy(&entry);
+                    }
                     let at = (self.manual + index).min(self.queued());
                     self.upcoming.insert(at, entry);
                 }
@@ -996,6 +1002,17 @@ impl Queue {
             }
         }
         self.changed(cx);
+    }
+
+    /// Takes the first copy of `entry`'s track out of the source's run, matched by id.
+    fn drop_copy(&mut self, entry: &Entry) {
+        let Some(id) = entry.id() else {
+            return;
+        };
+        let copy = (self.manual..self.queued()).find(|&at| self.upcoming[at].id() == Some(id));
+        if let Some(copy) = copy {
+            self.upcoming.remove(copy);
+        }
     }
 
     pub fn next(&mut self, cx: &mut Context<Self>) -> Option<Track> {
