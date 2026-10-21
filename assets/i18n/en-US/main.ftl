@@ -1242,6 +1242,7 @@ trouble-offline-detail = Check your internet connection and try again.
 trouble-not-loaded = Could not load
 trouble-retry = Try again
 toast-offline = No connection. Nothing will stream until it is back.
+toast-offline-unsupported = { $name } does not support offline playback, so its downloads play only with a connection.
 toast-download-failed = Could not list the tracks to download.
 toast-settings-broken = Fix line { $name } of settings.json to save changes
 toast-tray-unavailable = There is no system tray to put the icon in
