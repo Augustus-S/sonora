@@ -34,7 +34,7 @@ pub(crate) use sort::initial;
 
 use sort::hits;
 
-/// How strongly a finished download's mark shows on its row.
+/// How strongly a finished download's mark and an unsaved track's heart show on a row.
 const SETTLED: f32 = 0.5;
 
 /// The current track and its `Playback::control`. A screen keeps the last one and redraws only
@@ -466,7 +466,7 @@ impl TrackSource {
                 })
                 .tint(match saved {
                     true => theme.primary,
-                    false => theme.muted_foreground,
+                    false => theme.muted_foreground.opacity(SETTLED),
                 })
                 .when(!saved, |this| {
                     this.invisible()
