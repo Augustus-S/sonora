@@ -156,6 +156,7 @@ fn main() {
         i18n::set(i18n::resolve(&language));
         icons::set(&pack);
         ui::motion::apply(stillness, pace, cx);
+        ui::refresh_primary_paste(cx);
         // linux answers late
         let reported = match cfg!(any(target_os = "linux", target_os = "freebsd")) {
             true => None,

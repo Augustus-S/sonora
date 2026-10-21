@@ -256,6 +256,7 @@ impl Root {
                 .history
                 .clone()
                 .update(cx, |history, cx| history.refresh(cx));
+            ui::refresh_primary_paste(cx);
             let settings = Sonora::global(cx).settings.clone();
             let (stillness, pace) = {
                 let settings = settings.read(cx);
