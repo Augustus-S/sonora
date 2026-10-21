@@ -10,7 +10,7 @@ use gpui::{
 use crate::motion;
 use crate::theme::ActiveTheme as _;
 
-/// The mark's size, the same as a button's icon.
+/// The mark's default size, the same as a button's icon.
 const SIZE: Pixels = px(16.);
 /// The grid the mark is drawn on, Lucide's `circle-arrow-down`.
 const GRID: f32 = 24.;
@@ -40,6 +40,7 @@ pub struct ArrowRing {
     id: ElementId,
     done: Option<f32>,
     color: Option<Hsla>,
+    size: Pixels,
 }
 
 impl ArrowRing {
@@ -49,6 +50,7 @@ impl ArrowRing {
             id: id.into(),
             done,
             color: None,
+            size: SIZE,
         }
     }
 
@@ -58,6 +60,12 @@ impl ArrowRing {
         self.color = Some(color);
         self
     }
+
+    /// The side of the mark, a button icon's 16 pixels by default.
+    pub fn size(mut self, size: Pixels) -> Self {
+        self.size = size;
+        self
+    }
 }
 
 impl RenderOnce for ArrowRing {
@@ -65,6 +73,7 @@ impl RenderOnce for ArrowRing {
         let theme = cx.theme();
         let color = self.color.unwrap_or(theme.muted_foreground);
         let track = theme.muted_foreground.opacity(TRACK);
+        let size = self.size;
         let animates = motion::animates(cx);
         match (self.done, animates) {
             (Some(done), _) => {
@@ -73,12 +82,12 @@ impl RenderOnce for ArrowRing {
                 if drawn != done {
                     window.request_animation_frame();
                 }
-                mark(Ring::Filled(drawn), color, track)
+                mark(Ring::Filled(drawn), color, track, size)
             }
-            (None, false) => mark(Ring::Turning(0.), color, track),
-            (None, true) => mark(Ring::Turning(0.), color, track)
+            (None, false) => mark(Ring::Turning(0.), color, track, size),
+            (None, true) => mark(Ring::Turning(0.), color, track, size)
                 .with_animation(self.id, Animation::new(TURN).repeat(), move |_, turned| {
-                    mark(Ring::Turning(turned), color, track)
+                    mark(Ring::Turning(turned), color, track, size)
                 })
                 .into_any_element(),
         }
@@ -128,12 +137,12 @@ enum Ring {
     Turning(f32),
 }
 
-fn mark(ring: Ring, color: Hsla, track: Hsla) -> AnyElement {
+fn mark(ring: Ring, color: Hsla, track: Hsla, size: Pixels) -> AnyElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| paint(bounds, ring, color, track, window),
     )
-    .size(SIZE)
+    .size(size)
     .flex_none()
     .into_any_element()
 }
