@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{App, Context, Entity, SharedString, Task};
-use music::{Album, MediaKind, MusicApi, Page, Pages, Playlist, SavedArtist, Shape, Track};
+use music::{
+    Album, Catalog, MediaKind, MusicApi, Page, Pages, Playlist, SavedArtist, Shape, Track,
+};
 use tokio::sync::Semaphore;
 
 use crate::snapshot::{Kind, Remembered, Snapshots};
@@ -19,8 +21,9 @@ const FATAL: [LibraryPart; 3] = [
 ];
 const FATAL_LOCAL: [LibraryPart; 2] = [LibraryPart::Tracks, LibraryPart::Albums];
 
-/// Lets a few playlists have their contents read at a time. Each read holds every track of its
-/// playlist until it is cut down to ids, and a library asks for all of its playlists at once.
+/// Lets a few playlists have their contents or mosaic covers read at a time. A library asks for
+/// all of its playlists at once. Each read holds every track of its playlist until it is cut down,
+/// and unchecked reads would spend the provider's request budget before the liked songs load.
 static READS: Semaphore = Semaphore::const_new(4);
 
 /// Which provider a library page, an id or a playlist belongs to. The streaming shelf follows
@@ -127,7 +130,7 @@ impl Held {
                     artists: &ready.artists,
                 })
             }
-            Shape::Catalog => Some(Favorites {
+            Shape::Catalog(_) => Some(Favorites {
                 tracks: &self.starred.tracks,
                 albums: &self.starred.albums,
                 artists: &self.starred.artists,
@@ -145,7 +148,7 @@ impl Held {
                     artists: &mut ready.artists,
                 })
             }
-            Shape::Catalog => Some(FavoritesMut {
+            Shape::Catalog(_) => Some(FavoritesMut {
                 tracks: &mut self.starred.tracks,
                 albums: &mut self.starred.albums,
                 artists: &mut self.starred.artists,
@@ -829,7 +832,7 @@ impl Savable for Track {
             return;
         };
         let shelf = Shelf::of(&id);
-        if !library.session.read(cx).capabilities_of(shelf).library {
+        if !library.session.read(cx).shape_of(shelf).editable() {
             return;
         }
         let Some(ready) = library.held_mut(shelf).ready_mut() else {
@@ -950,6 +953,8 @@ pub enum LibraryEvent {
         track: String,
     },
     TracksHidden(Vec<String>),
+    /// A playlist a failed change may have altered in part, so a page showing it loads it again.
+    PlaylistChanged(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1121,6 +1126,18 @@ impl Library {
                     cx.notify();
                     return;
                 }
+                this.playlist_task = None;
+                this.pending.clear();
+                this.pending_albums.clear();
+                this.pending_artists.clear();
+                let favorite = |family: &Family| {
+                    matches!(
+                        family,
+                        Family::SavedTracks | Family::SavedAlbums | Family::SavedArtists
+                    )
+                };
+                this.sweeps.retain(|_, sweep| !favorite(&sweep.family));
+                this.gathering.retain(|family, _| !favorite(family));
                 this.pin_targets = None;
                 this.sync_pin_targets(cx);
                 this.prime(Shelf::Streaming, cx);
@@ -1192,7 +1209,7 @@ impl Library {
             raised_rows: HashMap::new(),
         };
         library.held_mut(Shelf::Streaming).state = LibraryState::Loading;
-        library.held_mut(Shelf::Local).shape = Shape::Catalog;
+        library.held_mut(Shelf::Local).shape = Shape::Catalog(Catalog::Fixed);
         library.prime(Shelf::Streaming, cx);
         match library.session.read(cx).client_of(Shelf::Local).is_some() {
             true => library.load(Shelf::Local, cx),
@@ -1575,7 +1592,7 @@ impl Library {
     }
 
     /// Whether a track or album is in the shelf's own library, apart from its favorites. Only
-    /// a `Capabilities::library` provider draws the distinction, and there the pages list the
+    /// a `Catalog::Editable` provider draws the distinction, and there the pages list the
     /// library, so this is what they list.
     pub fn in_library(&self, id: &str) -> bool {
         let state = &self.held(Shelf::of(id)).state;
@@ -1782,9 +1799,7 @@ impl Library {
             move |client| async move {
                 let tracks = addition.resolve(&client).await?;
                 let id = client.create_playlist(&name).await?;
-                for track in &tracks {
-                    client.add_track_to_playlist(&id, track).await?;
-                }
+                client.add_tracks_to_playlist(&id, &tracks).await?;
                 let fetched = client.playlist(&id).await.map(|detail| detail.playlist);
                 Ok(fetched.unwrap_or_else(|error| {
                     log::warn!("library: a new playlist is not readable yet: {error:#}");
@@ -1889,9 +1904,9 @@ impl Library {
             move |client| async move {
                 let mut track_ids = addition.resolve(&client).await?;
                 track_ids.retain(|id| !known.contains(id));
-                for track_id in &track_ids {
-                    client.add_track_to_playlist(&playlist_id, track_id).await?;
-                }
+                client
+                    .add_tracks_to_playlist(&playlist_id, &track_ids)
+                    .await?;
                 Ok(track_ids)
             },
             move |this, track_ids, cx| {
@@ -1916,19 +1931,27 @@ impl Library {
     }
 
     /// Takes tracks out of a playlist and reports it once the provider agrees, with an Undo that
-    /// adds them back at the end, the way every provider adds.
+    /// adds them back at the end, the way every provider adds. Every copy of a named track goes,
+    /// the way the page drops every row of it, so `rows` names a track once for each copy the
+    /// playlist holds and the count and the Undo follow it.
     pub fn remove_tracks_from_playlist(
         &mut self,
         playlist_id: String,
-        track_ids: Vec<String>,
+        rows: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        if track_ids.is_empty() {
+        if rows.is_empty() {
             return;
         }
+        let mut seen = HashSet::new();
+        let track_ids: Vec<String> = rows
+            .iter()
+            .filter(|track| seen.insert(track.as_str()))
+            .cloned()
+            .collect();
         let emptied = playlist_id.clone();
-        let dropped = track_ids.clone();
-        let dropped_count = track_ids.len() as u32;
+        let gone = track_ids.clone();
+        let dropped_count = rows.len() as u32;
         let name = self
             .playlist(&playlist_id)
             .map(|playlist| playlist.name.clone());
@@ -1951,7 +1974,7 @@ impl Library {
                 Ok(())
             },
             move |this, (), cx| {
-                this.raise_rows(&emptied, name, dropped.clone(), cx);
+                this.raise_rows(&emptied, name, rows, cx);
                 this.amend_playlist(
                     &emptied,
                     |playlist| {
@@ -1960,11 +1983,11 @@ impl Library {
                     cx,
                 );
                 if let Some(ids) = this.contents.get_mut(&emptied) {
-                    for track in &dropped {
+                    for track in &gone {
                         ids.remove(track);
                     }
                 }
-                for track in dropped {
+                for track in gone {
                     cx.emit(LibraryEvent::TrackDropped {
                         playlist: emptied.clone(),
                         track,
@@ -2127,9 +2150,15 @@ impl Library {
         };
         tracks.extend(removed);
         let target = Some(Target::Playlist(SharedString::from(playlist_id.to_owned())));
-        let mut toast = match tracks.len() {
-            1 => Toast::new(Outcome::Done, "toast-track-removed"),
-            count => Toast::new(Outcome::Done, "toast-tracks-removed").count(count),
+        // A playlist no longer in the library has no name to fill `$name`, so it gets the
+        // message that does without one.
+        let mut toast = match (tracks.len(), name.is_some()) {
+            (1, true) => Toast::new(Outcome::Done, "toast-track-removed"),
+            (1, false) => Toast::new(Outcome::Done, "toast-track-removed-unnamed"),
+            (count, true) => Toast::new(Outcome::Done, "toast-tracks-removed").count(count),
+            (count, false) => {
+                Toast::new(Outcome::Done, "toast-tracks-removed-unnamed").count(count)
+            }
         }
         .target(target);
         if let Some(name) = name {
@@ -2238,9 +2267,10 @@ impl Library {
             let asked = id.clone();
             let key = id.clone();
             let task = cx.spawn(async move |this, cx| {
-                let covers = join(
-                    io.spawn(async move { client.playlist_covers(&asked, mosaic::TILES).await }),
-                )
+                let covers = join(io.spawn(async move {
+                    let _turn = READS.acquire().await;
+                    client.playlist_covers(&asked, mosaic::TILES).await
+                }))
                 .await;
                 match covers {
                     Ok(covers) => {
@@ -2417,9 +2447,8 @@ impl Library {
         let io = self.io.clone();
         self.playlist_task = Some(cx.spawn(async move |this, cx| {
             let result = join(io.spawn(async move { mutation(client).await })).await;
-            if result.is_ok()
-                && let Some(catalog) = catalog
-            {
+            // A change that failed part way may still have landed in part.
+            if let Some(catalog) = catalog {
                 for id in &invalidated {
                     catalog.invalidate_playlist(id).await;
                 }
@@ -2440,6 +2469,9 @@ impl Library {
                     Err(error) => {
                         log::warn!("library: cannot {action}: {error:#}");
                         Toasts::show(Outcome::Failed, "toast-playlist-failed", cx);
+                        for id in invalidated {
+                            cx.emit(LibraryEvent::PlaylistChanged(id));
+                        }
                     }
                 }
                 cx.notify();
@@ -2499,6 +2531,29 @@ impl Library {
         true
     }
 
+    /// Shows a like, or the taking back of one, made in another of the account's apps, without
+    /// asking the provider again. `track` comes with a like; an unlike needs only `id`. A change
+    /// still on its way from this app wins.
+    pub fn liked_elsewhere(&mut self, id: &str, track: Option<Track>, cx: &mut Context<Self>) {
+        if self.pending.contains_key(id) {
+            return;
+        }
+        match track {
+            Some(_) if self.saved(id) => return,
+            Some(mut track) => {
+                track.added_at = Some(stamp());
+                self.set_saved(track, true);
+            }
+            None => {
+                let Some(track) = <Track as Savable>::saved_now(self, id) else {
+                    return;
+                };
+                self.set_saved(track, false);
+            }
+        }
+        cx.notify();
+    }
+
     fn set_saved(&mut self, track: Track, saved: bool) {
         let Some(id) = track.id.clone() else {
             return;
@@ -2515,39 +2570,45 @@ impl Library {
         }
     }
 
+    /// Loads a shelf again from its provider. A shelf that is showing rows keeps them, each part
+    /// until all of its new rows have arrived, and its old problems are dropped so the fresh rows
+    /// can be snapshotted.
     pub fn refresh(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         if shelf == Shelf::Streaming {
             self.sync_pin_targets(cx);
         }
+        let held = self.held_mut(shelf);
+        if let LibraryState::Ready(ready) = &mut held.state {
+            ready.problems.clear();
+            held.stale = LibraryPart::ALL.into_iter().collect();
+        }
+        self.load(shelf, cx);
+    }
+
+    /// Drops what a shelf shows and loads it again from its provider, so the page goes back to
+    /// its loading state until the new rows land. This is the Refresh a user asks for, while
+    /// `refresh` is the quiet one that keeps rows on screen.
+    pub fn reload(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
+        if shelf == Shelf::Streaming {
+            self.sync_pin_targets(cx);
+        }
+        self.held_mut(shelf).stale.clear();
         self.load(shelf, cx);
     }
 
     /// Loads a shelf from its provider. A `Saved` shape reads the `saved_*` lists; a `Catalog`
     /// shape reads the `all_*` lists and the `saved_*` ones beside them for hearts and filters.
     /// Rows a snapshot primed stay on screen while this runs, each part until all of its own rows
-    /// arrive; a shelf with nothing primed goes back to loading, as a refresh does. The
-    /// favorites stay up either way until the new ones land, so a Favorites only filter shows
-    /// what it showed before rather than nothing.
+    /// arrive, and so do the rows a refresh finds on screen; a shelf with nothing on it goes back
+    /// to loading. The favorites stay up either way until the new ones land, so a Favorites only
+    /// filter shows what it showed before rather than nothing. Edits in flight carry on through a
+    /// load; only a new sign-in drops them.
     fn load(&mut self, shelf: Shelf, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let Some(client) = session.client_of(shelf) else {
             return;
         };
         let shape = session.shape_of(shelf);
-        if shelf == Shelf::Streaming {
-            self.playlist_task = None;
-            self.pending.clear();
-            self.pending_albums.clear();
-            self.pending_artists.clear();
-            let favorite = |family: &Family| {
-                matches!(
-                    family,
-                    Family::SavedTracks | Family::SavedAlbums | Family::SavedArtists
-                )
-            };
-            self.sweeps.retain(|_, sweep| !favorite(&sweep.family));
-            self.gathering.retain(|family, _| !favorite(family));
-        }
 
         let held = self.held_mut(shelf);
         held.shape = shape;
@@ -2579,7 +2640,7 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => tracks.saved_tracks_paged().await,
-                        Shape::Catalog => tracks.all_tracks_paged().await,
+                        Shape::Catalog(_) => tracks.all_tracks_paged().await,
                     }
                 },
                 Landed::Tracks,
@@ -2596,7 +2657,7 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => albums.saved_albums_paged().await,
-                        Shape::Catalog => albums.all_albums_paged().await,
+                        Shape::Catalog(_) => albums.all_albums_paged().await,
                     }
                 },
                 Landed::Albums,
@@ -2608,14 +2669,14 @@ impl Library {
                 async move {
                     match shape {
                         Shape::Saved => artists.saved_artists_paged().await,
-                        Shape::Catalog => artists.all_artists_paged().await,
+                        Shape::Catalog(_) => artists.all_artists_paged().await,
                     }
                 },
                 Landed::Artists,
                 cx,
             ),
         ];
-        if shape == Shape::Catalog {
+        if shape.is_catalog() {
             let tracks = client.clone();
             let albums = client.clone();
             tasks.extend([
@@ -2730,6 +2791,15 @@ impl Library {
         }
         let part = landed.part();
         let arrived = landed.arrived();
+        let counts = |this: &Self| -> HashMap<String, u32> {
+            this.state(shelf)
+                .playlists()
+                .iter()
+                .map(|playlist| (playlist.id.clone(), playlist.track_count))
+                .collect()
+        };
+        let before =
+            (arrived && part == LibraryPart::Playlists && !shelf.local()).then(|| counts(self));
         let held = self.held_mut(shelf);
         held.expected.remove(&part);
         if arrived {
@@ -2738,6 +2808,15 @@ impl Library {
         place(&mut held.state, &mut held.awaited, landed, shelf.fatal());
         if arrived {
             self.keep(shelf, Kind::Listed, part, cx);
+        }
+        // A streaming playlist's contents are never read again once known, so one whose count
+        // moved, or that is gone, drops them here and the read below fetches them afresh.
+        if let Some(before) = before {
+            let fresh = counts(self);
+            self.contents.retain(|id, _| {
+                Shelf::of(id) != shelf
+                    || (fresh.contains_key(id) && fresh.get(id) == before.get(id))
+            });
         }
         if part == LibraryPart::Playlists {
             self.read_playlists(shelf, cx);

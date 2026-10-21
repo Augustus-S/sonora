@@ -1,8 +1,7 @@
 use gpui::prelude::*;
 use gpui::{Div, Hsla, Pixels, Window, div};
-use ui::snapped;
 
-use crate::shared::effects;
+use crate::snapped;
 
 /// How many strips the blur fades in through. They cost nothing beyond a quad each, so more of
 /// them only make the crossfade smoother.
@@ -12,11 +11,18 @@ const STRIPS: usize = 64;
 /// reaches working strength quickly and only the far edge reads as clear.
 const HAZE: f32 = 0.4;
 
-/// Which side of the band holds the full blur. The other one is clear.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Edge {
+/// Which side of a veil holds the full blur. The other one is clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VeilEdge {
     Top,
     Bottom,
+}
+
+/// Whether backdrop blurs are drawn at all. `SONORA_BLUR=0` turns them off for a renderer that
+/// cannot afford them, and every haze falls back to its flat colour.
+pub fn effects() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SONORA_BLUR").as_deref() != Ok("0"))
 }
 
 /// A band that blurs what passes under it, at full strength along `edge` and fading to nothing
@@ -25,13 +31,15 @@ pub(crate) enum Edge {
 ///
 /// The renderer blurs a run of consecutive backdrops once, by the widest radius among them, and
 /// honours each one's opacity, so the strips cost one blur pass a frame. Interleaving anything
-/// between them splits that into a pass each, which lags. With effects off there is no blur to
-/// fade and the band is the plain colour instead. The Blur UI setting never reaches it: a band
-/// is there to keep what floats over it readable, not for the look of it.
+/// between them splits that into a pass each, which lags. A backdrop inside a layer that carries
+/// a paint filter is dropped, so the band only blurs while nothing above it scales or fades. With
+/// effects off there is no blur to fade and the band is the plain colour instead. The Blur UI
+/// setting never reaches it: a band is there to keep what floats over it readable, not for the
+/// look of it.
 ///
 /// `corner` rounds the two corners along `edge`, for a band flush with a rounded window.
-pub(crate) fn veil(
-    edge: Edge,
+pub fn veil(
+    edge: VeilEdge,
     height: Pixels,
     blur: Pixels,
     background: Hsla,
@@ -39,8 +47,8 @@ pub(crate) fn veil(
     window: &Window,
 ) -> Div {
     let round = move |strip: Div, radius: Pixels| match edge {
-        Edge::Top => strip.rounded_t(radius),
-        Edge::Bottom => strip.rounded_b(radius),
+        VeilEdge::Top => strip.rounded_t(radius),
+        VeilEdge::Bottom => strip.rounded_b(radius),
     };
     let mut edges: Vec<Pixels> = (0..=STRIPS)
         .map(|slice| snapped(height * (slice as f32 / STRIPS as f32), window))
@@ -51,19 +59,19 @@ pub(crate) fn veil(
         let end = edges[STRIPS];
         let merged = snapped(radius * 2., window).min(end);
         match edge {
-            Edge::Top => {
+            VeilEdge::Top => {
                 edges.retain(|at| *at == Pixels::ZERO || *at >= merged);
                 edges.insert(1, merged);
             }
-            Edge::Bottom => {
+            VeilEdge::Bottom => {
                 edges.retain(|at| *at <= end - merged || *at == end);
                 edges.insert(edges.len() - 1, end - merged);
             }
         }
     }
     let rounded = match edge {
-        Edge::Top => 0,
-        Edge::Bottom => edges.len() - 2,
+        VeilEdge::Top => 0,
+        VeilEdge::Bottom => edges.len() - 2,
     };
     let strips = edges
         .windows(2)
@@ -72,8 +80,8 @@ pub(crate) fn veil(
             let cut = span[1] - span[0];
             let across = (span[0] + cut / 2.) / height;
             let held = match edge {
-                Edge::Top => 1. - across,
-                Edge::Bottom => across,
+                VeilEdge::Top => 1. - across,
+                VeilEdge::Bottom => across,
             };
             (cut > Pixels::ZERO).then(|| {
                 div()

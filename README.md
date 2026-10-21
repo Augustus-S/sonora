@@ -60,7 +60,7 @@ Stream from your favorite services and play local files — all in one **native*
 
 ## Features
 
-- **Apple Music, Spotify, YouTube Music, Deezer, Subsonic/Navidrome** and local playback
+- **Apple Music, Spotify, YouTube Music, Deezer, Tidal, Subsonic/Navidrome** and local playback
 - Gapless playback, audio normalization, shuffle, sleep timer
 - Synced/karaoke lyrics, background vocals, and romanization
 - Scrobbling with LastFM, ListenBrainz, LibreFM, and Maloja
@@ -204,21 +204,21 @@ AI-assisted proofreading and translation of human-written text are permitted.
 
 | Language | Translated | Coverage |
 | --- | --- | --- |
-| English (`en-US`) | 755/755 | 100% |
-| Deutsch (`de`) | 628/755 | 83% |
-| Español (`es`) | 690/755 | 91% |
-| Français (`fr`) | 749/755 | 99% |
-| Italiano (`it`) | 605/755 | 80% |
-| Bahasa Indonesia (`id`) | 605/755 | 80% |
-| 日本語 (`ja`) | 605/755 | 80% |
-| Русский (`ru`) | 711/755 | 94% |
-| Українська (`uk`) | 711/755 | 94% |
-| Polski (`pl`) | 711/755 | 94% |
-| Čeština (`cs`) | 743/755 | 98% |
-| Português (Brasil) (`pt-BR`) | 605/755 | 80% |
-| 简体中文 (`zh-CN`) | 605/755 | 80% |
-| Türkçe (`tr`) | 605/755 | 80% |
-| Shqip (`sq`) | 714/755 | 95% |
+| English (`en-US`) | 1099/1099 | 100% |
+| Deutsch (`de`) | 589/1099 | 54% |
+| Español (`es`) | 648/1099 | 59% |
+| Français (`fr`) | 706/1099 | 64% |
+| Italiano (`it`) | 567/1099 | 52% |
+| Bahasa Indonesia (`id`) | 567/1099 | 52% |
+| 日本語 (`ja`) | 567/1099 | 52% |
+| Русский (`ru`) | 681/1099 | 62% |
+| Українська (`uk`) | 671/1099 | 61% |
+| Polski (`pl`) | 671/1099 | 61% |
+| Čeština (`cs`) | 700/1099 | 64% |
+| Português (Brasil) (`pt-BR`) | 567/1099 | 52% |
+| 简体中文 (`zh-CN`) | 567/1099 | 52% |
+| Türkçe (`tr`) | 567/1099 | 52% |
+| Shqip (`sq`) | 671/1099 | 61% |
 
 <!-- i18n:end -->
 
