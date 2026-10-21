@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use gpui::prelude::*;
 use gpui::{
     AnyView, App, Bounds, ClickEvent, Context, Entity, FocusHandle, FontWeight, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render,
-    ScrollWheelEvent, SharedString, SpringState, Task, TextShadow,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Render, ScrollWheelEvent, SharedString, SpringState, Task, TextShadow,
 };
 use gpui::{Window, canvas, deferred, div, phi, px, relative};
 use i18n::t;
@@ -73,6 +73,9 @@ const DOCK_BLUR: Pixels = px(8.);
 const DOCK_BLUR_LEAST: Pixels = px(0.05);
 const REST: Duration = Duration::from_millis(1500);
 const WAKE_DEBOUNCE: Duration = Duration::from_millis(400);
+/// How far the pointer has to travel, in pixels, before it wakes the controls, so the drift a
+/// resting hand gives a trackpad or a sensitive mouse leaves them asleep.
+const WAKE_TRAVEL: f64 = 3.;
 const SPRING_REST: f32 = 0.001;
 const SPRING_STALL: Duration = Duration::from_millis(64);
 
@@ -100,8 +103,12 @@ pub struct FullscreenView {
     track_menu: ItemMenu,
     context_menu: Option<(music::Track, Point<Pixels>)>,
     last_moved: Instant,
+    /// Where the pointer was when it last woke the controls, which motion is measured from.
     last_pos: Option<Point<Pixels>>,
     inside: bool,
+    /// Whether the pointer left the window and has not moved inside it since. macOS answers
+    /// `is_window_hovered` with whether the window has focus, so only the exit event tells there.
+    left: bool,
     awake: bool,
     hidden: SpringState,
     spring_beat: Instant,
@@ -154,6 +161,7 @@ impl FullscreenView {
             last_moved: Instant::now(),
             last_pos: None,
             inside: true,
+            left: false,
             awake: true,
             hidden: SpringState {
                 position: 0.,
@@ -217,7 +225,14 @@ impl FullscreenView {
             self.over_seek = seek;
             cx.notify();
         }
-        if self.last_pos == Some(event.position) {
+        if self.left {
+            self.left = false;
+            cx.notify();
+        }
+        let travel = self
+            .last_pos
+            .map_or(f64::INFINITY, |last| (event.position - last).magnitude());
+        if travel < WAKE_TRAVEL {
             if !self.awake {
                 cx.hide_cursor();
             }
@@ -256,7 +271,7 @@ impl FullscreenView {
     /// event the pointer has to be present for, so the ones still set when it left the window are
     /// dropped here instead. Crossing the window edge repaints on its own, so this is never late.
     fn watch(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let inside = window.is_window_hovered();
+        let inside = window.is_window_hovered() && !self.left;
         if inside == self.inside {
             return;
         }
@@ -1173,10 +1188,19 @@ impl Render for FullscreenView {
                 }
             })
             .on_mouse_move(cx.listener(Self::hover))
+            .on_mouse_exit(cx.listener(|this, _: &MouseExitEvent, _, cx| {
+                this.left = true;
+                cx.notify();
+            }))
             // Capture phase: every click stirs the idle timer, even one a
             // control underneath swallows for itself.
             .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| this.poke(cx)))
-            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| this.poke(cx)))
+            // A trackpad reports fingers that only touch it as a scroll that moves nothing.
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                if event.delta.pixel_delta(window.line_height()) != Point::default() {
+                    this.poke(cx);
+                }
+            }))
             .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.poke(cx)))
             .child(
                 canvas(move |bounds, _, _| root_bounds.set(bounds), |_, _, _, _| {})

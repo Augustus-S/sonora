@@ -171,6 +171,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   immediately to changes. Fullscreen shows its album art and hides the local audio visualizer.
 - Spotify liked songs and saved albums now load for accounts with hundreds of playlists, instead
   of failing at startup while Sonora read every playlist at once.
+- On macOS, the fullscreen player's controls hide again once you stop moving the pointer. A hand
+  resting on the trackpad, or the pointer leaving the window over the seek bar, no longer keeps
+  them on screen.
 - Translucent menus and the player bar use a denser surface to keep text and controls readable
   over bright artwork underneath.
 - Opening or resizing a sidebar no longer changes the player bar's responsive layout. It
