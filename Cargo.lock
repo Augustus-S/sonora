@@ -7224,6 +7224,7 @@ dependencies = [
  "i18n",
  "icons",
  "image",
+ "libc",
  "log",
  "moka",
  "mpris-server",
