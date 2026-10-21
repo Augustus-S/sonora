@@ -8,6 +8,8 @@ use reqwest::Url;
 
 /// How long a short link may take to answer before it is given up on.
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// How many redirects a short link may take, the same as reqwest's default policy.
+const REDIRECTS: usize = 10;
 /// How much of a short link's page is read when its address alone does not say where it goes.
 const PAGE_LIMIT: usize = 256 * 1024;
 /// What ends an address written into a page.
@@ -65,12 +67,18 @@ pub fn query(url: &Url, key: &str) -> Option<String> {
 }
 
 /// Fetches an https short link, following its redirects, and reads the start of the page it
-/// ends at. Nothing but https is ever fetched.
+/// ends at. Nothing but https is ever fetched, so a redirect to any other scheme fails the follow.
 pub async fn follow(link: &str) -> Option<Followed> {
     let url = address(link).filter(|url| url.scheme() == "https")?;
     static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
     let client = CLIENT
-        .get_or_init(|| reqwest::Client::builder().timeout(TIMEOUT).build().ok())
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(TIMEOUT)
+                .redirect(reqwest::redirect::Policy::custom(https_only))
+                .build()
+                .ok()
+        })
         .as_ref()?;
     let mut response = client
         .get(url)
@@ -99,4 +107,15 @@ pub fn addresses(page: &str) -> impl Iterator<Item = &str> {
         let end = rest.find(ADDRESS_END).unwrap_or(rest.len());
         &rest[..end]
     })
+}
+
+/// Follows a redirect only to another https address and only within `REDIRECTS` hops.
+fn https_only(attempt: reqwest::redirect::Attempt) -> reqwest::redirect::Action {
+    if attempt.url().scheme() != "https" {
+        attempt.error("redirect leaves https")
+    } else if attempt.previous().len() > REDIRECTS {
+        attempt.error("too many redirects")
+    } else {
+        attempt.follow()
+    }
 }
