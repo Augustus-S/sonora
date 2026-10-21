@@ -1136,7 +1136,7 @@ impl Worker {
         self.session.spawn(async move {
             match session.spclient().get_context(&uri).await {
                 Ok(context) => play.context.pages = context.pages,
-                Err(error) => log::warn!("connect: cannot read {uri} back: {error}"),
+                Err(error) => log::warn!("connect: cannot read {} back: {error}", redacted(&uri)),
             }
             out.send(Event::Command(Command::Start(started_by_play(&play))))
                 .ok();
@@ -1678,12 +1678,13 @@ fn keys(track: &ProvidedTrack) -> Vec<&String> {
     keys
 }
 
-/// Logs a command this device cannot read, with the shape of its payload and, for a transfer,
-/// what the state it carries holds. Jams send some of their changes this way, so it shows what
-/// they carry.
+/// Logs a command this device cannot read, with its keys and the kind of each value and, for a
+/// transfer, what the state it carries holds. Jams send user data this way, so no value is
+/// logged.
 fn describe_unknown(value: &serde_json::Value) {
     use base64::Engine as _;
     use protobuf::Message as _;
+    use serde_json::Value;
 
     let Some(object) = value.as_object() else {
         return log::debug!("connect: an unknown command is not an object");
@@ -1691,9 +1692,12 @@ fn describe_unknown(value: &serde_json::Value) {
     let shape = object
         .iter()
         .map(|(key, value)| match value {
-            serde_json::Value::String(text) if text.len() <= 60 => format!("{key}={text}"),
-            serde_json::Value::String(text) => format!("{key}=<{} chars>", text.len()),
-            other => format!("{key}={other}").chars().take(160).collect(),
+            Value::Null => format!("{key}=null"),
+            Value::Bool(_) => format!("{key}=<bool>"),
+            Value::Number(_) => format!("{key}=<number>"),
+            Value::String(text) => format!("{key}=<{} chars>", text.len()),
+            Value::Array(items) => format!("{key}=<{} items>", items.len()),
+            Value::Object(fields) => format!("{key}={:?}", fields.keys().collect::<Vec<_>>()),
         })
         .collect::<Vec<_>>();
     log::debug!("connect: an unknown command carries {shape:?}");
@@ -1714,7 +1718,7 @@ fn describe_unknown(value: &serde_json::Value) {
         .map(|track| {
             let mut keys = track.metadata.keys().cloned().collect::<Vec<_>>();
             keys.sort();
-            (track.uri.clone().unwrap_or_default(), keys)
+            (redacted(track.uri.as_deref().unwrap_or_default()), keys)
         })
         .collect::<Vec<_>>();
     log::debug!(
@@ -1722,6 +1726,22 @@ fn describe_unknown(value: &serde_json::Value) {
         state.queue.is_playing_queue,
         state.queue.tracks.len(),
     );
+}
+
+/// `uri` with the name after each `user:` replaced, so a log never carries a Spotify user name.
+fn redacted(uri: &str) -> String {
+    let mut owner = false;
+    uri.split(':')
+        .map(|part| {
+            let shown = match owner {
+                true => "<user>",
+                false => part,
+            };
+            owner = part == "user";
+            shown
+        })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// The id of a track another device lists, read from its uri or, since Spotify's apps often send
@@ -1804,7 +1824,7 @@ fn started_by_play(play: &PlayCommand) -> Start {
     let skip = play.options.skip_to.as_ref();
     log::debug!(
         "connect: play in {:?}, skip to {skip:?}, {} pages with {} tracks",
-        play.context.uri,
+        play.context.uri.as_deref().map(redacted),
         play.context.pages.len(),
         listed.len(),
     );
