@@ -149,8 +149,10 @@ impl About {
     /// The toast that says the download was cancelled.
     fn cancelled(&self) -> Toast {
         match self {
-            Self::Set { name, .. } | Self::Song { name, .. } => {
-                Toast::new(Outcome::Plain, "toast-download-cancelled").name(name.clone())
+            Self::Set { name, target } | Self::Song { name, target } => {
+                Toast::new(Outcome::Plain, "toast-download-cancelled")
+                    .name(name.clone())
+                    .target(Some(target.clone()))
             }
             Self::Songs(count) => {
                 Toast::new(Outcome::Plain, "toast-downloads-cancelled").count(*count)
