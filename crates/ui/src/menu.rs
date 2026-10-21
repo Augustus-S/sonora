@@ -382,6 +382,7 @@ pub struct MenuItem {
     face: Option<SharedString>,
     icon: Option<&'static str>,
     leading: Option<AnyElement>,
+    trailing: Option<AnyElement>,
     artwork: Option<Option<SharedString>>,
     tooltip: Option<SharedString>,
     press: Option<Action>,
@@ -404,6 +405,7 @@ impl MenuItem {
             content: None,
             icon: None,
             leading: None,
+            trailing: None,
             artwork: None,
             tooltip: None,
             press: None,
@@ -434,6 +436,7 @@ impl MenuItem {
             face: None,
             icon: None,
             leading: None,
+            trailing: None,
             artwork: None,
             tooltip: None,
             press: None,
@@ -476,6 +479,12 @@ impl MenuItem {
     /// Draws `leading` before the label, such as a small picture of what the item chooses.
     pub fn leading(mut self, leading: impl IntoElement) -> Self {
         self.leading = Some(leading.into_any_element());
+        self
+    }
+
+    /// Draws `trailing` at the end of the row after the label, such as badges or a small button.
+    pub fn trailing(mut self, trailing: impl IntoElement) -> Self {
+        self.trailing = Some(trailing.into_any_element());
         self
     }
 
@@ -738,6 +747,7 @@ impl RenderOnce for Menu {
                 face,
                 icon,
                 leading,
+                trailing,
                 artwork,
                 tooltip,
                 press,
@@ -839,6 +849,9 @@ impl RenderOnce for Menu {
                                 .when_some(detail, |this, detail| this.child(detail)),
                         ),
                 )
+                .when_some(trailing, |this, trailing| {
+                    this.child(div().flex_none().child(trailing))
+                })
                 .when(selected || checked, |this| {
                     this.child(div().flex_none().child("✓"))
                 })

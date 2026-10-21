@@ -434,51 +434,39 @@ impl Render for JamPeople {
                 .find(|id| !id.is_empty())
                 .map(|id| SharedString::from(id.clone()));
 
-            MenuItem::new(("jam-member", index), "").content(
-                div()
-                    .id(("jam-member-row", index))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .px_1()
-                    .py_0p5()
-                    .rounded(theme.radius)
-                    .when_some(profile, |this, profile| {
-                        this.cursor_pointer()
-                            .hover(|this| this.bg(theme.secondary_hover))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.at = None;
-                                cx.notify();
-                                navigate(Destination::User(profile.clone()), cx);
-                            }))
-                    })
-                    .child(face(member, size))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(SharedString::from(name(member).to_owned())),
-                    )
-                    .when(member.host, |this| {
-                        this.child(badge(t!("devices-jam-host"), theme))
-                    })
-                    .when(member.you, |this| {
-                        this.child(badge(t!("devices-jam-you"), theme))
-                    })
-                    .when(removable, |this| {
-                        this.child(
-                            Button::new(("jam-remove", index))
-                                .small()
-                                .label(t!("devices-jam-remove"))
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    devices.read(cx).kick(&id)
-                                }),
-                        )
-                    }),
-            )
+            MenuItem::new(("jam-member", index), name(member).to_owned())
+                .leading(face(member, size))
+                .trailing(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when(member.host, |this| {
+                            this.child(badge(t!("devices-jam-host"), theme))
+                        })
+                        .when(member.you, |this| {
+                            this.child(badge(t!("devices-jam-you"), theme))
+                        })
+                        .when(removable, |this| {
+                            this.child(
+                                Button::new(("jam-remove", index))
+                                    .small()
+                                    .label(t!("devices-jam-remove"))
+                                    .on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        devices.read(cx).kick(&id)
+                                    }),
+                            )
+                        }),
+                )
+                .when_none(&profile, |this| this.disabled())
+                .when_some(profile, |this, profile| {
+                    this.on_click(cx.listener(move |this, _, _, cx| {
+                        this.at = None;
+                        cx.notify();
+                        navigate(Destination::User(profile.clone()), cx);
+                    }))
+                })
         });
 
         Popup::new(at, Menu::new("jam-people").w(Picker::WIDE).items(rows))
