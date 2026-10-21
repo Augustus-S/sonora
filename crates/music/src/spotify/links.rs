@@ -13,28 +13,26 @@ const REGION: &str = "intl-";
 pub(super) fn read(text: &str) -> Option<Linked> {
     let text = text.trim();
     if let Some(rest) = text.strip_prefix(SCHEME) {
-        return from_uri(rest);
+        return from_parts(rest.split(':'));
     }
     let url = link::address(text).filter(|url| matches!(url.scheme(), "https" | "http"))?;
     match link::host(&url)? {
         SHORT_HOST => Some(Linked::Short),
         HOST => {
             let segments = link::segments(&url);
-            let mut parts = segments.iter().copied();
-            let kind = match parts.next()? {
-                region if region.starts_with(REGION) => parts.next()?,
-                kind => kind,
+            let segments = match segments.first() {
+                Some(region) if region.starts_with(REGION) => &segments[1..],
+                _ => &segments[..],
             };
-            route(kind, parts.next()?)
+            from_parts(segments.iter().copied())
         }
         _ => None,
     }
 }
 
-/// Reads the part of a `spotify:` URI after the scheme, including the old form that names a
-/// playlist under its owner.
-fn from_uri(rest: &str) -> Option<Linked> {
-    let mut parts = rest.split(':');
+/// Reads the parts of a URI after `spotify:` or of a page path after the locale, including the
+/// old form that names a playlist under its owner as `user/<owner>/playlist/<id>`.
+fn from_parts<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<Linked> {
     match parts.next()? {
         "user" => {
             let user = parts.next()?;
