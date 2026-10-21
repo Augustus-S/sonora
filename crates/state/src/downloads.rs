@@ -78,6 +78,14 @@ struct Entry {
     done: bool,
 }
 
+/// One download under way.
+struct Running {
+    /// Tells this run apart from an earlier one of the same track that was removed while it ran.
+    serial: u64,
+    progress: Fraction,
+    task: Task<()>,
+}
+
 /// The tracks, albums and playlists the listener downloaded from the active provider, and the
 /// line of tracks still to fetch.
 ///
@@ -95,7 +103,12 @@ pub struct Downloads {
     sets: HashMap<(Collection, String), Set>,
     queue: VecDeque<String>,
     /// The downloads under way, each with how far it has got.
-    running: HashMap<String, (Task<()>, Fraction)>,
+    running: HashMap<String, Running>,
+    /// Downloads removed while they ran, by serial. An engine cannot stop a fetch it started, so
+    /// each runs to its end and whatever it kept is removed then.
+    abandoned: HashMap<u64, Task<()>>,
+    /// The serial the next download gets.
+    serial: u64,
     /// Redraws whoever shows downloads while any is under way, so their progress moves.
     ticker: Option<Task<()>>,
     /// When the next download may start, after a provider refused the last ones or asks for
@@ -167,6 +180,8 @@ impl Downloads {
             sets: HashMap::new(),
             queue: VecDeque::new(),
             running: HashMap::new(),
+            abandoned: HashMap::new(),
+            serial: 0,
             ticker: None,
             resting: None,
             refusals: 0,
@@ -194,7 +209,7 @@ impl Downloads {
     /// How much of a track that is downloading has arrived, from 0 to 1, when the provider can
     /// tell.
     pub fn fraction(&self, id: &str) -> Option<f32> {
-        self.running.get(id)?.1.get()
+        self.running.get(id)?.progress.get()
     }
 
     /// Whether a track is downloaded and plays with no network.
@@ -422,13 +437,15 @@ impl Downloads {
         cx.notify();
     }
 
-    /// Removes every download of every provider, files and lists alike, and stops the ones under
-    /// way.
+    /// Removes every download of every provider, files and lists alike. The ones under way are
+    /// removed again as they end.
     pub fn remove_all(&mut self, cx: &mut Context<Self>) {
         self.tracks.clear();
         self.sets.clear();
         self.queue.clear();
-        self.running.clear();
+        for (_, run) in self.running.drain() {
+            self.abandoned.insert(run.serial, run.task);
+        }
         self.failed.clear();
         self.stalled.clear();
         self.fetching.clear();
@@ -535,15 +552,24 @@ impl Downloads {
                 return;
             };
             let request = self.io.spawn(download);
+            let serial = self.serial;
+            self.serial += 1;
             let task = cx.spawn({
                 let id = id.clone();
                 async move |this, cx| {
                     let fetched = join(request).await;
-                    this.update(cx, |this, cx| this.finished(id, fetched, cx))
+                    this.update(cx, |this, cx| this.finished(id, serial, fetched, cx))
                         .ok();
                 }
             });
-            self.running.insert(id, (task, progress));
+            self.running.insert(
+                id,
+                Running {
+                    serial,
+                    progress,
+                    task,
+                },
+            );
             if !self.gap.is_zero() {
                 self.resting = Some(Instant::now() + self.gap);
             }
@@ -578,7 +604,18 @@ impl Downloads {
         }));
     }
 
-    fn finished(&mut self, id: String, fetched: Result<()>, cx: &mut Context<Self>) {
+    /// Settles download `serial` of track `id`. One that was removed while it ran has its file
+    /// removed again, unless the track was asked for anew in the meantime.
+    fn finished(&mut self, id: String, serial: u64, fetched: Result<()>, cx: &mut Context<Self>) {
+        if self.abandoned.remove(&serial).is_some() {
+            if fetched.is_ok() && !self.tracks.contains_key(&id) {
+                self.playback.read(cx).discard(&id);
+            }
+            return;
+        }
+        if self.running.get(&id).is_none_or(|run| run.serial != serial) {
+            return;
+        }
         self.running.remove(&id);
         match fetched {
             Ok(()) => {
@@ -669,7 +706,8 @@ impl Downloads {
         Toasts::show(Outcome::Failed, "toast-download-failed", cx);
     }
 
-    /// Takes tracks off the list and removes their audio.
+    /// Takes tracks off the list and removes their audio. A download of one still under way is
+    /// left to end, and its file is removed when it does.
     fn drop_tracks(&mut self, provider: &'static str, ids: &[String], cx: &mut Context<Self>) {
         if ids.is_empty() {
             return;
@@ -677,7 +715,9 @@ impl Downloads {
         let playback = self.playback.read(cx);
         for id in ids {
             self.tracks.remove(id);
-            self.running.remove(id);
+            if let Some(run) = self.running.remove(id) {
+                self.abandoned.insert(run.serial, run.task);
+            }
             self.failed.remove(id);
             self.stalled.remove(id);
             playback.discard(id);
@@ -762,6 +802,7 @@ impl Downloads {
         self.sets.clear();
         self.queue.clear();
         self.running.clear();
+        self.abandoned.clear();
         self.ticker = None;
         self.resting = None;
         self.refusals = 0;
