@@ -71,6 +71,10 @@ const PUT_GAP: Duration = Duration::from_secs(1);
 /// after being refused again and again.
 const BACKOFF_FIRST: Duration = Duration::from_secs(2);
 const BACKOFF_LAST: Duration = Duration::from_secs(60);
+/// How long the dealer waits to start again after Spotify could not be reached, and the most it
+/// waits after failing again and again.
+const START_FIRST: Duration = Duration::from_secs(5);
+const START_LAST: Duration = Duration::from_secs(300);
 
 /// Where a Jam's token goes to make a link that opens in Spotify's apps and on the web.
 pub(super) const INVITE: &str = "https://open.spotify.com/socialsession/";
@@ -239,6 +243,12 @@ struct Worker {
     enabled: bool,
     /// The dealer is started once and cannot be restarted on the same session.
     started: bool,
+    /// Whether that one start failed, which leaves the device off until the session is replaced.
+    launch_failed: bool,
+    /// When the dealer tries to start again after Spotify could not be reached, and how long the
+    /// try after that waits.
+    start_at: Option<Instant>,
+    start_wait: Duration,
     connected: bool,
     /// A Jam link asked about before the dealer connected, looked up once it has.
     held: Option<String>,
@@ -272,6 +282,9 @@ impl Worker {
             streams: Streams::idle(),
             enabled: false,
             started: false,
+            launch_failed: false,
+            start_at: None,
+            start_wait: START_FIRST,
             connected: false,
             held: None,
             now: None,
@@ -338,6 +351,7 @@ impl Worker {
                     }
                 }
                 () = acknowledge(self.flush_at) => self.flush().await,
+                () = acknowledge(self.start_at) => self.start().await,
                 () = acknowledge(self.ack_at) => {
                     self.ack_at = None;
                     if self.now.is_some() {
@@ -454,7 +468,7 @@ impl Worker {
     /// Reads the group session a link names without joining it, and says what it found in an
     /// `Event::Invite`, which is `None` when the link names none or it cannot be read.
     async fn peek(&mut self, link: &str) {
-        if self.enabled && !self.connected {
+        if self.enabled && !self.connected && !self.launch_failed {
             self.held = Some(link.to_owned());
             return;
         }
@@ -728,19 +742,54 @@ impl Worker {
             (true, false) => self.start().await,
             (true, true) if self.connected => self.announce().await,
             (true, true) => {}
-            (false, _) => self.withdraw().await,
+            (false, _) => {
+                self.start_at = None;
+                self.withdraw().await;
+            }
         }
     }
 
+    /// Starts the dealer once Spotify can be reached. It launches only once per session, so the
+    /// token it needs is fetched first, and a failure there tries again later rather than spend
+    /// the launch. A Jam link held for the dealer is answered as unreadable whenever a try fails.
     async fn start(&mut self) {
-        self.started = true;
-        match Streams::subscribe(&self.session) {
-            Ok(streams) => self.streams = streams,
-            Err(error) => return log::warn!("connect: cannot listen to the dealer: {error}"),
+        self.start_at = None;
+        if !self.enabled || self.started {
+            return;
         }
-        if let Err(error) = self.session.dealer().start().await {
+        // the token is cached, so the launch does not ask for it again, and the dealer's address
+        // is left alone, since resolving one uses it up
+        if let Err(error) = self.session.login5().auth_token().await {
+            let wait = self.start_wait;
+            self.start_wait = (wait * 2).min(START_LAST);
+            self.start_at = Some(Instant::now() + wait);
+            log::warn!(
+                "connect: cannot reach the dealer, trying again in {}s: {error}",
+                wait.as_secs()
+            );
+            return self.drop_held();
+        }
+        self.start_wait = START_FIRST;
+        self.started = true;
+        let launched = match Streams::subscribe(&self.session) {
+            Ok(streams) => {
+                self.streams = streams;
+                self.session.dealer().start().await
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = launched {
             self.streams = Streams::idle();
-            log::warn!("connect: cannot start the dealer: {error}");
+            self.launch_failed = true;
+            log::warn!("connect: cannot start the dealer, off until the next session: {error}");
+            self.drop_held();
+        }
+    }
+
+    /// Answers the Jam link held for the dealer as unreadable, as the dealer did not come up.
+    fn drop_held(&mut self) {
+        if self.held.take().is_some() {
+            self.out.send(Event::Invite(None)).ok();
         }
     }
 
