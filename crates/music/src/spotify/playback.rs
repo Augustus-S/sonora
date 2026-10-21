@@ -76,8 +76,8 @@ impl PlaybackEvents for Events {
                 event = self.player.recv() => {
                     let Some(event) = translate(event?) else { continue };
                     match event {
+                        // `forward` has armed the cue already, off the app's thread.
                         PlaybackEvent::Playing { .. } | PlaybackEvent::Seeked { .. } => {
-                            self.cue.arm();
                             self.stale = 0;
                             self.held = Some(event);
                         }
@@ -190,7 +190,7 @@ impl Engine {
         );
 
         let events = Events {
-            player: player.get_player_event_channel(),
+            player: forward(player.get_player_event_channel(), cue.clone()),
             output: output_rx,
             cue: cue.clone(),
             written,
@@ -216,6 +216,7 @@ impl Engine {
 
     fn load(&self, track_id: &str, at: Duration, seamless: bool) -> Result<()> {
         let uri = track_uri(track_id)?;
+        log::debug!("playback: spotify loads {track_id} at {at:?}, seamless {seamless}");
 
         if !seamless || !self.gapless {
             self.cue.clear();
@@ -247,9 +248,13 @@ impl Engine {
         self.player.pause();
     }
 
+    /// Clears the queue before librespot hears of the seek. A seek in a file already on disk
+    /// lands at once, and a clear after its `Seeked` would refuse the new audio with nothing left
+    /// to let it through, while librespot decodes on unheard.
     fn seek(&self, position: Duration) {
-        self.player.seek(position.as_millis() as u32);
         self.cue.clear();
+        log::debug!("playback: spotify seeks to {position:?}");
+        self.player.seek(position.as_millis() as u32);
     }
 
     fn set_gain(&self, gain: f32) {
@@ -337,6 +342,35 @@ impl MusicPlayer for Engine {
     fn spectrum(&self) -> Option<Spectrum> {
         Some(self.spectrum())
     }
+}
+
+/// Passes librespot's events on and arms `cue` the moment one says audio from a new track or
+/// position follows. Arming cannot wait for whoever reads the events: until it happens every
+/// write is refused at once, so librespot decodes on unheard and the track would start seconds
+/// in. Each event goes on before the cue is armed, so it is always ahead of the write the arm
+/// lets through.
+fn forward(mut events: UnboundedReceiver<PlayerEvent>, cue: Cue) -> UnboundedReceiver<PlayerEvent> {
+    let (passed, received) = unbounded_channel();
+    let spawned = std::thread::Builder::new()
+        .name("spotify-events".into())
+        .spawn(move || {
+            while let Some(event) = events.blocking_recv() {
+                let arms = matches!(
+                    event,
+                    PlayerEvent::Playing { .. } | PlayerEvent::Seeked { .. }
+                );
+                if passed.send(event).is_err() {
+                    return;
+                }
+                if arms {
+                    cue.arm();
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        log::error!("playback: cannot spawn the spotify event thread: {error}");
+    }
+    received
 }
 
 pub(crate) fn track_uri(track_id: &str) -> Result<SpotifyUri> {
