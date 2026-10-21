@@ -1560,6 +1560,15 @@ fn wire_command(command: &Command) -> Option<serde_json::Value> {
             "repeating_track": *mode == RepeatMode::Track,
             "logging_params": {},
         }),
+        Command::Enqueue { id, .. } => serde_json::json!({
+            "endpoint": "add_to_queue",
+            "track": {
+                "uri": format!("{TRACK_PREFIX}{id}"),
+                "metadata": { "is_queued": "true" },
+                "provider": "queue",
+            },
+            "logging_params": {},
+        }),
         _ => return None,
     })
 }

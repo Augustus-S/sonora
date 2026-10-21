@@ -86,7 +86,7 @@ pub enum Command {
     Shuffle(bool),
     Repeat(RepeatMode),
     /// Adds a track to the end of the hand-made queue, with the id of whoever queued it when
-    /// the provider says who that is.
+    /// the provider says who that is. Sent to another device, `added_by` is left out.
     Enqueue {
         id: String,
         added_by: Option<String>,

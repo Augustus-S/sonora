@@ -1111,17 +1111,20 @@ impl Playback {
             [only] => Some((only.name.clone(), song_target(only))),
             _ => None,
         };
-        if count == 0 || !self.place(tracks, origin, placement, cx) {
+        if count == 0 {
             return;
         }
+        let Some(placed) = self.place(tracks, origin, placement, cx) else {
+            return;
+        };
         match named {
             Some((name, target)) => {
-                if let Some(key) = placement.toast("track") {
+                if let Some(key) = placed.toast("track") {
                     Toasts::linked(Outcome::Done, key, name, target, cx);
                 }
             }
             None => {
-                if let Some(key) = placement.toast("tracks") {
+                if let Some(key) = placed.toast("tracks") {
                     Toasts::post(Toast::new(Outcome::Done, key).count(count), cx);
                 }
             }
@@ -1129,21 +1132,30 @@ impl Playback {
     }
 
     /// Puts tracks into the queue at `placement` without a word, or starts playing them when
-    /// nothing is queued. Returns whether something was already playing when they arrived.
+    /// nothing is queued. While another device has playback they go to the end of its queue
+    /// instead. Returns where they went, for the toast, or `None` when they started playback or
+    /// went nowhere.
     fn place(
         &mut self,
         tracks: Vec<Track>,
         origin: Option<Origin>,
         placement: QueuePlacement,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) -> Option<QueuePlacement> {
         let playing = self.queue.read(cx).current().is_some();
         if tracks.is_empty() {
-            return playing;
+            return playing.then_some(placement);
+        }
+        if let Some(sent) = self.queue_elsewhere(&tracks, cx) {
+            let placed = match placement {
+                QueuePlacement::Gap(gap) => QueuePlacement::Gap(gap),
+                _ => QueuePlacement::End,
+            };
+            return sent.then_some(placed);
         }
         if !playing {
             self.begin(tracks, 0, origin, cx);
-            return false;
+            return None;
         }
         self.queue.update(cx, |queue, cx| match placement {
             QueuePlacement::Next => queue.prepend_all(tracks, origin, cx),
@@ -1151,7 +1163,28 @@ impl Playback {
             QueuePlacement::Last => queue.append_last_all(tracks, origin, cx),
             QueuePlacement::Gap(gap) => queue.insert_upcoming(gap, tracks, origin, cx),
         });
-        true
+        Some(placement)
+    }
+
+    /// Adds tracks to the end of the queue of the other device that has playback, and says
+    /// whether all of them went. `None` while no other device is steered. Local files have no
+    /// place there, so they stay behind with a toast saying so.
+    fn queue_elsewhere(&self, tracks: &[Track], cx: &mut Context<Self>) -> Option<bool> {
+        let (devices, steered) = self.steering(cx)?;
+        let mut kept = false;
+        for track in tracks {
+            match track.id.clone() {
+                Some(id) if music::is_local_id(&id) => kept = true,
+                Some(id) => devices
+                    .read(cx)
+                    .control(&steered.device.id, Command::Enqueue { id, added_by: None }),
+                None => {}
+            }
+        }
+        if kept {
+            Toasts::show(Outcome::Info, "toast-queue-local-elsewhere", cx);
+        }
+        Some(!kept)
     }
 
     /// Opens paths handed in from the OS (a file-association launch or hand-off). A single file
@@ -1416,8 +1449,8 @@ impl Playback {
                 this.enqueue = None;
                 match loaded {
                     Ok(tracks) => {
-                        let queued = this.place(tracks, origin, placement, cx);
-                        if let Some(key) = placement.toast(source).filter(|_| queued) {
+                        let placed = this.place(tracks, origin, placement, cx);
+                        if let Some(key) = placed.and_then(|placed| placed.toast(source)) {
                             Toasts::show(Outcome::Done, key, cx);
                         }
                     }
