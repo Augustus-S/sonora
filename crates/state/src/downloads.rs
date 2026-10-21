@@ -407,6 +407,21 @@ impl Downloads {
         cx.notify();
     }
 
+    /// Removes every download of every provider, files and lists alike, and stops the ones under
+    /// way.
+    pub fn remove_all(&mut self, cx: &mut Context<Self>) {
+        self.tracks.clear();
+        self.sets.clear();
+        self.queue.clear();
+        self.running.clear();
+        self.failed.clear();
+        self.fetching.clear();
+        self.playback
+            .update(cx, |playback, cx| playback.remove_downloads(cx));
+        self.write(|store| store.forget_everything());
+        cx.notify();
+    }
+
     fn download_set(&mut self, kind: Collection, id: String, set: Set, cx: &mut Context<Self>) {
         let Some(provider) = self.provider else {
             return;
@@ -842,6 +857,12 @@ impl Store {
                 params![provider, id],
             )?;
         }
+        Ok(())
+    }
+
+    fn forget_everything(&self) -> Result<()> {
+        self.open()?
+            .execute_batch("DELETE FROM downloads; DELETE FROM downloaded_sets;")?;
         Ok(())
     }
 

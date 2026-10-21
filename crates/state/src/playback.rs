@@ -2413,6 +2413,16 @@ impl Playback {
         self.measured(cx, move || vault.usage());
     }
 
+    /// Removes every download of every provider and measures the vault again after. The lists
+    /// of what was downloaded are [`Downloads`](crate::Downloads)' to clear.
+    pub(crate) fn remove_downloads(&mut self, cx: &mut Context<Self>) {
+        let vault = self.vault.clone();
+        self.measured(cx, move || {
+            vault.forget_downloads();
+            vault.usage()
+        });
+    }
+
     /// Removes every cached track, downloads aside, and measures the vault again after.
     pub fn clear_cache(&mut self, cx: &mut Context<Self>) {
         let vault = self.vault.clone();

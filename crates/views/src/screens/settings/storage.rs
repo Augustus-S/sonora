@@ -1,9 +1,11 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Context, SharedString, div};
 use i18n::t;
+use state::Sonora;
 use ui::{ActiveTheme as _, Button};
 
 use super::{Group, SettingsView, Slot};
+use crate::shared::confirm::{Confirm, Kind};
 
 /// The bytes in a gigabyte, the unit the cache limit is set in.
 const GIGABYTE: u64 = 1 << 30;
@@ -53,7 +55,7 @@ impl SettingsView {
         self.row(t!("settings-cache-used"), control.into_any_element())
     }
 
-    /// What the downloads take on disk.
+    /// What the downloads take on disk, with a button that removes them all once confirmed.
     pub(super) fn downloads_usage_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.theme();
         let used = self
@@ -61,13 +63,29 @@ impl SettingsView {
             .read(cx)
             .usage()
             .map(|(_, downloads)| downloads);
-        self.row(
-            t!("settings-downloads-used"),
-            div()
-                .text_color(theme.muted_foreground)
-                .child(size(used))
-                .into_any_element(),
-        )
+        let control = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().text_color(theme.muted_foreground).child(size(used)))
+            .child(
+                Button::new("remove-downloads")
+                    .label(t!("settings-downloads-remove"))
+                    .small()
+                    .outline()
+                    .disabled(used.is_none_or(|used| used == 0))
+                    .on_click(|_, _, cx| {
+                        Confirm::ask(
+                            Kind::Downloads,
+                            |cx| {
+                                let downloads = Sonora::global(cx).downloads.clone();
+                                downloads.update(cx, |downloads, cx| downloads.remove_all(cx));
+                            },
+                            cx,
+                        );
+                    }),
+            );
+        self.row(t!("settings-downloads-used"), control.into_any_element())
     }
 }
 
