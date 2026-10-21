@@ -3,9 +3,11 @@
 //! and play with no network at all.
 //!
 //! A kept track is never a file another program can play. Each one is sealed with
-//! ChaCha20-Poly1305 under a key derived from a master key that the OS keychain holds, so the
-//! folder read without Sonora, or copied to another machine, is noise. File names are keyed
-//! hashes, so the folder does not say which tracks are in it either.
+//! ChaCha20-Poly1305 under a key derived from a master key, so the folder read without that key
+//! is noise. File names are keyed hashes, so the folder does not say which tracks are in it
+//! either. The master key lives in the OS keychain, or on a desktop with no keychain in a key
+//! file readable by the owner alone in the data folder the downloads share. There, copying the
+//! whole data folder carries the key along with the downloads.
 //!
 //! What goes in is what the provider sent, before its [`Body`](crate::stream::Body) touched it.
 //! A Deezer track stays striped with Blowfish inside the vault, so its decrypted audio still
@@ -13,12 +15,14 @@
 //! every play, so peeling off the vault's layer leaves nothing easier to play than the stream
 //! and nothing that plays once Apple stops handing out the key.
 //!
-//! Spotify is the exception. librespot keeps its own files, as the CDN sent them and still
-//! under the key Spotify hands out on every play, in a folder inside the vault that
-//! [`Vault::foreign`] names.
+//! Spotify is the exception. librespot keeps its own played files, as the CDN sent them and
+//! still under the key Spotify hands out on every play, in a folder inside the vault that
+//! [`Vault::foreign`] names. A Spotify download is sealed in the vault with that key beside it,
+//! so peeling off the vault's layer leaves all it takes to play the file.
 //!
-//! The owner of the machine can always read the master key out of their keychain, or the audio
-//! out of the process. The vault only makes the cache no easier to rip than the stream.
+//! The owner of the machine can always read the master key out of their keychain or key file,
+//! or the audio out of the process. The vault keeps kept tracks from playing outside Sonora for
+//! anyone without the master key, and nothing more.
 //!
 //! An entry is the file's random salt, then the track in sealed chunks of [`CHUNK`] bytes, then
 //! the provider's facts about the track sealed on their own, then the length of that last block.

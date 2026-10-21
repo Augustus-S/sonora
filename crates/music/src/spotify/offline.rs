@@ -1,7 +1,7 @@
 //! Spotify tracks downloaded for offline play, kept the way Spotify's own clients keep theirs:
 //! the file as the CDN sent it, still encrypted, with its key and metadata beside it. The vault
-//! seals all of that again under this machine's key, so a download is no easier to play outside
-//! Sonora than the stream.
+//! seals all of that again under the vault's master key, so a download plays outside Sonora
+//! only for someone who holds that key, and for them it is as easy to play as any file.
 
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
