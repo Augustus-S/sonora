@@ -21,6 +21,10 @@ const AT_ONCE: usize = 2;
 /// refusal in a row doubles it, up to `LONGEST_REST`.
 const FIRST_REST: Duration = Duration::from_secs(30);
 const LONGEST_REST: Duration = Duration::from_secs(10 * 60);
+/// The widest pause between downloads refusals can open up.
+const WIDEST_GAP: Duration = Duration::from_secs(30);
+/// How many downloads in a row have to work before the pause between them halves.
+const EASE_AFTER: u32 = 5;
 /// How often the progress of running downloads is redrawn.
 const TICK: Duration = Duration::from_millis(250);
 
@@ -83,6 +87,11 @@ pub struct Downloads {
     /// How many downloads in a row the provider refused for asking too much, which sets how
     /// long the queue rests.
     refusals: u32,
+    /// The pause between downloads a provider that refuses bursts is held to. It starts at
+    /// nothing, opens up with each refusal and closes again over a run of downloads that work.
+    gap: Duration,
+    /// Downloads that worked since the gap last changed.
+    streak: u32,
     /// Starts the queue again once it has rested.
     wake: Option<Task<()>>,
     failed: HashSet<String>,
@@ -135,6 +144,8 @@ impl Downloads {
             ticker: None,
             resting: None,
             refusals: 0,
+            gap: Duration::ZERO,
+            streak: 0,
             wake: None,
             failed: HashSet::new(),
             fetching: HashMap::new(),
@@ -473,9 +484,9 @@ impl Downloads {
         if let Some(until) = self.resting.filter(|until| *until > Instant::now()) {
             return self.wake_at(until, cx);
         }
-        // A provider that wants room between downloads gets them one at a time.
-        let gap = self.session.read(cx).capabilities().download_gap;
-        let at_once = match gap.is_zero() {
+        // A provider that refuses bursts gets its downloads one at a time.
+        let bursts = self.session.read(cx).capabilities().download_gap;
+        let at_once = match bursts.is_zero() {
             true => AT_ONCE,
             false => 1,
         };
@@ -501,8 +512,8 @@ impl Downloads {
                 }
             });
             self.running.insert(id, (task, progress));
-            if !gap.is_zero() {
-                self.resting = Some(Instant::now() + gap);
+            if !self.gap.is_zero() {
+                self.resting = Some(Instant::now() + self.gap);
             }
             self.tick(cx);
             cx.notify();
@@ -540,6 +551,7 @@ impl Downloads {
         match fetched {
             Ok(()) => {
                 self.refusals = 0;
+                self.ease(cx);
                 if let Some(entry) = self.tracks.get_mut(&id)
                     && let Some(provider) = self.provider
                 {
@@ -551,9 +563,13 @@ impl Downloads {
             Err(error) if error.downcast_ref::<music::Throttled>().is_some() => {
                 self.refusals = self.refusals.saturating_add(1);
                 let wait = rest(self.refusals);
+                let bursts = self.session.read(cx).capabilities().download_gap;
+                self.gap = (self.gap * 2).max(bursts).min(WIDEST_GAP);
+                self.streak = 0;
                 log::warn!(
-                    "downloads: the provider is refusing {id} for now, resting {}s",
-                    wait.as_secs()
+                    "downloads: the provider is refusing {id} for now, resting {}s, then {}s apart",
+                    wait.as_secs(),
+                    self.gap.as_secs()
                 );
                 self.resting = Some(Instant::now() + wait);
                 if self.tracks.contains_key(&id) {
@@ -570,6 +586,25 @@ impl Downloads {
         }
         self.pump(cx);
         cx.notify();
+    }
+
+    /// Narrows the pause between downloads after a run of them worked, down to none once it is
+    /// below a quarter of the one the provider starts from.
+    fn ease(&mut self, cx: &mut Context<Self>) {
+        if self.gap.is_zero() {
+            return;
+        }
+        self.streak += 1;
+        if self.streak < EASE_AFTER {
+            return;
+        }
+        self.streak = 0;
+        let bursts = self.session.read(cx).capabilities().download_gap;
+        self.gap /= 2;
+        if self.gap < bursts / 4 {
+            self.gap = Duration::ZERO;
+        }
+        log::debug!("downloads: now {}s apart", self.gap.as_secs_f32());
     }
 
     /// Starts the queue again at `at`, unless something already will.
@@ -678,6 +713,8 @@ impl Downloads {
         self.ticker = None;
         self.resting = None;
         self.refusals = 0;
+        self.gap = Duration::ZERO;
+        self.streak = 0;
         self.wake = None;
         self.failed.clear();
         self.fetching.clear();

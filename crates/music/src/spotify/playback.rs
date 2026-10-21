@@ -27,9 +27,9 @@ use crate::{
 
 const TRACK_PREFIX: &str = "spotify:track:";
 /// The levels Spotify serves, best first: Ogg Vorbis at 320, 160 and 96 kbps.
-/// How long one Spotify download waits after the one before it. Spotify refuses audio keys asked
-/// for in a burst, the same keys playback needs, so downloads ask about as often as listening
-/// does.
+/// The pause between Spotify downloads once Spotify has refused one. It refuses audio keys asked
+/// for in a burst, the same keys playback needs, so after a refusal downloads ask about as often as
+/// listening does.
 pub(crate) const DOWNLOAD_GAP: Duration = Duration::from_secs(4);
 pub(crate) const QUALITIES: &[Offer] = &[
     Offer {

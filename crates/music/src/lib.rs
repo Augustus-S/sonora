@@ -761,8 +761,9 @@ pub struct Capabilities {
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.
     pub qualities: &'static [Offer],
-    /// How long a download waits after the one before it starts, for a service that refuses a
-    /// burst of them. Zero lets downloads run side by side.
+    /// For a service that refuses a burst of downloads, the pause between them once it has refused
+    /// one. Such a service downloads one track at a time, with no pause until it first refuses.
+    /// Zero lets downloads run side by side.
     pub download_gap: Duration,
 }
 
