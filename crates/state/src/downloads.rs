@@ -11,7 +11,8 @@ use storage::Database;
 
 use crate::catalog::CatalogSource;
 use crate::{
-    Collection, Io, Network, Outcome, Playback, Session, SessionEvent, SessionState, Toasts, join,
+    Collection, Io, Network, Outcome, Playback, Reconnected, Session, SessionEvent, SessionState,
+    Toasts, join,
 };
 
 /// How many tracks download at once. Two keep the line busy without starving a track that is
@@ -111,6 +112,9 @@ pub struct Downloads {
     /// Starts the queue again once it has rested.
     wake: Option<Task<()>>,
     failed: HashSet<String>,
+    /// Downloads that stopped because the connection went. They count as waiting and go back in
+    /// line when the network returns.
+    stalled: HashSet<String>,
     /// Fetches the tracks of an album or playlist asked for from a menu, which has none to hand.
     fetching: HashMap<String, Task<()>>,
     restore: Option<Task<()>>,
@@ -122,10 +126,14 @@ impl Downloads {
     pub fn new(
         session: Entity<Session>,
         playback: Entity<Playback>,
+        network: &Entity<Network>,
         database: Database,
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
+        // The queue stops while the network is gone, and picks up again once it is back.
+        cx.subscribe(network, |this, _, _: &Reconnected, cx| this.resume(cx))
+            .detach();
         cx.subscribe(&session, |this, session, event, cx| match event {
             SessionEvent::SignedIn | SessionEvent::Reconnected => {
                 let provider = session.read(cx).provider_slug();
@@ -166,6 +174,7 @@ impl Downloads {
             streak: 0,
             wake: None,
             failed: HashSet::new(),
+            stalled: HashSet::new(),
             fetching: HashMap::new(),
             restore: None,
         }
@@ -421,6 +430,7 @@ impl Downloads {
         self.queue.clear();
         self.running.clear();
         self.failed.clear();
+        self.stalled.clear();
         self.fetching.clear();
         self.playback
             .update(cx, |playback, cx| playback.remove_downloads(cx));
@@ -600,10 +610,14 @@ impl Downloads {
                 }
             }
             Err(error) => {
-                log::warn!("downloads: cannot download {id}: {error:#}");
+                let reason = format!("{error:#}");
+                log::warn!("downloads: cannot download {id}: {reason}");
                 crate::noted(&error, cx);
                 if self.tracks.contains_key(&id) {
-                    self.failed.insert(id);
+                    match music::trouble::offline(&reason) {
+                        true => self.stalled.insert(id),
+                        false => self.failed.insert(id),
+                    };
                 }
             }
         }
@@ -663,6 +677,7 @@ impl Downloads {
             self.tracks.remove(id);
             self.running.remove(id);
             self.failed.remove(id);
+            self.stalled.remove(id);
             playback.discard(id);
         }
         self.queue.retain(|id| !ids.contains(id));
@@ -678,8 +693,19 @@ impl Downloads {
             .collect()
     }
 
+    /// Puts the downloads the lost connection stopped back at the front of the line, and starts
+    /// it again.
+    fn resume(&mut self, cx: &mut Context<Self>) {
+        for id in self.stalled.drain() {
+            self.queue.push_front(id);
+        }
+        self.pump(cx);
+        cx.notify();
+    }
+
     /// Puts every track not yet in back in line, as after a sign-in.
     fn requeue(&mut self) {
+        self.stalled.clear();
         self.queue = self
             .tracks
             .iter()
@@ -741,6 +767,7 @@ impl Downloads {
         self.streak = 0;
         self.wake = None;
         self.failed.clear();
+        self.stalled.clear();
         self.fetching.clear();
         self.restore = None;
         cx.emit(DownloadsChanged);
