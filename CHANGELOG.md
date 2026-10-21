@@ -112,6 +112,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Pick one in Settings → Appearance.
 - Your own themes can come in variants. Put the theme files in a folder inside the themes
   folder and they show up as one theme with a variant for each file.
+- Sonora now opens Apple Music, YouTube Music, Deezer and Tidal links as well as Spotify ones,
+  including Deezer's and Spotify's short links. A link to a service you are signed in to but not
+  using switches to that service first. Sonora also handles `deezer://` and `tidal://` links, so
+  "Open in app" on those websites can open Sonora.
+- Opening a Spotify Jam link asks whether to join the Jam, even when it starts Sonora.
 
 ### Changed
 

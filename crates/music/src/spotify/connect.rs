@@ -7,7 +7,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt as _;
@@ -72,13 +72,8 @@ const PUT_GAP: Duration = Duration::from_secs(1);
 const BACKOFF_FIRST: Duration = Duration::from_secs(2);
 const BACKOFF_LAST: Duration = Duration::from_secs(60);
 
-/// How long a shared short link may take to answer before it is given up on.
-const LINK_TIMEOUT: Duration = Duration::from_secs(10);
-/// How much of a short link's page is read when looking for the session in it.
-const LINK_PAGE_LIMIT: usize = 256 * 1024;
-
 /// Where a Jam's token goes to make a link that opens in Spotify's apps and on the web.
-const INVITE: &str = "https://open.spotify.com/socialsession/";
+pub(super) const INVITE: &str = "https://open.spotify.com/socialsession/";
 const VOLUME_STEPS: u32 = 64;
 /// The protobuf tags of a collection update: its items, and in each its kind, raw id and whether
 /// it was removed.
@@ -245,6 +240,8 @@ struct Worker {
     /// The dealer is started once and cannot be restarted on the same session.
     started: bool,
     connected: bool,
+    /// A Jam link asked about before the dealer connected, looked up once it has.
+    held: Option<String>,
     now: Option<NowPlaying>,
     /// When `now` was reported, which its position is as of.
     now_at: Instant,
@@ -276,6 +273,7 @@ impl Worker {
             enabled: false,
             started: false,
             connected: false,
+            held: None,
             now: None,
             now_at: Instant::now(),
             active: false,
@@ -456,6 +454,10 @@ impl Worker {
     /// Reads the group session a link names without joining it, and says what it found in an
     /// `Event::Invite`, which is `None` when the link names none or it cannot be read.
     async fn peek(&mut self, link: &str) {
+        if self.enabled && !self.connected {
+            self.held = Some(link.to_owned());
+            return;
+        }
         let found = self.peeked(link).await;
         self.out.send(Event::Invite(found)).ok();
     }
@@ -749,6 +751,9 @@ impl Worker {
         self.connected = true;
         if self.enabled {
             self.announce().await;
+        }
+        if let Some(link) = self.held.take() {
+            self.peek(&link).await;
         }
     }
 
@@ -1268,35 +1273,14 @@ fn empty_body() -> HeaderMap {
 /// fetch anything.
 async fn jam_token(link: &str) -> Option<String> {
     let link = link.trim();
-    let short = reqwest::Url::parse(link)
-        .ok()
-        .filter(|url| url.scheme() == "https" && url.host_str() == Some("spotify.link"));
-    let Some(short) = short else {
+    let short = crate::link::address(link)
+        .is_some_and(|url| url.scheme() == "https" && url.host_str() == Some("spotify.link"));
+    if !short {
         return token_in(link);
-    };
-    static CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
-    let client = CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(LINK_TIMEOUT)
-                .build()
-                .ok()
-        })
-        .as_ref()?;
-    let mut response = client.get(short).send().await.ok()?;
-    if let Some(token) = token_in(response.url().as_str()) {
-        return Some(token);
     }
-    // a short link sometimes answers with a page that names the session instead of redirecting,
-    // and only the start of a page is read
-    let mut page = Vec::new();
-    while page.len() < LINK_PAGE_LIMIT {
-        match response.chunk().await.ok()? {
-            Some(chunk) => page.extend_from_slice(&chunk),
-            None => break,
-        }
-    }
-    token_in(&String::from_utf8_lossy(&page))
+    // a short link sometimes answers with a page that names the session instead of redirecting
+    let followed = crate::link::follow(link).await?;
+    token_in(&followed.address).or_else(|| token_in(&followed.page))
 }
 
 /// The token that follows `socialsession/` in a link or a page, or `sessions/join/` in the

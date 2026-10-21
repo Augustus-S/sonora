@@ -4,6 +4,7 @@
 mod auth;
 mod client;
 mod decrypt;
+mod links;
 mod playback;
 mod wire;
 
@@ -98,6 +99,10 @@ impl MusicProvider for DeezerProvider {
 
     fn slug(&self) -> &'static str {
         "deezer"
+    }
+
+    fn link(&self, link: &str) -> Option<crate::link::Linked> {
+        links::read(link)
     }
 
     fn reach(&self) -> Option<String> {

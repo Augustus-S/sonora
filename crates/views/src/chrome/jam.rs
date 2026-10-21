@@ -181,7 +181,8 @@ impl JamJoin {
         let Some(link) = self.wanted(cx) else {
             return;
         };
-        self.devices.read(cx).peek(&link);
+        self.devices
+            .update(cx, |devices, cx| devices.peek(&link, cx));
         self.close(window, cx);
     }
 
