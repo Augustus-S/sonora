@@ -38,14 +38,18 @@ pub(crate) fn bytes(gb: u32) -> u64 {
 }
 
 /// Finds the master key, or makes and stores one on a first run, and unlocks `vault` with it.
-/// Until the task ends the vault keeps nothing, and a keychain that refuses leaves it locked.
+/// Until the task ends the vault keeps nothing, and a keychain that refuses leaves it locked for
+/// the session, with every kept track and download out of reach.
 pub(crate) fn unlock(vault: Arc<Vault>, cx: &mut App) -> Task<()> {
     cx.spawn(async move |cx| match master(&vault, cx).await {
         Ok(master) => {
             vault.unlock(&master);
             log::info!("vault: unlocked");
         }
-        Err(error) => log::warn!("vault: stays locked, no track is kept: {error:#}"),
+        Err(error) => {
+            vault.stay_locked();
+            log::warn!("vault: stays locked, no track is kept or played from disk: {error:#}");
+        }
     })
 }
 

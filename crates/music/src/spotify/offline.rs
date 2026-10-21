@@ -63,6 +63,7 @@ pub(crate) async fn download(
     id: &str,
     bitrate: Bitrate,
 ) -> Result<()> {
+    shelf.settle().await;
     if shelf.holds(id) {
         return Ok(());
     }

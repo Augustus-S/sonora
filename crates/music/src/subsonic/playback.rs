@@ -85,7 +85,7 @@ impl Subsonic {
 
     /// The track from the vault, when it was kept from this server in this format.
     async fn recall(&self, id: &str) -> Option<Loaded> {
-        let kept = self.shelf.as_ref()?.find(id, &self.variant())?;
+        let kept = self.shelf.as_ref()?.find(id, &self.variant()).await?;
         let facts = serde_json::from_slice::<Option<Facts>>(&kept.facts)
             .inspect_err(|error| {
                 log::warn!("playback: the kept facts of {id} do not read: {error}")

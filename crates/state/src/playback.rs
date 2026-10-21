@@ -863,7 +863,7 @@ impl Playback {
         if !track.playable {
             return self.failed(format!("{} is not available to stream", track.name), cx);
         }
-        if !is_local && Network::lost(cx) && !self.plays_offline(&id) {
+        if !is_local && Network::lost(cx) && !self.plays_offline(&id, cx) {
             return self.unreachable(&id, start, cx);
         }
         if self.engine_for(&id).is_none() {
@@ -2517,11 +2517,16 @@ impl Playback {
     }
 
     /// Whether a streaming track plays with no network, which takes a download the provider can
-    /// open offline.
-    fn plays_offline(&self, id: &str) -> bool {
-        self.engine
-            .as_deref()
-            .is_some_and(|engine| engine.plays_offline(id))
+    /// open offline. Until the vault has its key the engine cannot tell which tracks are
+    /// downloaded, so the list of downloads answers for it, and the engine waits for the key.
+    fn plays_offline(&self, id: &str, cx: &App) -> bool {
+        let Some(engine) = self.engine.as_deref() else {
+            return false;
+        };
+        match self.vault.unlocking() {
+            true => engine.plays_offline(id) && crate::downloads::downloaded(id, cx),
+            false => engine.plays_offline(id),
+        }
     }
 
     /// Removes the download of a streaming track.

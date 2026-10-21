@@ -478,7 +478,7 @@ impl Tidal {
     /// The track from the vault, when it was kept at the level asked for. A segmented track
     /// gets back the timeline it was kept with, so a seek splices exactly as it did then.
     async fn recall(&self, id: &str) -> Option<Loaded> {
-        let kept = self.shelf.as_ref()?.find(id, self.quality.id())?;
+        let kept = self.shelf.as_ref()?.find(id, self.quality.id()).await?;
         let facts = serde_json::from_slice::<Facts>(&kept.facts)
             .inspect_err(|error| {
                 log::warn!("playback: the kept facts of {id} do not read: {error}")

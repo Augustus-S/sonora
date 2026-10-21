@@ -228,7 +228,11 @@ impl YouTube {
     /// The track from the vault, when it was kept at the quality asked for. Nothing here
     /// reaches YouTube, so a kept track needs no player request and no token.
     async fn recall(&self, id: &str) -> Option<Loaded> {
-        let kept = self.shelf.as_ref()?.find(id, &variant(self.ceiling))?;
+        let kept = self
+            .shelf
+            .as_ref()?
+            .find(id, &variant(self.ceiling))
+            .await?;
         let facts = serde_json::from_slice::<Facts>(&kept.facts)
             .inspect_err(|error| {
                 log::warn!("playback: the kept facts of {id} do not read: {error}")

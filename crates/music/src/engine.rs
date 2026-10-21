@@ -328,7 +328,11 @@ impl Player for Handle {
     }
 
     fn plays_offline(&self, track_id: &str) -> bool {
-        self.offline && self.downloaded(track_id)
+        self.offline
+            && self
+                .shelf
+                .as_ref()
+                .is_some_and(|shelf| shelf.may_hold(track_id))
     }
 
     fn discard(&self, track_id: &str) {
@@ -1233,6 +1237,7 @@ fn normalisation(enabled: bool, loudness: Option<Loudness>) -> f32 {
 /// it until the last byte is in. A track already downloaded costs nothing.
 async fn download<F: Fetch>(fetch: &F, id: &str, progress: &Fraction) -> Result<()> {
     let shelf = fetch.shelf().context("this provider keeps nothing")?;
+    shelf.settle().await;
     if shelf.holds(id) {
         return Ok(());
     }

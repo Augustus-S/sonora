@@ -71,7 +71,7 @@ impl Deezer {
     /// The track from the vault, when it was kept at the level asked for. The bytes come back
     /// still striped and are decrypted on their way into memory, as they are off the network.
     async fn recall(&self, id: &str) -> Option<Loaded> {
-        let kept = self.shelf.as_ref()?.find(id, self.quality.id())?;
+        let kept = self.shelf.as_ref()?.find(id, self.quality.id()).await?;
         let facts = serde_json::from_slice::<Facts>(&kept.facts)
             .inspect_err(|error| {
                 log::warn!("playback: the kept facts of {id} do not read: {error}")

@@ -661,7 +661,9 @@ pub trait Player: Send + Sync {
         false
     }
 
-    /// Whether a track plays with no network, which only a download can.
+    /// Whether a track plays with no network, which only a download can. While the vault is
+    /// still unlocking, a player whose downloads play offline answers yes for every track, since
+    /// it cannot tell yet which are downloaded, so the caller checks its own list then.
     fn plays_offline(&self, track_id: &str) -> bool {
         self.downloaded(track_id)
     }

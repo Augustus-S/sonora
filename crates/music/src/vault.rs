@@ -39,6 +39,7 @@ use bytes::Bytes;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
 use ring::rand::{SecureRandom as _, SystemRandom};
 use ring::{hkdf, hmac};
+use tokio::sync::watch;
 
 use crate::stream::Source;
 
@@ -59,6 +60,9 @@ const SHARE: u64 = 4;
 const FOREIGN: &str = "players";
 /// How long a half-written entry left by a crash stays before a sweep removes it.
 const ABANDONED: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long a lookup made before the vault has its key waits for it. Reading the keychain takes
+/// milliseconds, so this only runs out while the keychain is prompting or stuck.
+const UNLOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// Tells apart the temporary files of two recordings running at once in one process.
 static WRITES: AtomicU64 = AtomicU64::new(0);
@@ -85,8 +89,9 @@ enum Block {
 /// listener asked to keep, in Sonora's data folder rather than its cache, and stay until they
 /// are discarded.
 ///
-/// The vault exists before its key does. Until [`unlock`](Self::unlock) runs, nothing is found
-/// and nothing is kept, so playback never waits on the keychain.
+/// The vault exists before its key does. Until [`unlock`](Self::unlock) or
+/// [`stay_locked`](Self::stay_locked) runs, nothing is kept, and a lookup from an engine waits up
+/// to [`UNLOCK_WAIT`] for the key rather than missing a track that is there.
 pub struct Vault {
     root: PathBuf,
     /// Where downloads live.
@@ -96,6 +101,8 @@ pub struct Vault {
     /// Whether tracks that only played are kept in the cache.
     caching: AtomicBool,
     keys: OnceLock<hkdf::Prk>,
+    /// Turns true once the vault has its key or will not get one this session.
+    settled: watch::Sender<bool>,
     /// What the cache takes on disk, once a sweep has counted it.
     used: Mutex<Option<u64>>,
     /// The tracks being downloaded, by shelf and id. Whatever arrives for one of them goes to
@@ -123,6 +130,7 @@ impl Vault {
             limit: AtomicU64::new(limit),
             caching: AtomicBool::new(true),
             keys: OnceLock::new(),
+            settled: watch::Sender::new(false),
             used: Mutex::new(None),
             wanted: Mutex::new(HashSet::new()),
         }
@@ -182,11 +190,38 @@ impl Vault {
         if self.keys.set(prk).is_err() {
             log::debug!("vault: already unlocked");
         }
+        self.settled.send_replace(true);
+    }
+
+    /// Gives up on the key for this session, so lookups stop waiting for it and miss at once.
+    pub fn stay_locked(&self) {
+        self.settled.send_replace(true);
     }
 
     /// Whether the vault has its key yet.
     pub fn unlocked(&self) -> bool {
         self.keys.get().is_some()
+    }
+
+    /// Whether the key is still being looked for, so which tracks are downloaded cannot be told
+    /// yet.
+    pub fn unlocking(&self) -> bool {
+        !*self.settled.borrow()
+    }
+
+    /// The key, waiting up to [`UNLOCK_WAIT`] for it while it is still being looked for.
+    async fn ready(&self) -> Option<&hkdf::Prk> {
+        if let Some(prk) = self.keys.get() {
+            return Some(prk);
+        }
+        let mut settled = self.settled.subscribe();
+        if tokio::time::timeout(UNLOCK_WAIT, settled.wait_for(|done| *done))
+            .await
+            .is_err()
+        {
+            log::warn!("vault: still locked after {UNLOCK_WAIT:?}, looking past it");
+        }
+        self.keys.get()
     }
 
     /// The part of the vault one provider keeps its tracks in. `provider` names its folder and
@@ -322,9 +357,10 @@ impl Shelf {
     /// moves to the downloads on the way out.
     ///
     /// `variant` is whatever changes the bytes for the same id, such as the quality asked for.
-    /// A download is found whatever the variant, since the listener asked for that copy.
-    pub(crate) fn find(&self, id: &str, variant: &str) -> Option<Kept> {
-        let prk = self.vault.keys.get()?;
+    /// A download is found whatever the variant, since the listener asked for that copy. A
+    /// lookup made while the vault is still unlocking waits for it, up to [`UNLOCK_WAIT`].
+    pub(crate) async fn find(&self, id: &str, variant: &str) -> Option<Kept> {
+        let prk = self.vault.ready().await?;
         if let Some(kept) = self.find_in(prk, Place::Pinned, id, variant) {
             return Some(kept);
         }
@@ -403,13 +439,25 @@ impl Shelf {
         self.vault.wanted().remove(&(self.provider, id.to_owned()));
     }
 
-    /// Whether track `id` has been downloaded.
+    /// Whether track `id` has been downloaded. It answers no while the vault is still unlocking,
+    /// so an engine calls [`settle`](Self::settle) first.
     pub(crate) fn holds(&self, id: &str) -> bool {
         let Some(prk) = self.vault.keys.get() else {
             return false;
         };
         self.spot(prk, Place::Pinned, id, "")
             .is_some_and(|(_, path)| path.is_file())
+    }
+
+    /// Whether track `id` has been downloaded, or may have been since the vault is still
+    /// unlocking and cannot tell yet.
+    pub(crate) fn may_hold(&self, id: &str) -> bool {
+        self.vault.unlocking() || self.holds(id)
+    }
+
+    /// Waits up to [`UNLOCK_WAIT`] for the vault to have its key or give up on it.
+    pub(crate) async fn settle(&self) {
+        self.vault.ready().await;
     }
 
     /// Removes the download of track `id`.

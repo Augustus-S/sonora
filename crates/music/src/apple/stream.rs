@@ -101,7 +101,11 @@ pub async fn prepare(
     widevine::require()?;
     let bearer = auth::bearer(http).await?;
     let variant = quality.within(QUALITIES).id();
-    let (mut media, resolved) = match shelf.and_then(|shelf| recall(shelf, adam_id, variant)) {
+    let recalled = match shelf {
+        Some(shelf) => recall(shelf, adam_id, variant).await,
+        None => None,
+    };
+    let (mut media, resolved) = match recalled {
         Some(recalled) => recalled,
         None => {
             log::info!("apple: resolving track {adam_id}");
@@ -164,8 +168,8 @@ pub async fn prepare(
 }
 
 /// The kept encrypted file of a track and what licensing it takes, when the vault has it.
-fn recall(shelf: &Shelf, adam_id: &str, variant: &str) -> Option<(Media, Resolved)> {
-    let kept = shelf.find(adam_id, variant)?;
+async fn recall(shelf: &Shelf, adam_id: &str, variant: &str) -> Option<(Media, Resolved)> {
+    let kept = shelf.find(adam_id, variant).await?;
     let facts = serde_json::from_slice::<Facts>(&kept.facts)
         .inspect_err(|error| log::warn!("apple: the kept facts of {adam_id} do not read: {error}"))
         .ok()?;

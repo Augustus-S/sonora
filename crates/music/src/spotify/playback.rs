@@ -309,6 +309,12 @@ impl MusicPlayer for Engine {
             .is_some_and(|shelf| shelf.holds(track_id))
     }
 
+    fn plays_offline(&self, track_id: &str) -> bool {
+        self.shelf
+            .as_ref()
+            .is_some_and(|shelf| shelf.may_hold(track_id))
+    }
+
     fn discard(&self, track_id: &str) {
         if let Some(shelf) = &self.shelf {
             shelf.discard(track_id);
