@@ -135,7 +135,7 @@ impl FullscreenView {
         let me = cx.entity_id();
         let playlist_scrollbar = cx.new(|_| Scrollbar::inset().watching(me));
 
-        let mut this = Self {
+        Self {
             playback,
             queue,
             cover,
@@ -173,13 +173,27 @@ impl FullscreenView {
             visualizer: VisualizerDrive::default(),
             root_bounds: Rc::new(Cell::new(Bounds::default())),
             meta_bounds: Rc::new(Cell::new(Bounds::default())),
-        };
-        this.stir(cx);
-        this
+        }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         window.focus(&self.focus, cx);
+    }
+
+    /// Starts the idle clock as the view opens and stops it as the view closes, so it never
+    /// hides the cursor over the workspace. Either way the view next shows with its controls up.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.flip(true);
+        self.hidden = SpringState {
+            position: 0.,
+            velocity: 0.,
+        };
+        self.last_pos = None;
+        match shown {
+            true => self.stir(cx),
+            false => self.rest = None,
+        }
+        cx.notify();
     }
 
     fn show(&mut self, panel: Option<SideTab>, cx: &mut Context<Self>) {

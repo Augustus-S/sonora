@@ -794,6 +794,9 @@ impl Root {
         let opening = matches!(destination, Destination::Fullscreen);
         if opening != matches!(self.view, RootView::Fullscreen) {
             self.os_follow = Some(opening);
+            self.shells
+                .fullscreen
+                .update(cx, |fullscreen, cx| fullscreen.set_shown(opening, cx));
         }
         // Leaving settings is what clears the note about the last scan, so every move tells it.
         let settings = destination.in_settings();
