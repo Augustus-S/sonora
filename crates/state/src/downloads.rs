@@ -53,6 +53,17 @@ struct Set {
     tracks: Vec<Track>,
 }
 
+impl Set {
+    /// The ids of the tracks in the set that can be downloaded, which are the only ones its
+    /// progress counts. The others are kept so the page still lists them.
+    fn ids(&self) -> impl Iterator<Item = &str> + Clone {
+        self.tracks
+            .iter()
+            .filter(|track| downloadable(track))
+            .filter_map(|track| track.id.as_deref())
+    }
+}
+
 /// A downloaded track, or one on its way.
 struct Entry {
     /// Whether the listener asked for this track on its own rather than as part of a set, which
@@ -175,14 +186,12 @@ impl Downloads {
         self.tracks.get(id).is_some_and(|entry| entry.done)
     }
 
-    /// Where a downloaded album or playlist stands, taken from the tracks in it. `None` when it
-    /// was never downloaded as a whole.
+    /// Where a downloaded album or playlist stands, taken from the tracks in it that can be
+    /// downloaded. `None` when it was never downloaded as a whole.
     pub fn set(&self, kind: Collection, id: &str) -> Option<Progress> {
         let set = self.sets.get(&(kind, id.to_owned()))?;
         let states: Vec<Progress> = set
-            .tracks
-            .iter()
-            .filter_map(|track| track.id.as_deref())
+            .ids()
             .map(|id| self.track(id).unwrap_or(Progress::Failed))
             .collect();
         Some(if states.iter().all(|state| *state == Progress::Done) {
@@ -196,10 +205,10 @@ impl Downloads {
         })
     }
 
-    /// How many of a downloaded set's tracks are in, and how many it has.
+    /// How many of a downloaded set's tracks are in, and how many of them can be downloaded.
     pub fn counts(&self, kind: Collection, id: &str) -> Option<(usize, usize)> {
         let set = self.sets.get(&(kind, id.to_owned()))?;
-        let ids = set.tracks.iter().filter_map(|track| track.id.as_deref());
+        let ids = set.ids();
         let done = ids.clone().filter(|id| self.has(id)).count();
         Some((done, ids.count()))
     }
@@ -210,11 +219,7 @@ impl Downloads {
         let Some(set) = self.sets.get(&(kind, id.to_owned())) else {
             return 0.;
         };
-        let ids: Vec<&str> = set
-            .tracks
-            .iter()
-            .filter_map(|track| track.id.as_deref())
-            .collect();
+        let ids: Vec<&str> = set.ids().collect();
         if ids.is_empty() {
             return 0.;
         }

@@ -724,9 +724,10 @@ pub(crate) fn album_menu(
     let nexting = playback.clone();
     let queueing = playback.clone();
     let lasting = playback;
-    let download = (!music::is_local_id(&album_id))
-        .then(|| set_download_item(Collection::Album, Saved::Album(album.clone()), cx))
-        .flatten();
+    let download = match music::is_local_id(&album_id) {
+        true => Vec::new(),
+        false => set_download_items(Collection::Album, Saved::Album(album.clone()), cx),
+    };
     let add_to_playlist = MenuItem::new("add-album-to-playlist", t!("menu-add-to-playlist"))
         .icon("icons/square-plus.svg")
         .submenu(
@@ -937,9 +938,10 @@ pub(crate) fn playlist_menu(playlist: Playlist, playback: Entity<Playback>, cx: 
     let public = playlist.public;
     let pinnable = playlist.pin();
     let imported = music::is_local_id(&playlist.id);
-    let download = (!imported)
-        .then(|| set_download_item(Collection::Playlist, Saved::Playlist(playlist.clone()), cx))
-        .flatten();
+    let download = match imported {
+        true => Vec::new(),
+        false => set_download_items(Collection::Playlist, Saved::Playlist(playlist.clone()), cx),
+    };
     let visibility = (!imported).then(|| {
         MenuItem::new(
             "playlist-visibility",
@@ -1348,7 +1350,8 @@ fn download_item(tracks: &[Track], ids: &[String], cx: &App) -> Option<MenuItem>
 }
 
 /// Downloads a whole album or playlist, or removes its download once it is there or on its way.
-fn set_download_item(kind: Collection, saved: Saved, cx: &App) -> Option<MenuItem> {
+/// A download that failed offers both, so it can be tried again or let go.
+fn set_download_items(kind: Collection, saved: Saved, cx: &App) -> Vec<MenuItem> {
     let sonora = Sonora::global(cx);
     let downloads = sonora.downloads.clone();
     let id = match &saved {
@@ -1356,24 +1359,27 @@ fn set_download_item(kind: Collection, saved: Saved, cx: &App) -> Option<MenuIte
         Saved::Playlist(playlist) => playlist.id.clone(),
     };
     let progress = downloads.read(cx).set(kind, &id);
-    if progress.is_none() && !sonora.session.read(cx).capabilities().downloads {
-        return None;
-    }
-    Some(match progress {
-        Some(Progress::Done | Progress::Running | Progress::Waiting) => {
-            MenuItem::new("remove-set-download", t!("menu-remove-download"))
-                .icon("icons/trash-2.svg")
-                .on_click(move |_, _, cx| {
-                    downloads.update(cx, |downloads, cx| downloads.remove_set(kind, &id, cx))
-                })
-        }
-        None | Some(Progress::Failed) => MenuItem::new("set-download", t!("menu-download"))
+    let offered = match progress {
+        None | Some(Progress::Failed) => sonora.session.read(cx).capabilities().downloads,
+        Some(Progress::Done | Progress::Running | Progress::Waiting) => false,
+    };
+    let download = offered.then(|| {
+        let downloads = downloads.clone();
+        MenuItem::new("set-download", t!("menu-download"))
             .icon("icons/download.svg")
             .on_click(move |_, _, cx| {
                 downloads.update(cx, |downloads, cx| match &saved {
                     Saved::Album(album) => downloads.download_album_by_id(album, cx),
                     Saved::Playlist(playlist) => downloads.download_playlist_by_id(playlist, cx),
                 })
-            }),
-    })
+            })
+    });
+    let remove = progress.is_some().then(|| {
+        MenuItem::new("remove-set-download", t!("menu-remove-download"))
+            .icon("icons/trash-2.svg")
+            .on_click(move |_, _, cx| {
+                downloads.update(cx, |downloads, cx| downloads.remove_set(kind, &id, cx))
+            })
+    });
+    download.into_iter().chain(remove).collect()
 }
