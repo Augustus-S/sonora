@@ -185,6 +185,12 @@ impl CatalogSource {
         self.artists.load(id, self.backend.artist(id)).await
     }
 
+    /// Drops the cached artist and the rest of their page, so the next read asks the provider.
+    pub(crate) async fn invalidate_artist(&self, id: &str) {
+        self.artists.invalidate(id).await;
+        self.catalogues.invalidate(id).await;
+    }
+
     pub(crate) fn peek_artist_catalogue(&self, id: &str) -> Option<Arc<ArtistCatalogue>> {
         self.catalogues.peek(id)
     }
@@ -272,8 +278,31 @@ impl CatalogSource {
         self.genres.load(id, self.backend.genre(id)).await
     }
 
+    pub(crate) async fn invalidate_genre(&self, id: &str) {
+        self.genres.invalidate(id).await;
+    }
+
     pub(crate) fn peek_song(&self, id: &str) -> Option<Arc<SongPage>> {
         self.songs.peek(id)
+    }
+
+    /// Drops the cached song page, with the album and artist it was built from, so the next
+    /// read asks the provider for all three.
+    pub(crate) async fn invalidate_song(&self, id: &str) {
+        if let Some(page) = self.songs.peek(id) {
+            if let Some(album) = page.track.album_id.as_deref() {
+                self.albums.invalidate(album).await;
+            }
+            if let Some(artist) = page
+                .track
+                .artist_refs
+                .first()
+                .and_then(|first| first.id.as_deref())
+            {
+                self.artist_profiles.invalidate(artist).await;
+            }
+        }
+        self.songs.invalidate(id).await;
     }
 
     pub(crate) async fn song(&self, id: &str) -> Result<Arc<SongPage>> {
