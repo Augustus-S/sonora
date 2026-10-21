@@ -209,6 +209,12 @@ impl Vault {
         *self.used.lock().unwrap_or_else(|held| held.into_inner()) = Some(0);
     }
 
+    /// What the cache and the downloads take on disk, in bytes, the cache counting the files
+    /// players keep for themselves. It walks both folders, so call it off the main thread.
+    pub fn usage(&self) -> (u64, u64) {
+        (footprint(&self.root), footprint(&self.pinned))
+    }
+
     /// Removes every download.
     pub fn forget_downloads(&self) {
         match fs::remove_dir_all(&self.pinned) {
@@ -922,6 +928,21 @@ fn private_file(path: &Path) -> Result<File> {
 /// Sonora's vault folder, `$XDG_CACHE_HOME/sonora/vault`.
 fn standard_root() -> PathBuf {
     crate::credentials::root().join("vault")
+}
+
+/// What everything under `path` takes on disk, in bytes. A folder that cannot be read counts as
+/// empty.
+fn footprint(path: &Path) -> u64 {
+    fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|item| match item.file_type() {
+            Ok(kind) if kind.is_dir() => footprint(&item.path()),
+            Ok(_) => item.metadata().map_or(0, |metadata| metadata.len()),
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 /// Sonora's downloads folder, `$XDG_DATA_HOME/sonora/downloads`.

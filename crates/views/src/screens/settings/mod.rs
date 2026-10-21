@@ -38,6 +38,7 @@ mod preview;
 mod rows;
 mod scrobbling;
 mod sound;
+mod storage;
 mod themes;
 
 pub use header::SettingsHeader;
@@ -89,6 +90,8 @@ enum Slot {
     Gapless,
     KeepTracks,
     CacheSize,
+    CacheUsage,
+    DownloadsUsage,
     Sleep,
     StayAwake,
     StreamQuality,
@@ -294,6 +297,7 @@ impl SettingsView {
         cx.observe(&settings, |this, _, cx| this.remeasure(cx))
             .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
+        playback.update(cx, |playback, cx| playback.measure_storage(cx));
         cx.observe(&Scan::global(cx), |this, _, cx| this.remeasure(cx))
             .detach();
         let chrome = Chrome::entity(cx);
@@ -483,6 +487,7 @@ impl SettingsView {
             SettingsPage::Lyrics => self.lyrics_groups(),
             SettingsPage::Playback => self.playback_groups(cx),
             SettingsPage::Sound => self.sound_groups(cx),
+            SettingsPage::Storage => self.storage_groups(cx),
             SettingsPage::Discord => self.discord_groups(cx),
             SettingsPage::Scrobbling => self.scrobbling_groups(cx),
             SettingsPage::General => self.general_groups(cx),
@@ -745,6 +750,11 @@ impl SettingsView {
                 t!("settings-keep-tracks-detail"),
             ),
             Slot::CacheSize => (t!("settings-cache-size"), t!("settings-cache-size-detail")),
+            Slot::CacheUsage => (t!("settings-cache-used"), t!("settings-cache-used-detail")),
+            Slot::DownloadsUsage => (
+                t!("settings-downloads-used"),
+                t!("settings-downloads-used-detail"),
+            ),
             Slot::StreamQuality => (
                 t!("settings-stream-quality"),
                 t!("settings-stream-quality-detail"),
@@ -905,6 +915,8 @@ impl SettingsView {
             Slot::Gapless => self.gapless_row(cx),
             Slot::KeepTracks => self.keep_tracks_row(cx),
             Slot::CacheSize => self.cache_size_row(cx),
+            Slot::CacheUsage => self.cache_usage_row(cx),
+            Slot::DownloadsUsage => self.downloads_usage_row(cx),
             Slot::StreamQuality => self.stream_quality_row(cx),
             Slot::StreamFormat => self.stream_format_row(cx),
             Slot::StreamBitrate => self.stream_bitrate_row(cx),

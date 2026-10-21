@@ -414,10 +414,12 @@ pub struct Playback {
     vault: Arc<Vault>,
     /// Reads the vault's master key from the keychain. The vault keeps nothing until it ends.
     _unlock: Task<()>,
-    /// Removes the cached tracks after caching was turned off.
-    forget: Option<Task<()>>,
     /// Evicts what no longer fits after the cache limit came down.
     resize: Option<Task<()>>,
+    /// What the cache and the downloads take on disk, in bytes, as last measured.
+    usage: Option<(u64, u64)>,
+    /// Measures the vault, or clears its cache and then measures it.
+    measuring: Option<Task<()>>,
     /// The `state::Equalizer`'s reader, shared with every engine started here, so a change
     /// reaches the output without a restart.
     equalizer: music::Equalizer,
@@ -581,8 +583,9 @@ impl Playback {
             cache_gb,
             vault,
             _unlock: unlock,
-            forget: None,
             resize: None,
+            usage: None,
+            measuring: None,
             equalizer,
             meter,
             analyzer: Analyzer::default(),
@@ -2399,6 +2402,42 @@ impl Playback {
         self.cache_gb
     }
 
+    /// What the cache and the downloads take on disk, in bytes, as last measured.
+    pub fn usage(&self) -> Option<(u64, u64)> {
+        self.usage
+    }
+
+    /// Measures what the cache and the downloads take on disk, off the main thread.
+    pub fn measure_storage(&mut self, cx: &mut Context<Self>) {
+        let vault = self.vault.clone();
+        self.measured(cx, move || vault.usage());
+    }
+
+    /// Removes every cached track, downloads aside, and measures the vault again after.
+    pub fn clear_cache(&mut self, cx: &mut Context<Self>) {
+        let vault = self.vault.clone();
+        self.measured(cx, move || {
+            vault.forget();
+            vault.usage()
+        });
+    }
+
+    /// Runs `work` off the main thread and keeps the usage it answers.
+    fn measured(
+        &mut self,
+        cx: &mut Context<Self>,
+        work: impl FnOnce() -> (u64, u64) + Send + 'static,
+    ) {
+        self.measuring = Some(cx.spawn(async move |this, cx| {
+            let usage = cx.background_executor().spawn(async move { work() }).await;
+            this.update(cx, |this, cx| {
+                this.usage = Some(usage);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
     /// Changes how many gigabytes the cache of played tracks may take. A lower limit evicts
     /// the least recently played tracks right away. Downloads do not count toward it.
     pub fn set_cache_gb(&mut self, gb: u32, cx: &mut Context<Self>) {
@@ -2459,8 +2498,7 @@ impl Playback {
         self.settings
             .update(cx, |settings, cx| settings.set_keep_tracks(on, cx));
         if !on {
-            let vault = self.vault.clone();
-            self.forget = Some(cx.background_spawn(async move { vault.forget() }));
+            self.clear_cache(cx);
         }
         cx.notify();
     }
