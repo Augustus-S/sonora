@@ -117,9 +117,10 @@ const CONNECT: Duration = Duration::from_secs(10);
 const STALL: Duration = Duration::from_secs(20);
 
 /// The sub-statuses of a `401` that are about the token rather than one thing it asked for: a
-/// token whose session Tidal has ended, an invalid one, and an expired one. A `401` naming none
-/// of them is renewed once too, but only these, or no sub-status at all, end the session.
-const TOKEN_TROUBLE: [u64; 3] = [6004, 11002, 11003];
+/// token whose session Tidal has ended, a missing or invalid one, and an expired one. Only these,
+/// or no sub-status at all, renew the token. Any other `401` on a resource, such as 4005 for a
+/// track Tidal will not play here, is that resource's own refusal.
+const TOKEN_TROUBLE: [u64; 4] = [6004, 11001, 11002, 11003];
 
 /// Held while a token is renewed, by every session in the process. Two sessions holding the
 /// same refresh token then never spend it at once, and the second picks up the first's renewal.
@@ -316,10 +317,12 @@ impl TidalClient {
             .await
     }
 
-    /// One call, answered with its response once it succeeds. Any `401` renews the token and
-    /// asks once more, and so does a call Tidal asks to be slowed down. A `401` that is about
-    /// the session after renewing moves an app client session to the device client and asks
-    /// again, and after that it is the sign-in being gone.
+    /// One call, answered with its response once it succeeds. A `401` about the token renews
+    /// it and asks once more, and so does a call Tidal asks to be slowed down. A `401` about one
+    /// resource, such as a track not playable in the listener's country, comes back as the
+    /// call's error without touching the token. A `401` that is still about the session after
+    /// renewing moves an app client session to the device client and asks again, and after
+    /// that it is the sign-in being gone.
     async fn exchange(
         &self,
         method: Method,
@@ -375,25 +378,21 @@ impl TidalClient {
             }
             let refusal: Value = response.json().await.unwrap_or(Value::Null);
             let sub_status = wire::number(&refusal, "subStatus").unwrap_or(0);
-            if status == StatusCode::UNAUTHORIZED {
+            let session =
+                scope == Scope::Session || sub_status == 0 || TOKEN_TROUBLE.contains(&sub_status);
+            if status == StatusCode::UNAUTHORIZED && session {
                 if rejected.is_none() {
                     rejected = Some(token);
                     continue;
                 }
-                let session = scope == Scope::Session
-                    || sub_status == 0
-                    || TOKEN_TROUBLE.contains(&sub_status);
-                if session {
-                    if !demoted && self.inner.credentials.read().await.lane == Lane::App {
-                        demoted = true;
-                        rejected = Some(token);
-                        continue;
-                    }
-                    self.inner.revoked.store(true, Ordering::Relaxed);
-                    return Err(SignInFailure(SignInProblem::Credentials)).with_context(|| {
-                        format!("tidal refused the session for {}", path_of(url))
-                    });
+                if !demoted && self.inner.credentials.read().await.lane == Lane::App {
+                    demoted = true;
+                    rejected = Some(token);
+                    continue;
                 }
+                self.inner.revoked.store(true, Ordering::Relaxed);
+                return Err(SignInFailure(SignInProblem::Credentials))
+                    .with_context(|| format!("tidal refused the session for {}", path_of(url)));
             }
             let message = wire::text(&refusal, "userMessage").unwrap_or("no reason given");
             if auth::transient(status) {
