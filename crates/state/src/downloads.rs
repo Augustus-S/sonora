@@ -605,8 +605,10 @@ impl Downloads {
                     self.gap.as_secs()
                 );
                 self.resting = Some(Instant::now() + wait);
+                // The track goes to the back of the line, so one the provider keeps refusing
+                // cannot hold up every other download behind it.
                 if self.tracks.contains_key(&id) {
-                    self.queue.push_front(id);
+                    self.queue.push_back(id);
                 }
             }
             Err(error) => {

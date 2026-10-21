@@ -6,7 +6,7 @@
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use librespot_core::audio_key::AudioKey;
+use librespot_core::audio_key::{AudioKey, AudioKeyError};
 use librespot_core::{FileId, Session, SpotifyId};
 use librespot_playback::config::Bitrate;
 use librespot_playback::offline::{self, Offline, OfflineTrack};
@@ -65,12 +65,7 @@ pub(crate) async fn download(
     }
     let fetched = match offline::download(session, track_uri(id)?, bitrate).await {
         Ok(fetched) => fetched,
-        Err(error) if session.audio_key().is_throttled() => {
-            return Err(anyhow::Error::new(error).context(Throttled));
-        }
-        Err(error) => {
-            return Err(anyhow::Error::new(error).context(format!("cannot download {id}")));
-        }
+        Err(error) => return Err(failure(error, id)),
     };
     let facts = serde_json::to_vec(&Facts {
         metadata: STANDARD.encode(&fetched.metadata),
@@ -83,6 +78,25 @@ pub(crate) async fn download(
     tokio::task::spawn_blocking(move || shelf.pin(&id, facts, &fetched.file))
         .await
         .context("the download stopped")?
+}
+
+/// Whether the audio key was refused for now in this very attempt, which is the one failure
+/// worth waiting out. The session's sticky throttled flag is not asked, since it stays set until
+/// a later key is served and would make any other failure read as throttling.
+fn refused_for_now(error: &librespot_core::Error) -> bool {
+    matches!(
+        error.error.downcast_ref::<AudioKeyError>(),
+        Some(AudioKeyError::Refused(_))
+    )
+}
+
+/// A failed download as the queue sees it, marked [`Throttled`] when Spotify only asked it to
+/// wait.
+fn failure(error: librespot_core::Error, id: &str) -> anyhow::Error {
+    match refused_for_now(&error) {
+        true => anyhow::Error::new(error).context(Throttled),
+        false => anyhow::Error::new(error).context(format!("cannot download {id}")),
+    }
 }
 
 /// The bytes a run of hex digits spells, or `None` for anything else.
