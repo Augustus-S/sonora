@@ -690,9 +690,11 @@ impl Render for PlayerBar {
         let spread = faces.update(cx, |faces, cx| faces.level(window, cx));
         let frosting = ui::blurring(cx);
         let devices = Sonora::global(cx).devices.read(cx);
+        // A strip floats over the page's last rows, so it keeps the pointer from reaching them.
         let strip = |id: &'static str| {
             div()
                 .id(id)
+                .occlude()
                 .absolute()
                 .left_0()
                 .bottom(height)
@@ -721,7 +723,6 @@ impl Render for PlayerBar {
             let anchor = self.faces_at.clone();
             let measured = self.faces_at.clone();
             strip("jam-banner")
-                .occlude()
                 .child(
                     gpui::svg()
                         .path(icons::path("icons/users-round-collaboration.svg"))

@@ -924,8 +924,9 @@ impl Aside {
     }
 
     /// The queue of the device that has playback, which is read only: what is playing, what
-    /// people queued with who did, and what follows from the album or playlist.
-    fn other(steered: &Steered, cx: &App) -> impl IntoElement {
+    /// people queued with who did, and what follows from the album or playlist. `bottom` is the
+    /// room kept under the last row so it scrolls clear of the player bar and its strip.
+    fn other(steered: &Steered, bottom: Pixels, cx: &App) -> impl IntoElement {
         let theme = *cx.theme();
         let (queued, following) = steered
             .upcoming
@@ -958,6 +959,7 @@ impl Aside {
             .flex_1()
             .min_h_0()
             .px_2()
+            .pb(bottom)
             .overflow_y_scroll()
             .when_some(steered.track.as_ref(), |this, track| {
                 this.child(section_label("queue-now-playing", cx))
@@ -2087,7 +2089,7 @@ impl Render for Aside {
                     })
                     .when_some(
                         steered.as_ref().filter(|_| self.tab == SideTab::Queue),
-                        |this, steered| this.child(Self::other(steered, cx)),
+                        |this, steered| this.child(Self::other(steered, self.bottom(cx), cx)),
                     )
                     .when(
                         self.tab == SideTab::Queue && steered.is_none() && empty,
