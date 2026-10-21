@@ -7,9 +7,12 @@ use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use librespot_core::audio_key::{AudioKey, AudioKeyError};
-use librespot_core::{FileId, Session, SpotifyId};
+use librespot_core::error::ErrorKind;
+use librespot_core::{FileId, Session, SpotifyId, SpotifyUri};
 use librespot_playback::config::Bitrate;
-use librespot_playback::offline::{self, Offline, OfflineTrack};
+use librespot_playback::offline::{self, Download, Offline, OfflineTrack};
+use librespot_protocol::metadata::Track as TrackMessage;
+use protobuf::Message as _;
 use serde::{Deserialize, Serialize};
 
 use crate::Throttled;
@@ -63,8 +66,16 @@ pub(crate) async fn download(
     if shelf.holds(id) {
         return Ok(());
     }
-    let fetched = match offline::download(session, track_uri(id)?, bitrate).await {
+    let uri = track_uri(id)?;
+    let fetched = match offline::download(session, uri.clone(), bitrate).await {
         Ok(fetched) => fetched,
+        Err(error) if error.kind == ErrorKind::Unavailable && !refused_for_now(&error) => {
+            match relinked(session, &uri, bitrate).await {
+                Some(Ok(fetched)) => fetched,
+                Some(Err(alternative)) => return Err(failure(alternative, id)),
+                None => return Err(failure(error, id)),
+            }
+        }
         Err(error) => return Err(failure(error, id)),
     };
     let facts = serde_json::to_vec(&Facts {
@@ -78,6 +89,36 @@ pub(crate) async fn download(
     tokio::task::spawn_blocking(move || shelf.pin(&id, facts, &fetched.file))
         .await
         .context("the download stopped")?
+}
+
+/// Fetches a track Spotify relinked for this market through the first of its alternatives that
+/// downloads, the way playback falls back to them. `None` when the track has files of its own or
+/// no alternatives, so the failure of the track itself stands. The download is still kept under
+/// the id the listener asked for, which is the one the player looks up.
+async fn relinked(
+    session: &Session,
+    uri: &SpotifyUri,
+    bitrate: Bitrate,
+) -> Option<Result<Download, librespot_core::Error>> {
+    let metadata = session.spclient().get_track_metadata(uri).await.ok()?;
+    let track = TrackMessage::parse_from_bytes(&metadata).ok()?;
+    if !track.file.is_empty() {
+        return None;
+    }
+    let mut last = None;
+    for alternative in &track.alternative {
+        let Ok(id) = SpotifyId::from_raw(alternative.gid()) else {
+            continue;
+        };
+        match offline::download(session, SpotifyUri::Track { id }, bitrate).await {
+            Ok(fetched) => {
+                log::debug!("spotify: {uri} downloads as its alternative {id}");
+                return Some(Ok(fetched));
+            }
+            Err(error) => last = Some(Err(error)),
+        }
+    }
+    last
 }
 
 /// Whether the audio key was refused for now in this very attempt, which is the one failure
