@@ -154,6 +154,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A Spotify song you skip to, or seek back to the start of, now plays from the start instead of
+  sometimes picking up seconds in.
 - While controlling another Spotify device, the volume slider follows that device and responds
   immediately to changes. Fullscreen shows its album art and hides the local audio visualizer.
 - Spotify liked songs and saved albums now load for accounts with hundreds of playlists, instead
