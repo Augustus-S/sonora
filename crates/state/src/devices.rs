@@ -599,7 +599,15 @@ impl Devices {
             .as_ref()
             .and_then(|elsewhere| elsewhere.track.as_ref())
             != wanted.as_ref();
+        let started = roster.elsewhere.as_ref().is_some_and(|e| e.playing)
+            && !self.roster.elsewhere.as_ref().is_some_and(|e| e.playing);
         self.roster = roster;
+        // playback taken for a local file is never reported, so the network never releases it,
+        // and another device starting to play is what takes it back
+        if started && self.claimed && self.sent.is_none() {
+            self.claimed = false;
+            self.here(cx, |playback, cx| playback.pause(cx));
+        }
         // what failed to read is asked for again once the other device plays something else
         if moved {
             self.unreadable.clear();
@@ -958,13 +966,21 @@ impl Devices {
         (same != *sent).then(|| differs(&same, sent))
     }
 
+    /// What this app plays, for the report to the other devices, once it took playback. Playing
+    /// anything here takes it, a local file too, though a local file is never reported.
     fn now_playing(&mut self, cx: &App) -> Option<NowPlaying> {
         let playback = self.playback.read(cx);
         let track = playback.track()?;
-        let id = track.id.clone().filter(|id| !music::is_local_id(id))?;
+        let id = track.id.clone()?;
+        let local = music::is_local_id(&id);
         let playing = playback.wants_playing();
-        self.claimed |= playing;
-        if !self.claimed {
+        if playing && !self.claimed {
+            self.claimed = true;
+            if local {
+                self.pause_elsewhere();
+            }
+        }
+        if !self.claimed || local {
             return None;
         }
 
@@ -988,6 +1004,19 @@ impl Devices {
             shuffle: queue.shuffle(),
             repeat: mode_of(playback.repeat()),
         })
+    }
+
+    /// Pauses the other device that has playback while it plays. A report takes playback off it
+    /// on its own, but a local file sends none and would otherwise play over it.
+    fn pause_elsewhere(&self) {
+        let playing = self
+            .roster
+            .elsewhere
+            .as_ref()
+            .filter(|elsewhere| elsewhere.playing);
+        if let (Some(link), Some(elsewhere)) = (&self.link, playing) {
+            link.control(&elsewhere.device.id, Command::Pause);
+        }
     }
 }
 
