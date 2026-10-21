@@ -103,6 +103,9 @@ struct Session {
     /// The `checkForm` token every later gateway call carries.
     api_token: String,
     license_token: String,
+    /// Where in `FORMATS` the best format the plan covers sits. It stays 0, every format, when
+    /// the account says nothing about its plan.
+    plan: usize,
 }
 
 #[derive(Clone)]
@@ -181,6 +184,7 @@ impl DeezerClient {
                     },
                     api_token: String::new(),
                     license_token: String::new(),
+                    plan: 0,
                 }),
                 secret: OnceLock::new(),
                 slot: Mutex::new(Instant::now()),
@@ -226,11 +230,21 @@ impl DeezerClient {
         let license_token = wire::text(&user["OPTIONS"], &["license_token"])
             .unwrap_or_default()
             .to_owned();
+        let plan = plan(&user["OPTIONS"]);
         let mut session = self.inner.session.write().await;
         session.profile = profile;
         session.api_token = api_token;
         session.license_token = license_token;
+        session.plan = plan;
         Ok(())
+    }
+
+    /// The format a track is first offered in at `quality` on this account's plan, which is the
+    /// one it streams as unless the track lacks it.
+    pub async fn served(&self, quality: Quality) -> &'static str {
+        let plan = self.inner.session.read().await.plan;
+        let first = FORMATS.len() - formats_from(quality).len();
+        FORMATS[first.max(plan).min(FORMATS.len() - 1)]
     }
 
     async fn user_id(&self) -> String {
@@ -1026,6 +1040,28 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Where in `FORMATS` the best format a plan covers sits, from the `OPTIONS` of
+/// `deezer.getUserData`. A level the options do not mention counts as covered, so an account
+/// that says nothing about its plan is asked for every format.
+fn plan(options: &Value) -> usize {
+    let covers = |keys: [&str; 2]| {
+        let flags = keys
+            .iter()
+            .filter_map(|key| options.get(key))
+            .filter_map(|value| value.as_bool().or_else(|| value.as_u64().map(|on| on != 0)))
+            .collect::<Vec<_>>();
+        flags.is_empty() || flags.contains(&true)
+    };
+    match (
+        covers(["web_lossless", "mobile_lossless"]),
+        covers(["web_hq", "mobile_hq"]),
+    ) {
+        (true, _) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
+    }
 }
 
 /// The formats to try for a level, from its own down to the lowest.

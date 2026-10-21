@@ -68,10 +68,12 @@ struct Facts {
 }
 
 impl Deezer {
-    /// The track from the vault, when it was kept at the level asked for. The bytes come back
+    /// The track from the vault, when it was kept as `served`, the format the account's plan is
+    /// offered at the level asked for. Keying by that rather than by the level means a copy a
+    /// smaller plan was served is not replayed once the plan covers more. The bytes come back
     /// still striped and are decrypted on their way into memory, as they are off the network.
-    async fn recall(&self, id: &str) -> Option<Loaded> {
-        let kept = self.shelf.as_ref()?.find(id, self.quality.id()).await?;
+    async fn recall(&self, id: &str, served: &str) -> Option<Loaded> {
+        let kept = self.shelf.as_ref()?.find(id, served).await?;
         let facts = serde_json::from_slice::<Facts>(&kept.facts)
             .inspect_err(|error| {
                 log::warn!("playback: the kept facts of {id} do not read: {error}")
@@ -109,7 +111,8 @@ impl Fetch for Deezer {
     /// chosen level or the best below it the license covers. The download starts decrypting as
     /// it arrives.
     async fn load(&self, id: &str) -> Result<Loaded> {
-        if let Some(loaded) = self.recall(id).await {
+        let served = self.client.served(self.quality).await;
+        if let Some(loaded) = self.recall(id, served).await {
             return Ok(loaded);
         }
         let opened = self.client.open_stream(id, self.quality).await?;
@@ -123,7 +126,7 @@ impl Fetch for Deezer {
                 };
                 shelf.keep(
                     id,
-                    self.quality.id(),
+                    served,
                     move || serde_json::to_vec(&facts).ok(),
                     opened.response,
                 )
