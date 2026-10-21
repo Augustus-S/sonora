@@ -3,7 +3,7 @@ use gpui::{
     AnyElement, Context, Entity, Pixels, Render, ScrollHandle, SharedString, Window, div, px,
 };
 use i18n::t;
-use state::{Playback, Profile, Sonora};
+use state::{Playback, Profile};
 use ui::{ActiveTheme as _, Card, Scrollbar, Scroller, heading, vacant};
 
 use crate::chrome::Chrome;
@@ -42,9 +42,6 @@ impl UserView {
         .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
 
-        cards::follow_downloaded(cx);
-        let library = Sonora::global(cx).library.clone();
-        cx.observe(&library, |_, _, cx| cx.notify()).detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 

@@ -1091,7 +1091,7 @@ impl LibraryView {
                 .map(|album| (display, album))
         });
 
-        AlbumGrid::new("library-album", room, albums, self.playback.clone()).shelved()
+        AlbumGrid::new("library-album", room, albums, self.playback.clone())
     }
 
     fn playlist_card(

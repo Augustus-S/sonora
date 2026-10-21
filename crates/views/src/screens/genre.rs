@@ -47,9 +47,6 @@ impl GenreView {
         .detach();
         cx.observe(&playback, |_, _, cx| cx.notify()).detach();
         cx.observe(&shelves, |_, _, cx| cx.notify()).detach();
-        crate::shared::cards::follow_downloaded(cx);
-        let library = Sonora::global(cx).library.clone();
-        cx.observe(&library, |_, _, cx| cx.notify()).detach();
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 

@@ -19,9 +19,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   any right-click menu. A ring beside each song shows how far its download has got. Downloads
   play with no connection at all, except Apple Music's, which start at once but still need a
   connection to play, and Sonora tells you so if you try without one. A Downloaded filter on every library page shows only what you saved.
-- Album cards show a heart after the title when the album is in your library, and album and
-  playlist cards show the download mark once all of it is downloaded. A long title shortens
-  before either mark is hidden.
 - Sonora keeps the tracks you play from YouTube Music, Tidal, Deezer, Apple Music and your
   Subsonic server, up to 2 GB or whatever you set under Cache size, plus 1 GB from Spotify, so
   playing one again starts at once and downloads nothing. Downloads and kept tracks are locked to

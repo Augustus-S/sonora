@@ -8,7 +8,6 @@ use gpui::{
 };
 
 use crate::ExplicitBadge;
-use crate::arrow_ring::ArrowRing;
 use crate::artwork::cover_palette;
 use crate::artwork::{Artwork, Avatar, ROUNDED};
 use crate::button::Button;
@@ -30,8 +29,6 @@ const PLAY_FILL: f32 = 0.55;
 const SCRIM_RATIO: f32 = 0.45;
 const SCRIM_MIN: Pixels = px(14.);
 const TIGHT: Pixels = px(2.);
-/// The space between a title and the marks after it.
-const MARK_GAP: Pixels = px(3.);
 
 pub const CARD_GROUP: &str = "card";
 
@@ -57,8 +54,6 @@ pub struct Card {
     circle: bool,
     tint: Option<Hsla>,
     explicit: bool,
-    liked: bool,
-    downloaded: bool,
     fill: bool,
     hovered: Option<StyleRefinement>,
     press: Option<Press>,
@@ -94,8 +89,6 @@ impl Card {
             circle: false,
             tint: None,
             explicit: false,
-            liked: false,
-            downloaded: false,
             fill: true,
             hovered: None,
             press: None,
@@ -231,18 +224,6 @@ impl Card {
         self
     }
 
-    /// Puts a filled heart after the title, sized to its text, for something in the favorites.
-    pub fn liked(mut self, liked: bool) -> Self {
-        self.liked = liked;
-        self
-    }
-
-    /// Puts the download mark after the title, sized to its text, for something downloaded whole.
-    pub fn downloaded(mut self, downloaded: bool) -> Self {
-        self.downloaded = downloaded;
-        self
-    }
-
     pub fn trailing(mut self, trailing: impl IntoElement) -> Self {
         self.trailing = Some(trailing.into_any_element());
         self
@@ -316,8 +297,6 @@ impl RenderOnce for Card {
             circle,
             tint,
             explicit,
-            liked,
-            downloaded,
             fill,
             hovered,
             press,
@@ -482,35 +461,15 @@ impl RenderOnce for Card {
             .text_color(tint.unwrap_or(theme.foreground))
             .when_some(size, |this, size| this.text_size(theme.text(size)))
             .child(title);
-        // The marks never shrink, so a long title truncates before any of them is cut.
-        let mark = theme.text(size.unwrap_or(Text::Body));
-        let heading = match explicit || liked || downloaded {
+        let heading = match explicit {
             false => title.into_any_element(),
             true => div()
                 .flex()
                 .items_center()
-                .gap(MARK_GAP)
+                .gap(px(3.))
                 .min_w_0()
                 .child(title)
-                .when(explicit, |this| {
-                    this.child(div().flex_none().child(ExplicitBadge::new()))
-                })
-                .when(downloaded, |this| {
-                    this.child(
-                        ArrowRing::new("card-downloaded", Some(1.))
-                            .size(mark)
-                            .color(theme.muted_foreground),
-                    )
-                })
-                .when(liked, |this| {
-                    this.child(
-                        svg()
-                            .path(icons::path("icons/heart-filled.svg"))
-                            .size(mark)
-                            .flex_none()
-                            .text_color(theme.primary),
-                    )
-                })
+                .child(div().flex_none().child(ExplicitBadge::new()))
                 .into_any_element(),
         };
         let caption = meta.map(|meta| match bare {

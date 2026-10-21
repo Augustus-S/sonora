@@ -182,7 +182,6 @@ impl ArtistView {
             cx.notify();
         })
         .detach();
-        cards::follow_downloaded(cx);
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 

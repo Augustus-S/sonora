@@ -1,9 +1,9 @@
 use gpui::prelude::*;
-use gpui::{App, Context, ElementId, Entity, FontWeight, SharedString, div};
+use gpui::{App, ElementId, Entity, FontWeight, SharedString, div};
 use i18n::t;
 use music::{Album, ArtistRef, Genre, GenreItem, Playlist, ReleaseType, SavedArtist, Track};
 use router::{Destination, navigate};
-use state::{Collection, DownloadsChanged, Origin, Playback, Progress, Sonora};
+use state::{Origin, Playback};
 use ui::{ActiveTheme as _, Card, InlineLinks, Pinnable, Text, Theme};
 
 use crate::shared::cells;
@@ -30,8 +30,6 @@ pub(crate) fn album_card(
 
     Card::new(id, SharedString::from(album.name.clone()))
         .cover(cover)
-        .liked(saved_album(&album.id, cx))
-        .downloaded(downloaded(Collection::Album, &album.id, cx))
         .weight(FontWeight::SEMIBOLD)
         .underline()
         .hint()
@@ -68,7 +66,6 @@ pub(crate) fn playlist_card(
 
     Card::new(id, SharedString::from(playlist.name.clone()))
         .cover(playlist.cover.clone())
-        .downloaded(downloaded(Collection::Playlist, &playlist.id, cx))
         .weight(FontWeight::SEMIBOLD)
         .underline()
         .meta(SharedString::from(playlist.owner.clone()))
@@ -408,23 +405,6 @@ pub(crate) fn artist_card(
             playback.clone(),
         ))
         .when_some(pin, Pinnable::pin)
-}
-
-/// Redraws a view of cards whenever a download lands or goes, so the marks after their titles
-/// keep up. Progress in between redraws nothing, since a card marks only a finished download.
-pub(crate) fn follow_downloaded<T: 'static>(cx: &mut Context<T>) {
-    let downloads = Sonora::global(cx).downloads.clone();
-    cx.subscribe(&downloads, |_, _, _: &DownloadsChanged, cx| cx.notify())
-        .detach();
-}
-
-fn saved_album(id: &str, cx: &App) -> bool {
-    Sonora::global(cx).library.read(cx).saved_album(id)
-}
-
-/// Whether an album or playlist was downloaded whole and every track of it is in.
-fn downloaded(kind: Collection, id: &str, cx: &App) -> bool {
-    Sonora::global(cx).downloads.read(cx).set(kind, id) == Some(Progress::Done)
 }
 
 #[cfg(test)]

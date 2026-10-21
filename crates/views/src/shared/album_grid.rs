@@ -75,7 +75,6 @@ pub(crate) struct AlbumGrid {
     layout: CardLayout,
     albums: Vec<(usize, Album)>,
     playback: Entity<Playback>,
-    shelved: bool,
 }
 
 impl AlbumGrid {
@@ -90,15 +89,7 @@ impl AlbumGrid {
             layout: CardLayout::new(available),
             albums: albums.into_iter().collect(),
             playback,
-            shelved: false,
         }
-    }
-
-    /// Leaves the hearts off the cards, for a library shelf where every album is a favorite or
-    /// none can be.
-    pub(crate) fn shelved(mut self) -> Self {
-        self.shelved = true;
-        self
     }
 }
 
@@ -109,12 +100,9 @@ impl RenderOnce for AlbumGrid {
             layout,
             albums,
             playback,
-            shelved,
         } = self;
         let cards = albums.into_iter().map(|(index, album)| {
-            album_card(id, index, &album, &playback, layout.card, cx)
-                .when(shelved, |card| card.liked(false))
-                .into_any_element()
+            album_card(id, index, &album, &playback, layout.card, cx).into_any_element()
         });
 
         div()

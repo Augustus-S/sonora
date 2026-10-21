@@ -66,7 +66,6 @@ impl HomeView {
             cx.notify();
         })
         .detach();
-        crate::shared::cards::follow_downloaded(cx);
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 
