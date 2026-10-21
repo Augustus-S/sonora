@@ -761,6 +761,9 @@ pub struct Capabilities {
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.
     pub qualities: &'static [Offer],
+    /// How long a download waits after the one before it starts, for a service that refuses a
+    /// burst of them. Zero lets downloads run side by side.
+    pub download_gap: Duration,
 }
 
 impl Capabilities {
@@ -776,6 +779,7 @@ impl Capabilities {
         keeps: true,
         downloads: true,
         qualities: &[],
+        download_gap: Duration::ZERO,
     };
 
     /// Nothing beyond listing and playing.
@@ -788,6 +792,7 @@ impl Capabilities {
         keeps: false,
         downloads: false,
         qualities: &[],
+        download_gap: Duration::ZERO,
     };
 }
 
@@ -822,6 +827,19 @@ pub enum SignInProblem {
     Cancelled,
     Refused,
 }
+
+/// A provider refusing for now because too much was asked of it too quickly. Whoever asked can
+/// try again later, and finds this in the error's chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Throttled;
+
+impl std::fmt::Display for Throttled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the provider is refusing for now")
+    }
+}
+
+impl std::error::Error for Throttled {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SignInFailure(pub SignInProblem);

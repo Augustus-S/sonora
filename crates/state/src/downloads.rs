@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use gpui::{App, Context, Entity, Task};
@@ -17,6 +17,10 @@ use crate::{
 /// How many tracks download at once. Two keep the line busy without starving a track that is
 /// playing.
 const AT_ONCE: usize = 2;
+/// How long the queue first rests after a provider refuses a download for asking too much. Each
+/// refusal in a row doubles it, up to `LONGEST_REST`.
+const FIRST_REST: Duration = Duration::from_secs(30);
+const LONGEST_REST: Duration = Duration::from_secs(10 * 60);
 /// How often the progress of running downloads is redrawn.
 const TICK: Duration = Duration::from_millis(250);
 
@@ -73,6 +77,14 @@ pub struct Downloads {
     running: HashMap<String, (Task<()>, Fraction)>,
     /// Redraws whoever shows downloads while any is under way, so their progress moves.
     ticker: Option<Task<()>>,
+    /// When the next download may start, after a provider refused the last ones or asks for
+    /// room between them.
+    resting: Option<Instant>,
+    /// How many downloads in a row the provider refused for asking too much, which sets how
+    /// long the queue rests.
+    refusals: u32,
+    /// Starts the queue again once it has rested.
+    wake: Option<Task<()>>,
     failed: HashSet<String>,
     /// Fetches the tracks of an album or playlist asked for from a menu, which has none to hand.
     fetching: HashMap<String, Task<()>>,
@@ -121,6 +133,9 @@ impl Downloads {
             queue: VecDeque::new(),
             running: HashMap::new(),
             ticker: None,
+            resting: None,
+            refusals: 0,
+            wake: None,
             failed: HashSet::new(),
             fetching: HashMap::new(),
             restore: None,
@@ -448,7 +463,16 @@ impl Downloads {
         if Network::lost(cx) || self.provider.is_none() {
             return;
         }
-        while self.running.len() < AT_ONCE {
+        if let Some(until) = self.resting.filter(|until| *until > Instant::now()) {
+            return self.wake_at(until, cx);
+        }
+        // A provider that wants room between downloads gets them one at a time.
+        let gap = self.session.read(cx).capabilities().download_gap;
+        let at_once = match gap.is_zero() {
+            true => AT_ONCE,
+            false => 1,
+        };
+        while self.running.len() < at_once {
             let Some(id) = self.queue.pop_front() else {
                 return;
             };
@@ -470,6 +494,9 @@ impl Downloads {
                 }
             });
             self.running.insert(id, (task, progress));
+            if !gap.is_zero() {
+                self.resting = Some(Instant::now() + gap);
+            }
             self.tick(cx);
             cx.notify();
         }
@@ -505,12 +532,25 @@ impl Downloads {
         self.running.remove(&id);
         match fetched {
             Ok(()) => {
+                self.refusals = 0;
                 if let Some(entry) = self.tracks.get_mut(&id)
                     && let Some(provider) = self.provider
                 {
                     entry.done = true;
                     let done = id.clone();
                     self.write(move |store| store.done(provider, &done));
+                }
+            }
+            Err(error) if error.downcast_ref::<music::Throttled>().is_some() => {
+                self.refusals = self.refusals.saturating_add(1);
+                let wait = rest(self.refusals);
+                log::warn!(
+                    "downloads: the provider is refusing {id} for now, resting {}s",
+                    wait.as_secs()
+                );
+                self.resting = Some(Instant::now() + wait);
+                if self.tracks.contains_key(&id) {
+                    self.queue.push_front(id);
                 }
             }
             Err(error) => {
@@ -523,6 +563,23 @@ impl Downloads {
         }
         self.pump(cx);
         cx.notify();
+    }
+
+    /// Starts the queue again at `at`, unless something already will.
+    fn wake_at(&mut self, at: Instant, cx: &mut Context<Self>) {
+        if self.wake.is_some() {
+            return;
+        }
+        self.wake = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(at.saturating_duration_since(Instant::now()))
+                .await;
+            this.update(cx, |this, cx| {
+                this.wake = None;
+                this.pump(cx);
+            })
+            .ok();
+        }));
     }
 
     fn failed_to_fetch(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
@@ -612,6 +669,9 @@ impl Downloads {
         self.queue.clear();
         self.running.clear();
         self.ticker = None;
+        self.resting = None;
+        self.refusals = 0;
+        self.wake = None;
         self.failed.clear();
         self.fetching.clear();
         self.restore = None;
@@ -782,4 +842,11 @@ fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs() as i64)
+}
+
+/// How long the queue rests after `refusals` refusals in a row.
+fn rest(refusals: u32) -> Duration {
+    FIRST_REST
+        .saturating_mul(1 << refusals.saturating_sub(1).min(8))
+        .min(LONGEST_REST)
 }

@@ -12,6 +12,7 @@ use librespot_playback::config::Bitrate;
 use librespot_playback::offline::{self, Offline, OfflineTrack};
 use serde::{Deserialize, Serialize};
 
+use crate::Throttled;
 use crate::spotify::playback::track_uri;
 use crate::vault::Shelf;
 
@@ -62,9 +63,15 @@ pub(crate) async fn download(
     if shelf.holds(id) {
         return Ok(());
     }
-    let fetched = offline::download(session, track_uri(id)?, bitrate)
-        .await
-        .with_context(|| format!("cannot download {id}"))?;
+    let fetched = match offline::download(session, track_uri(id)?, bitrate).await {
+        Ok(fetched) => fetched,
+        Err(error) if session.audio_key().is_throttled() => {
+            return Err(anyhow::Error::new(error).context(Throttled));
+        }
+        Err(error) => {
+            return Err(anyhow::Error::new(error).context(format!("cannot download {id}")));
+        }
+    };
     let facts = serde_json::to_vec(&Facts {
         metadata: STANDARD.encode(&fetched.metadata),
         format: fetched.format.into(),

@@ -68,6 +68,7 @@ impl SpotifyProvider {
             authenticated: true,
             capabilities: Capabilities {
                 pins: true,
+                download_gap: playback::DOWNLOAD_GAP,
                 qualities: playback::QUALITIES,
                 ..Capabilities::ALL
             },

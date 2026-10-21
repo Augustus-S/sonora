@@ -12,6 +12,7 @@ pub use lyrics::LocalLyrics;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
@@ -72,6 +73,7 @@ impl LocalProvider {
                 keeps: false,
                 downloads: false,
                 qualities: &[],
+                download_gap: Duration::ZERO,
             },
         })
     }
