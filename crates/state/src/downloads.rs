@@ -338,31 +338,38 @@ impl Downloads {
         self.fetching.insert(playlist.id.clone(), task);
     }
 
-    /// Removes the downloads of tracks picked one by one. A track an album or playlist still
-    /// holds stays, since that set was downloaded as a whole.
+    /// Removes the downloads of tracks, and takes them out of any downloaded album or playlist
+    /// that held them. A set left with no tracks stops being downloaded.
     pub fn remove_tracks(&mut self, ids: &[String], cx: &mut Context<Self>) {
         let Some(provider) = self.provider else {
             return;
         };
-        let held = self.held_by_sets();
-        let mut gone = Vec::new();
-        for id in ids {
-            match held.contains(id) {
-                true => {
-                    if let Some(entry) = self.tracks.get_mut(id) {
-                        entry.single = false;
-                    }
-                }
-                false => gone.push(id.clone()),
+        let gone: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        let mut kept = Vec::new();
+        let mut emptied = Vec::new();
+        for ((kind, id), set) in &mut self.sets {
+            let before = set.tracks.len();
+            set.tracks
+                .retain(|track| !track.id.as_deref().is_some_and(|id| gone.contains(id)));
+            match (set.tracks.len() == before, set.tracks.is_empty()) {
+                (true, _) => {}
+                (false, true) => emptied.push((*kind, id.clone())),
+                (false, false) => kept.push((*kind, id.clone(), set.clone())),
             }
         }
-        self.drop_tracks(provider, &gone, cx);
-        let unmarked: Vec<String> = ids
-            .iter()
-            .filter(|id| held.contains(*id))
-            .cloned()
-            .collect();
-        self.write(move |store| store.unmark(provider, &unmarked));
+        for key in &emptied {
+            self.sets.remove(key);
+        }
+        self.drop_tracks(provider, ids, cx);
+        self.write(move |store| {
+            for (kind, id, set) in &kept {
+                store.keep_set(provider, *kind, id, set)?;
+            }
+            for (kind, id) in &emptied {
+                store.forget_set(provider, *kind, id)?;
+            }
+            Ok(())
+        });
         cx.notify();
     }
 
@@ -779,17 +786,6 @@ impl Store {
             )?;
         }
         transaction.commit()?;
-        Ok(())
-    }
-
-    fn unmark(&self, provider: &str, ids: &[String]) -> Result<()> {
-        let connection = self.open()?;
-        for id in ids {
-            connection.execute(
-                "UPDATE downloads SET single = 0 WHERE provider = ? AND track_id = ?",
-                params![provider, id],
-            )?;
-        }
         Ok(())
     }
 
