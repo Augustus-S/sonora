@@ -188,8 +188,7 @@ impl ToastStack {
             }
         }
         if flung {
-            self.toasts
-                .update(cx, |toasts, cx| toasts.dismiss(swipe.id, cx));
+            Toasts::discard(swipe.id, cx);
         }
         self.hold(cx);
     }
@@ -430,10 +429,7 @@ impl ToastStack {
                     this.grab(id, event, cx)
                 }),
             )
-            .on_dismiss({
-                let toasts = toasts.clone();
-                move |_, _, cx| toasts.update(cx, |this, cx| this.dismiss(id, cx))
-            })
+            .on_dismiss(move |_, _, cx| Toasts::discard(id, cx))
             .when_some(toast.target.clone().map(destination), |card, dest| {
                 card.on_open(move |_, cx| navigate(dest.clone(), cx))
             });

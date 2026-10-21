@@ -79,6 +79,9 @@ pub struct Toast {
     /// How far the work a loading toast waits on has got, from 0 to 1, which shows a filling
     /// ring in place of the spinner. `None` while there is no telling.
     pub progress: Option<f32>,
+    /// Runs when the listener dismisses the toast by its cross or a swipe. Closing it from code
+    /// or letting it expire runs nothing.
+    dismissed: Option<Run>,
     /// How long the toast stays while nobody holds it, or `None` to stay until dismissed.
     linger: Option<Duration>,
     /// When the clock last started running.
@@ -101,6 +104,7 @@ impl Toast {
             action: None,
             cancel: None,
             progress: None,
+            dismissed: None,
             linger: match outcome {
                 Outcome::Loading => None,
                 _ => Some(LINGER),
@@ -172,6 +176,13 @@ impl Toast {
     /// Shows how far the work has got, from 0 to 1, as a ring that fills in place of the spinner.
     pub fn progress(mut self, done: f32) -> Self {
         self.progress = Some(done);
+        self
+    }
+
+    /// Runs `run` when the listener dismisses the toast, which makes the cross and a swipe
+    /// undo what the toast reports, such as a download under way.
+    pub fn on_dismiss(mut self, run: impl Fn(&mut App) + 'static) -> Self {
+        self.dismissed = Some(Rc::new(run));
         self
     }
 
@@ -310,6 +321,22 @@ impl Toasts {
                 cx.notify();
             }
         });
+    }
+
+    /// Dismisses toast `id` for the listener, by its cross or a swipe, then runs what the toast
+    /// set with [`Toast::on_dismiss`]. It runs outside the stack's update, so it may post toasts.
+    pub fn discard(id: usize, cx: &mut App) {
+        let toasts = Self::entity(cx);
+        let run = toasts
+            .read(cx)
+            .shown
+            .iter()
+            .find(|shown| shown.id == id)
+            .and_then(|shown| shown.dismissed.clone());
+        toasts.update(cx, |this, cx| this.dismiss(id, cx));
+        if let Some(run) = run {
+            run(cx);
+        }
     }
 
     /// Dismisses toast `id` from outside the stack.

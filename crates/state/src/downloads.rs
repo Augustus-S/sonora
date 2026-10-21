@@ -88,6 +88,7 @@ struct Watched {
 }
 
 /// What a download toast names.
+#[derive(Clone)]
 enum About {
     /// An album or a playlist, by name and the page it opens.
     Set { name: SharedString, target: Target },
@@ -97,13 +98,17 @@ enum About {
     Songs(usize),
 }
 
-/// What the Stop button of a running download takes off.
-#[derive(Clone)]
+/// What dismissing the toast of a running download cancels, and what its Undo needs to start it
+/// again.
 enum Stop {
     /// An album or playlist, with its tracks, and the listing of them when it is still out.
-    Set(Collection, String),
+    Set {
+        kind: Collection,
+        id: String,
+        head: Box<Head>,
+    },
     /// Songs picked one by one. The ones already in stay.
-    Tracks(Vec<String>),
+    Tracks(Vec<Track>),
 }
 
 impl About {
@@ -141,19 +146,15 @@ impl About {
         }
     }
 
-    /// What stopping the download of `ids` takes off. An album or playlist goes whole, the way
-    /// the button on its page removes it.
-    fn stop(&self, ids: &[String]) -> Stop {
+    /// The toast that says the download was cancelled.
+    fn cancelled(&self) -> Toast {
         match self {
-            Self::Set {
-                target: Target::Album(id),
-                ..
-            } => Stop::Set(Collection::Album, id.to_string()),
-            Self::Set {
-                target: Target::Playlist(id),
-                ..
-            } => Stop::Set(Collection::Playlist, id.to_string()),
-            _ => Stop::Tracks(ids.to_vec()),
+            Self::Set { name, .. } | Self::Song { name, .. } => {
+                Toast::new(Outcome::Plain, "toast-download-cancelled").name(name.clone())
+            }
+            Self::Songs(count) => {
+                Toast::new(Outcome::Plain, "toast-downloads-cancelled").count(*count)
+            }
         }
     }
 }
@@ -400,10 +401,11 @@ impl Downloads {
             tracks => Some(About::Songs(tracks.len())),
         };
         let ids = tracks.iter().filter_map(|track| track.id.clone()).collect();
+        let stop = Stop::Tracks(tracks.clone());
         self.persist(provider, None, tracks);
         self.pump(cx);
         if let Some(about) = about {
-            self.watch(ids, about, None, cx);
+            self.watch(ids, about, stop, None, cx);
         }
         cx.emit(DownloadsChanged);
         cx.notify();
@@ -432,7 +434,11 @@ impl Downloads {
             name: album.name.clone().into(),
             target: Target::Album(id.clone().into()),
         };
-        let stop = Stop::Set(Collection::Album, id.clone());
+        let stop = Stop::Set {
+            kind: Collection::Album,
+            id: id.clone(),
+            head: Box::new(Head::Album(album.clone())),
+        };
         let toast = Toasts::post(running(&about, stop, cx), cx);
         let request = self.io.spawn({
             let id = id.clone();
@@ -466,7 +472,11 @@ impl Downloads {
             name: playlist.name.clone().into(),
             target: Target::Playlist(id.clone().into()),
         };
-        let stop = Stop::Set(Collection::Playlist, id.clone());
+        let stop = Stop::Set {
+            kind: Collection::Playlist,
+            id: id.clone(),
+            head: Box::new(Head::Playlist(playlist.clone())),
+        };
         let toast = Toasts::post(running(&about, stop, cx), cx);
         let request = self.io.spawn({
             let id = id.clone();
@@ -595,10 +605,15 @@ impl Downloads {
         }
         let ids = tracks.iter().filter_map(|track| track.id.clone()).collect();
         let about = About::of(&set.head);
+        let stop = Stop::Set {
+            kind,
+            id: id.clone(),
+            head: Box::new(set.head.clone()),
+        };
         self.sets.insert((kind, id.clone()), set.clone());
         self.persist(provider, Some((kind, id, set)), tracks);
         self.pump(cx);
-        self.watch(ids, about, toast, cx);
+        self.watch(ids, about, stop, toast, cx);
         cx.emit(DownloadsChanged);
         cx.notify();
     }
@@ -853,15 +868,13 @@ impl Downloads {
         &mut self,
         ids: Vec<String>,
         about: About,
+        stop: Stop,
         toast: Option<usize>,
         cx: &mut Context<Self>,
     ) {
         let toast = match toast {
             Some(toast) => toast,
-            None => {
-                let stop = about.stop(&ids);
-                Toasts::post(running(&about, stop, cx), cx)
-            }
+            None => Toasts::post(running(&about, stop, cx), cx),
         };
         self.watched.push(Watched { toast, ids, about });
         self.report(cx);
@@ -895,20 +908,53 @@ impl Downloads {
         self.watched = watched;
     }
 
-    /// Stops a download from its toast. Songs picked one by one that are already in stay.
-    fn stop(&mut self, stop: &Stop, cx: &mut Context<Self>) {
-        match stop {
-            Stop::Set(kind, id) => {
+    /// Cancels a download whose toast the listener dismissed, and puts up one that says so with
+    /// an Undo that starts it again. Songs picked one by one that are already in stay.
+    fn cancel(&mut self, about: &About, stop: &Stop, cx: &mut Context<Self>) {
+        let downloads = cx.weak_entity();
+        let cancelled = match stop {
+            Stop::Set { kind, id, head } => {
+                let set = self.sets.get(&(*kind, id.clone())).cloned();
                 if let Some((toast, _)) = self.fetching.remove(id) {
                     Toasts::close(toast, cx);
                 }
                 self.remove_set(*kind, id, cx);
+                let (kind, id, head) = (*kind, id.clone(), head.clone());
+                about.cancelled().undo(move |cx| {
+                    downloads
+                        .update(cx, |this, cx| match &set {
+                            Some(set) => this.download_set(kind, id.clone(), set.clone(), None, cx),
+                            None => this.download_head(&head, cx),
+                        })
+                        .ok();
+                })
             }
-            Stop::Tracks(ids) => {
-                let unfinished: Vec<String> =
-                    ids.iter().filter(|id| !self.has(id)).cloned().collect();
-                self.remove_tracks(&unfinished, cx);
+            Stop::Tracks(tracks) => {
+                let unfinished: Vec<Track> = tracks
+                    .iter()
+                    .filter(|track| track.id.as_deref().is_some_and(|id| !self.has(id)))
+                    .cloned()
+                    .collect();
+                let ids: Vec<String> = unfinished
+                    .iter()
+                    .filter_map(|track| track.id.clone())
+                    .collect();
+                self.remove_tracks(&ids, cx);
+                about.cancelled().undo(move |cx| {
+                    downloads
+                        .update(cx, |this, cx| this.download_tracks(unfinished.clone(), cx))
+                        .ok();
+                })
             }
+        };
+        Toasts::post(cancelled, cx);
+    }
+
+    /// Downloads an album or playlist named by its head, fetching its tracks first.
+    fn download_head(&mut self, head: &Head, cx: &mut Context<Self>) {
+        match head {
+            Head::Album(album) => self.download_album_by_id(album, cx),
+            Head::Playlist(playlist) => self.download_playlist_by_id(playlist, cx),
         }
     }
 
@@ -1212,15 +1258,16 @@ fn rest(refusals: u32) -> Duration {
         .min(LONGEST_REST)
 }
 
-/// The toast a download shows while it runs, with a button that stops it.
+/// The toast a download shows while it runs. Dismissing it cancels the download.
 fn running(about: &About, stop: Stop, cx: &mut Context<Downloads>) -> Toast {
     let downloads = cx.weak_entity();
+    let named = about.clone();
     about
         .toast(Outcome::Loading)
         .progress(0.)
-        .cancel("toast-stop", move |cx| {
+        .on_dismiss(move |cx| {
             downloads
-                .update(cx, |downloads, cx| downloads.stop(&stop, cx))
+                .update(cx, |downloads, cx| downloads.cancel(&named, &stop, cx))
                 .ok();
         })
 }
