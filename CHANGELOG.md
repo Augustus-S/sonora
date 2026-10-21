@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-22
+
 ### Added
 
 - Download songs, albums and playlists from Spotify, YouTube Music, Tidal, Deezer, Apple Music
@@ -117,6 +119,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   using switches to that service first. Sonora also handles `deezer://` and `tidal://` links, so
   "Open in app" on those websites can open Sonora.
 - Opening a Spotify Jam link asks whether to join the Jam, even when it starts Sonora.
+- A toast follows each album, playlist or set of songs you download, shows how far it has got
+  and says when it is done or what failed. Dismiss it to cancel the download.
 
 ### Changed
 
@@ -2265,7 +2269,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/sonorahq/sonora/compare/v0.43.0...HEAD
+[unreleased]: https://github.com/sonorahq/sonora/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/sonorahq/sonora/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/sonorahq/sonora/compare/v0.42.2...v0.43.0
 [0.42.2]: https://github.com/sonorahq/sonora/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/sonorahq/sonora/compare/v0.42.0...v0.42.1
