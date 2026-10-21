@@ -388,7 +388,10 @@ impl ToastStack {
                 Outcome::Info => card.icon("icons/info.svg"),
                 Outcome::Warning => card.icon("icons/triangle-alert.svg"),
                 Outcome::Failed => card.icon("icons/octagon-x.svg"),
-                Outcome::Loading => card.loading(),
+                Outcome::Loading => match toast.progress {
+                    Some(done) => card.progress(done),
+                    None => card.loading(),
+                },
             })
             .on_measure({
                 let measured = self.measured.clone();

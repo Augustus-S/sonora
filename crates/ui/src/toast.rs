@@ -5,6 +5,7 @@ use gpui::{
     Window, div, px, svg,
 };
 
+use crate::arrow_ring::ArrowRing;
 use crate::button::Button;
 use crate::metrics::Text;
 use crate::modal::corners;
@@ -36,6 +37,7 @@ pub struct Toast {
     detail: Option<SharedString>,
     icon: Option<SharedString>,
     loading: bool,
+    progress: Option<f32>,
     action: Option<(SharedString, Press)>,
     action_icon: Option<SharedString>,
     cancel: Option<(SharedString, Press)>,
@@ -59,6 +61,7 @@ impl Toast {
             detail: None,
             icon: None,
             loading: false,
+            progress: None,
             action: None,
             action_icon: None,
             cancel: None,
@@ -89,6 +92,13 @@ impl Toast {
     /// Shows a turning spinner in place of the icon.
     pub fn loading(mut self) -> Self {
         self.loading = true;
+        self
+    }
+
+    /// Shows a download ring filling `done` of the way round, from 0 to 1, in place of the icon,
+    /// and how far that is as a percentage after the message.
+    pub fn progress(mut self, done: f32) -> Self {
+        self.progress = Some(done.clamp(0., 1.));
         self
     }
 
@@ -178,6 +188,7 @@ impl RenderOnce for Toast {
             detail,
             icon,
             loading,
+            progress,
             action,
             action_icon,
             cancel,
@@ -192,14 +203,19 @@ impl RenderOnce for Toast {
         let pad = theme.metrics.pad * 2;
         let overrides = std::mem::take(base.style());
 
-        let leading = match (loading, icon) {
-            (true, _) => Some(
+        let leading = match (progress, loading, icon) {
+            (Some(done), _, _) => Some(
+                ArrowRing::new((id.clone(), "ring"), Some(done))
+                    .color(theme.primary)
+                    .into_any_element(),
+            ),
+            (None, true, _) => Some(
                 Spinner::new((id.clone(), "spinner"))
                     .size(ICON)
                     .text_color(theme.popover_foreground)
                     .into_any_element(),
             ),
-            (false, Some(icon)) => Some(
+            (None, false, Some(icon)) => Some(
                 svg()
                     .path(icons::path(icon))
                     .size(ICON)
@@ -207,7 +223,7 @@ impl RenderOnce for Toast {
                     .text_color(theme.popover_foreground)
                     .into_any_element(),
             ),
-            (false, None) => None,
+            (None, false, None) => None,
         };
 
         let text = div()
@@ -237,6 +253,15 @@ impl RenderOnce for Toast {
             .opacity(shown)
             .children(leading)
             .child(text)
+            .children(progress.map(|done| {
+                div()
+                    .flex_none()
+                    .text_color(theme.muted_foreground)
+                    .child(i18n::t!(
+                        "toast-percent",
+                        percent = (done * 100.).floor() as usize
+                    ))
+            }))
             .when(cancel.is_some() || action.is_some(), |body| {
                 body.child(
                     div()

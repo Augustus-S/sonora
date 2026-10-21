@@ -1247,6 +1247,20 @@ trouble-retry = Try again
 toast-offline = No connection. Nothing will stream until it is back.
 toast-offline-unsupported = { $name } does not support offline playback, so its downloads play only with a connection.
 toast-download-failed = Could not list the tracks to download.
+toast-downloading = Downloading { $name }
+toast-downloading-songs = { $count ->
+    [one] Downloading { $count } track
+   *[other] Downloading { $count } tracks
+}
+toast-downloaded = Downloaded { $name }
+toast-downloaded-songs = { $count ->
+    [one] Downloaded { $count } track
+   *[other] Downloaded { $count } tracks
+}
+toast-download-set-failed = Some tracks of { $name } could not be downloaded
+toast-download-song-failed = { $name } could not be downloaded
+toast-download-songs-failed = Some of the tracks could not be downloaded
+toast-percent = { $percent }%
 toast-settings-broken = Fix line { $name } of settings.json to save changes
 toast-tray-unavailable = There is no system tray to put the icon in
 toast-undo = Undo

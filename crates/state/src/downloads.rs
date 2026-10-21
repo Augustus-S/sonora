@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
-use gpui::{App, Context, Entity, EventEmitter, Task};
+use gpui::{App, Context, Entity, EventEmitter, SharedString, Task};
 use music::{Album, AlbumDetail, Fraction, Playlist, PlaylistDetail, Track};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use storage::Database;
 use crate::catalog::CatalogSource;
 use crate::{
     Collection, Io, Network, Outcome, Playback, Reconnected, Session, SessionEvent, SessionState,
-    Toasts, join,
+    Target, Toast, Toasts, join,
 };
 
 /// How many tracks download at once. Two keep the line busy without starving a track that is
@@ -78,6 +78,61 @@ struct Entry {
     done: bool,
 }
 
+/// A toast that follows a download the listener asked for until none of its tracks is left to
+/// wait for, then says how it went.
+struct Watched {
+    toast: usize,
+    /// The tracks it counts. One taken off the downloads leaves the count.
+    ids: Vec<String>,
+    about: About,
+}
+
+/// What a download toast names.
+enum About {
+    /// An album or a playlist, by name and the page it opens.
+    Set { name: SharedString, target: Target },
+    /// One song picked on its own.
+    Song { name: SharedString, target: Target },
+    /// Several songs picked one by one.
+    Songs(usize),
+}
+
+impl About {
+    fn of(head: &Head) -> Self {
+        match head {
+            Head::Album(album) => Self::Set {
+                name: album.name.clone().into(),
+                target: Target::Album(album.id.clone().into()),
+            },
+            Head::Playlist(playlist) => Self::Set {
+                name: playlist.name.clone().into(),
+                target: Target::Playlist(playlist.id.clone().into()),
+            },
+        }
+    }
+
+    /// The toast for where the download stands: `Loading` while it runs, `Done` once every
+    /// track came in, and anything else once some could not.
+    fn toast(&self, outcome: Outcome) -> Toast {
+        let key = match (self, outcome) {
+            (Self::Set { .. } | Self::Song { .. }, Outcome::Loading) => "toast-downloading",
+            (Self::Set { .. } | Self::Song { .. }, Outcome::Done) => "toast-downloaded",
+            (Self::Set { .. }, _) => "toast-download-set-failed",
+            (Self::Song { .. }, _) => "toast-download-song-failed",
+            (Self::Songs(_), Outcome::Loading) => "toast-downloading-songs",
+            (Self::Songs(_), Outcome::Done) => "toast-downloaded-songs",
+            (Self::Songs(_), _) => "toast-download-songs-failed",
+        };
+        let toast = Toast::new(outcome, key);
+        match self {
+            Self::Set { name, target } | Self::Song { name, target } => {
+                toast.name(name.clone()).target(Some(target.clone()))
+            }
+            Self::Songs(count) => toast.count(*count),
+        }
+    }
+}
+
 /// One download under way.
 struct Running {
     /// Tells this run apart from an earlier one of the same track that was removed while it ran.
@@ -129,7 +184,9 @@ pub struct Downloads {
     /// line when the network returns.
     stalled: HashSet<String>,
     /// Fetches the tracks of an album or playlist asked for from a menu, which has none to hand.
-    fetching: HashMap<String, Task<()>>,
+    fetching: HashMap<String, (usize, Task<()>)>,
+    /// The toasts following the downloads the listener asked for.
+    watched: Vec<Watched>,
     restore: Option<Task<()>>,
 }
 
@@ -191,6 +248,7 @@ impl Downloads {
             failed: HashSet::new(),
             stalled: HashSet::new(),
             fetching: HashMap::new(),
+            watched: Vec::new(),
             restore: None,
         }
     }
@@ -250,18 +308,23 @@ impl Downloads {
         let Some(set) = self.sets.get(&(kind, id.to_owned())) else {
             return 0.;
         };
-        let ids: Vec<&str> = set.ids().collect();
-        if ids.is_empty() {
-            return 0.;
-        }
-        let arrived: f32 = ids
-            .iter()
-            .map(|id| match self.has(id) {
+        self.portion(set.ids())
+    }
+
+    /// How much of `ids` is in, from 0 to 1, counting the part of each running track that has
+    /// arrived. Nothing at all reads as none.
+    fn portion<'a>(&self, ids: impl Iterator<Item = &'a str>) -> f32 {
+        let (arrived, count) = ids.fold((0., 0usize), |(arrived, count), id| {
+            let part = match self.has(id) {
                 true => 1.,
                 false => self.fraction(id).unwrap_or(0.),
-            })
-            .sum();
-        arrived / ids.len() as f32
+            };
+            (arrived + part, count + 1)
+        });
+        match count {
+            0 => 0.,
+            count => arrived / count as f32,
+        }
     }
 
     /// Whether anything at all is downloaded or on its way.
@@ -303,38 +366,48 @@ impl Downloads {
         for track in &tracks {
             self.enlist(track, true);
         }
+        let about = match tracks.as_slice() {
+            [track] => track.id.as_ref().map(|id| About::Song {
+                name: track.name.clone().into(),
+                target: Target::Song(id.clone().into()),
+            }),
+            [] => None,
+            tracks => Some(About::Songs(tracks.len())),
+        };
+        let ids = tracks.iter().filter_map(|track| track.id.clone()).collect();
         self.persist(provider, None, tracks);
         self.pump(cx);
+        if let Some(about) = about {
+            self.watch(ids, about, None, cx);
+        }
         cx.emit(DownloadsChanged);
         cx.notify();
     }
 
     /// Downloads an album whose tracks are already loaded.
     pub fn download_album(&mut self, detail: AlbumDetail, cx: &mut Context<Self>) {
-        let id = detail.album.id.clone();
-        let set = Set {
-            head: Head::Album(detail.album),
-            tracks: detail.tracks,
-        };
-        self.download_set(Collection::Album, id, set, cx);
+        let (id, set) = album_set(detail);
+        self.download_set(Collection::Album, id, set, None, cx);
     }
 
     /// Downloads a playlist whose tracks are already loaded.
     pub fn download_playlist(&mut self, detail: PlaylistDetail, cx: &mut Context<Self>) {
-        let id = detail.playlist.id.clone();
-        let set = Set {
-            head: Head::Playlist(detail.playlist),
-            tracks: detail.tracks,
-        };
-        self.download_set(Collection::Playlist, id, set, cx);
+        let (id, set) = playlist_set(detail);
+        self.download_set(Collection::Playlist, id, set, None, cx);
     }
 
-    /// Downloads an album named from a menu, fetching its tracks first.
+    /// Downloads an album named from a menu, fetching its tracks first. Its toast is up while
+    /// they are fetched.
     pub fn download_album_by_id(&mut self, album: &Album, cx: &mut Context<Self>) {
         let Some(catalog) = self.session.read(cx).catalog(&album.id) else {
             return;
         };
         let id = album.id.clone();
+        let about = About::Set {
+            name: album.name.clone().into(),
+            target: Target::Album(id.clone().into()),
+        };
+        let toast = Toasts::post(about.toast(Outcome::Loading).progress(0.), cx);
         let request = self.io.spawn({
             let id = id.clone();
             async move { catalog.album(&id).await }
@@ -344,21 +417,30 @@ impl Downloads {
             this.update(cx, |this, cx| {
                 this.fetching.remove(&id);
                 match loaded {
-                    Ok(detail) => this.download_album((*detail).clone(), cx),
-                    Err(error) => this.failed_to_fetch(&error, cx),
+                    Ok(detail) => {
+                        let (id, set) = album_set((*detail).clone());
+                        this.download_set(Collection::Album, id, set, Some(toast), cx);
+                    }
+                    Err(error) => this.failed_to_fetch(&error, Some(toast), cx),
                 }
             })
             .ok();
         });
-        self.fetching.insert(album.id.clone(), task);
+        self.fetching.insert(album.id.clone(), (toast, task));
     }
 
-    /// Downloads a playlist named from a menu, fetching all of its tracks first.
+    /// Downloads a playlist named from a menu, fetching all of its tracks first. Its toast is up
+    /// while they are fetched.
     pub fn download_playlist_by_id(&mut self, playlist: &Playlist, cx: &mut Context<Self>) {
         let Some(catalog) = self.session.read(cx).catalog(&playlist.id) else {
             return;
         };
         let id = playlist.id.clone();
+        let about = About::Set {
+            name: playlist.name.clone().into(),
+            target: Target::Playlist(id.clone().into()),
+        };
+        let toast = Toasts::post(about.toast(Outcome::Loading).progress(0.), cx);
         let request = self.io.spawn({
             let id = id.clone();
             async move { whole_playlist(&catalog, &id).await }
@@ -368,13 +450,16 @@ impl Downloads {
             this.update(cx, |this, cx| {
                 this.fetching.remove(&id);
                 match loaded {
-                    Ok(detail) => this.download_playlist(detail, cx),
-                    Err(error) => this.failed_to_fetch(&error, cx),
+                    Ok(detail) => {
+                        let (id, set) = playlist_set(detail);
+                        this.download_set(Collection::Playlist, id, set, Some(toast), cx);
+                    }
+                    Err(error) => this.failed_to_fetch(&error, Some(toast), cx),
                 }
             })
             .ok();
         });
-        self.fetching.insert(playlist.id.clone(), task);
+        self.fetching.insert(playlist.id.clone(), (toast, task));
     }
 
     /// Removes the downloads of tracks, and takes them out of any downloaded album or playlist
@@ -409,6 +494,7 @@ impl Downloads {
             }
             Ok(())
         });
+        self.report(cx);
         cx.emit(DownloadsChanged);
         cx.notify();
     }
@@ -433,6 +519,7 @@ impl Downloads {
         self.drop_tracks(provider, &gone, cx);
         let id = id.to_owned();
         self.write(move |store| store.forget_set(provider, kind, &id));
+        self.report(cx);
         cx.emit(DownloadsChanged);
         cx.notify();
     }
@@ -448,15 +535,25 @@ impl Downloads {
         }
         self.failed.clear();
         self.stalled.clear();
-        self.fetching.clear();
+        self.close_fetching(cx);
         self.playback
             .update(cx, |playback, cx| playback.remove_downloads(cx));
         self.write(|store| store.forget_everything());
+        self.report(cx);
         cx.emit(DownloadsChanged);
         cx.notify();
     }
 
-    fn download_set(&mut self, kind: Collection, id: String, set: Set, cx: &mut Context<Self>) {
+    /// Downloads an album or playlist. `toast` is the one already up while its tracks were
+    /// fetched, which goes on to follow the download, or else a new one is put up.
+    fn download_set(
+        &mut self,
+        kind: Collection,
+        id: String,
+        set: Set,
+        toast: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(provider) = self.provider else {
             return;
         };
@@ -469,9 +566,12 @@ impl Downloads {
         for track in &tracks {
             self.enlist(track, false);
         }
+        let ids = tracks.iter().filter_map(|track| track.id.clone()).collect();
+        let about = About::of(&set.head);
         self.sets.insert((kind, id.clone()), set.clone());
         self.persist(provider, Some((kind, id, set)), tracks);
         self.pump(cx);
+        self.watch(ids, about, toast, cx);
         cx.emit(DownloadsChanged);
         cx.notify();
     }
@@ -589,6 +689,7 @@ impl Downloads {
                 cx.background_executor().timer(TICK).await;
                 let going = this
                     .update(cx, |this, cx| {
+                        this.report(cx);
                         cx.notify();
                         let going = !this.running.is_empty();
                         if !going {
@@ -660,6 +761,7 @@ impl Downloads {
                 }
             }
         }
+        self.report(cx);
         self.pump(cx);
         cx.notify();
     }
@@ -700,10 +802,73 @@ impl Downloads {
         }));
     }
 
-    fn failed_to_fetch(&mut self, error: &anyhow::Error, cx: &mut Context<Self>) {
+    /// Says the tracks of an album or playlist could not be listed, on `toast` when one is up.
+    fn failed_to_fetch(
+        &mut self,
+        error: &anyhow::Error,
+        toast: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
         log::warn!("downloads: cannot list the tracks to download: {error:#}");
         crate::noted(error, cx);
-        Toasts::show(Outcome::Failed, "toast-download-failed", cx);
+        let failed = Toast::new(Outcome::Failed, "toast-download-failed");
+        match toast {
+            Some(toast) => Toasts::settle(toast, failed, cx),
+            None => {
+                Toasts::post(failed, cx);
+            }
+        }
+    }
+
+    /// Puts up a toast that follows the download of `ids`, or has `toast` follow it when one is
+    /// already up, and brings it up to date at once.
+    fn watch(
+        &mut self,
+        ids: Vec<String>,
+        about: About,
+        toast: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let toast =
+            toast.unwrap_or_else(|| Toasts::post(about.toast(Outcome::Loading).progress(0.), cx));
+        self.watched.push(Watched { toast, ids, about });
+        self.report(cx);
+    }
+
+    /// Moves every download toast on to where its tracks stand. One with none left to wait for
+    /// says whether all of them came in, and one whose tracks were all removed goes.
+    fn report(&mut self, cx: &mut Context<Self>) {
+        let mut watched = std::mem::take(&mut self.watched);
+        watched.retain_mut(|watch| {
+            watch.ids.retain(|id| self.tracks.contains_key(id));
+            if watch.ids.is_empty() {
+                Toasts::close(watch.toast, cx);
+                return false;
+            }
+            let ids = watch.ids.iter().map(String::as_str);
+            let pending = ids
+                .clone()
+                .any(|id| matches!(self.track(id), Some(Progress::Waiting | Progress::Running)));
+            if pending {
+                Toasts::progress(watch.toast, self.portion(ids), cx);
+                return true;
+            }
+            let outcome = match ids.clone().all(|id| self.has(id)) {
+                true => Outcome::Done,
+                false => Outcome::Failed,
+            };
+            Toasts::settle(watch.toast, watch.about.toast(outcome), cx);
+            false
+        });
+        self.watched = watched;
+    }
+
+    /// Takes down the toasts of albums and playlists whose tracks are still being listed, as their
+    /// fetches are dropped.
+    fn close_fetching(&mut self, cx: &mut Context<Self>) {
+        for (_, (toast, _)) in self.fetching.drain() {
+            Toasts::close(toast, cx);
+        }
     }
 
     /// Takes tracks off the list and removes their audio. A download of one still under way is
@@ -813,8 +978,9 @@ impl Downloads {
         self.wake = None;
         self.failed.clear();
         self.stalled.clear();
-        self.fetching.clear();
+        self.close_fetching(cx);
         self.restore = None;
+        self.report(cx);
         cx.emit(DownloadsChanged);
         cx.notify();
     }
@@ -995,4 +1161,22 @@ fn rest(refusals: u32) -> Duration {
     FIRST_REST
         .saturating_mul(1 << refusals.saturating_sub(1).min(8))
         .min(LONGEST_REST)
+}
+
+fn album_set(detail: AlbumDetail) -> (String, Set) {
+    let id = detail.album.id.clone();
+    let set = Set {
+        head: Head::Album(detail.album),
+        tracks: detail.tracks,
+    };
+    (id, set)
+}
+
+fn playlist_set(detail: PlaylistDetail) -> (String, Set) {
+    let id = detail.playlist.id.clone();
+    let set = Set {
+        head: Head::Playlist(detail.playlist),
+        tracks: detail.tracks,
+    };
+    (id, set)
 }

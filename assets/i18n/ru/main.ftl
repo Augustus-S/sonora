@@ -844,3 +844,18 @@ trouble-not-loaded = Не удалось загрузить
 trouble-retry = Повторить
 toast-offline = Нет соединения. Ничего не будет воспроизводиться, пока оно не вернётся.
 toast-offline-unsupported = { $name } не поддерживает офлайн-воспроизведение, поэтому скачанные треки играют только при подключении.
+toast-downloading = Скачивание { $name }
+toast-downloading-songs = { $count ->
+    [one] Скачивание { $count } трека
+   *[other] Скачивание { $count } треков
+}
+toast-downloaded = Скачано: { $name }
+toast-downloaded-songs = { $count ->
+    [one] Скачан { $count } трек
+    [few] Скачано { $count } трека
+   *[other] Скачано { $count } треков
+}
+toast-download-set-failed = Не удалось скачать часть треков из { $name }
+toast-download-song-failed = Не удалось скачать { $name }
+toast-download-songs-failed = Не удалось скачать часть треков
+toast-percent = { $percent }%

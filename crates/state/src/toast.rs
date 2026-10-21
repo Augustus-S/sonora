@@ -76,6 +76,9 @@ pub struct Toast {
     pub action: Option<ToastAction>,
     /// The quiet button beside the action, such as Cancel.
     pub cancel: Option<ToastAction>,
+    /// How far the work a loading toast waits on has got, from 0 to 1, which shows a filling
+    /// ring in place of the spinner. `None` while there is no telling.
+    pub progress: Option<f32>,
     /// How long the toast stays while nobody holds it, or `None` to stay until dismissed.
     linger: Option<Duration>,
     /// When the clock last started running.
@@ -97,6 +100,7 @@ impl Toast {
             target: None,
             action: None,
             cancel: None,
+            progress: None,
             linger: match outcome {
                 Outcome::Loading => None,
                 _ => Some(LINGER),
@@ -163,6 +167,12 @@ impl Toast {
     /// with everything that may have changed since, since the toast stays up for seconds.
     pub fn undo(self, run: impl Fn(&mut App) + 'static) -> Self {
         self.action("toast-undo", run)
+    }
+
+    /// Shows how far the work has got, from 0 to 1, as a ring that fills in place of the spinner.
+    pub fn progress(mut self, done: f32) -> Self {
+        self.progress = Some(done);
+        self
     }
 
     /// Keeps the toast up until the user or the code dismisses it.
@@ -284,6 +294,21 @@ impl Toasts {
             };
             this.arm(id, cx);
             cx.notify();
+        });
+    }
+
+    /// Moves the progress toast `id` shows to `done`, from 0 to 1, leaving its clock and the rest
+    /// of what it says alone. Nothing happens when the toast is already gone.
+    pub fn progress(id: usize, done: f32, cx: &mut App) {
+        let toasts = Self::entity(cx);
+        toasts.update(cx, |this, cx| {
+            let Some(toast) = this.shown.iter_mut().find(|shown| shown.id == id) else {
+                return;
+            };
+            if toast.progress != Some(done) {
+                toast.progress = Some(done);
+                cx.notify();
+            }
         });
     }
 
