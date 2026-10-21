@@ -15,8 +15,15 @@ use music::vault::{MASTER, Vault};
 /// The keychain entry the master key is stored under.
 const KEYCHAIN_URL: &str = "sonora://kept-tracks";
 const KEYCHAIN_USER: &str = "sonora";
-/// What the kept tracks may take on disk.
-pub(crate) const LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+/// How many gigabytes the cache of played tracks may take until the listener says otherwise.
+pub(crate) const CACHE_GB: u32 = 2;
+/// The bounds of that setting.
+pub const CACHE_GB_RANGE: (u32, u32) = (1, 64);
+
+/// A size in gigabytes as the bytes the vault counts in.
+pub(crate) fn bytes(gb: u32) -> u64 {
+    u64::from(gb) << 30
+}
 
 /// Finds the master key, or makes and stores one on a first run, and unlocks `vault` with it.
 /// Until the task ends the vault keeps nothing, and a keychain that refuses leaves it locked.

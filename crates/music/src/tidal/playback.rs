@@ -601,6 +601,10 @@ impl Fetch for Tidal {
         "tidal"
     }
 
+    fn shelf(&self) -> Option<&Shelf> {
+        self.shelf.as_ref()
+    }
+
     /// Asks for the chosen quality, or the best below it the account may play, and starts the
     /// download, waiting only for the preroll, and for that no longer than `PRIMING`.
     async fn load(&self, id: &str) -> Result<Loaded> {

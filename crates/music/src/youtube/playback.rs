@@ -125,6 +125,10 @@ impl Fetch for YouTube {
         "yt"
     }
 
+    fn shelf(&self) -> Option<&Shelf> {
+        self.shelf.as_ref()
+    }
+
     /// Opens the stream and waits for the preroll, giving a stalled attempt one more go before
     /// failing. Only a timeout is retried, since a refusal from the stream host is as final the
     /// second time.

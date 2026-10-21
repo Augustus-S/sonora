@@ -7,9 +7,9 @@ use gpui::{
 use std::rc::Rc;
 
 use i18n::t;
-use music::{Album, Playlist, ReleaseType, Track};
+use music::{Album, AlbumDetail, Playlist, ReleaseType, Track};
 use router::{Destination, navigate};
-use state::{AppSettings, Collection, Detail, LibraryEvent, Origin, Playback, Sonora};
+use state::{AppSettings, Collection, Detail, LibraryEvent, Origin, Playback, Progress, Sonora};
 use ui::{
     ActiveTheme as _, Button, InlineLink, InlineLinks, Menu, Picker, Popovers, Popup, SortAxis,
 };
@@ -224,6 +224,15 @@ impl DetailView {
             .detach();
         }
 
+        let downloads = Sonora::global(cx).downloads.clone();
+        cx.observe(&downloads, |this, _, cx| {
+            if this.table.narrowed(cx) {
+                this.rebuild(cx);
+            }
+            cx.notify();
+        })
+        .detach();
+
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();
 
@@ -430,6 +439,7 @@ impl DetailView {
                 self.playback.clone(),
             ))
             .children(self.library_button(cx))
+            .children(self.download_button(cx))
             .children(overflow);
 
         let cover = header.and_then(|header| header.cover.clone());
@@ -513,6 +523,63 @@ impl DetailView {
                         library.add_playlist_to_library(playlist.clone(), cx)
                     });
                 }
+            }),
+        )
+    }
+
+    /// Downloads the album or playlist for offline play, or removes its download. It shows for a
+    /// provider whose tracks can be downloaded, and for one that is offline with this page
+    /// downloaded.
+    fn download_button(&self, cx: &App) -> Option<Button> {
+        let theme = *cx.theme();
+        let sonora = Sonora::global(cx);
+        let downloads = sonora.downloads.clone();
+        let detail = self.detail.read(cx);
+        let id = detail.id()?.to_owned();
+        if music::is_local_id(&id) {
+            return None;
+        }
+        let kind = detail.header()?.kind;
+        let progress = downloads.read(cx).set(kind, &id);
+        if progress.is_none() && !sonora.session.read(cx).capabilities().downloads {
+            return None;
+        }
+        let album = detail.album().cloned();
+        let playlist = detail.playlist().cloned();
+        let tracks = detail.tracks().to_vec();
+        let (icon, tooltip) = match progress {
+            None | Some(Progress::Failed) => ("icons/download.svg", "menu-download"),
+            Some(Progress::Waiting | Progress::Running) => {
+                ("icons/loader-circle.svg", "menu-downloading")
+            }
+            Some(Progress::Done) => ("icons/circle-arrow-down.svg", "menu-remove-download"),
+        };
+        let button = Button::new("detail-download")
+            .outline()
+            .icon(icon)
+            .tooltip(tooltip);
+        Some(
+            match progress {
+                Some(Progress::Done) => button.tint(theme.primary),
+                _ => button,
+            }
+            .on_click(move |_, _, cx| {
+                downloads.update(cx, |downloads, cx| match (progress, &album, &playlist) {
+                    (None | Some(Progress::Failed), Some(album), _) => {
+                        downloads.download_album(
+                            AlbumDetail {
+                                album: album.clone(),
+                                tracks: tracks.clone(),
+                            },
+                            cx,
+                        );
+                    }
+                    (None | Some(Progress::Failed), None, Some(playlist)) => {
+                        downloads.download_playlist_by_id(playlist, cx);
+                    }
+                    (None | Some(Progress::Failed), None, None) => {}
+                    _ => downloads.remove_set(kind, &id, cx),
+                })
             }),
         )
     }

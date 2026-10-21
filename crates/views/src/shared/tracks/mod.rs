@@ -529,6 +529,14 @@ impl TableSource for TrackSource {
             if self.sieve.favorites && !self.starred(track, cx) {
                 return false;
             }
+            if self.sieve.downloaded
+                && !track
+                    .id
+                    .as_deref()
+                    .is_some_and(|id| state::downloaded(id, cx))
+            {
+                return false;
+            }
             hits(track, query)
         })
     }
@@ -568,6 +576,13 @@ impl TableSource for TrackSource {
                 on: self.sieve.favorites,
             }));
         }
+        if self.sieve.downloaded || !Sonora::global(cx).downloads.read(cx).is_empty() {
+            axes.push(Filter::Flag(FlagAxis {
+                key: "filter-downloaded",
+                label: t!("filter-downloaded"),
+                on: self.sieve.downloaded,
+            }));
+        }
         axes
     }
 
@@ -587,6 +602,10 @@ impl TableSource for TrackSource {
             }
             FilterChange::Flag("filter-favorites", value) => {
                 self.sieve.favorites = value;
+                true
+            }
+            FilterChange::Flag("filter-downloaded", value) => {
+                self.sieve.downloaded = value;
                 true
             }
             FilterChange::Reset => {

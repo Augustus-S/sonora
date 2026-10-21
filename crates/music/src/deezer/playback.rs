@@ -101,6 +101,10 @@ impl Fetch for Deezer {
         "deezer"
     }
 
+    fn shelf(&self) -> Option<&Shelf> {
+        self.shelf.as_ref()
+    }
+
     /// Resolves the stream url and its key together, since one answer carries both, at the
     /// chosen level or the best below it the license covers. The download starts decrypting as
     /// it arrives.

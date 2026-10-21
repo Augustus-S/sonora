@@ -20,8 +20,8 @@ use async_trait::async_trait;
 use crate::tidal::auth::{Credentials, Lane};
 use crate::tidal::playback::Factory;
 use crate::{
-    Capabilities, InputSource, MusicApi as _, MusicProvider, PromptSink, ProviderSession, Shape,
-    SignIn, SignInFailure, SignInProblem,
+    Capabilities, InputSource, MusicApi as _, MusicProvider, PlaybackFactory, PromptSink,
+    ProviderSession, Shape, SignIn, SignInFailure, SignInProblem,
 };
 
 pub use client::TidalClient;
@@ -124,6 +124,15 @@ impl MusicProvider for TidalProvider {
     fn public_art(&self) -> bool {
         // covers live on resources.tidal.com, open to anyone with the url
         true
+    }
+
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        let (stored, generation) = auth::restore()?;
+        let http = client::http()
+            .inspect_err(|error| log::warn!("tidal: cannot build an offline client: {error:#}"))
+            .ok()?;
+        let client = TidalClient::new(http, stored, Some(generation));
+        Some(Arc::new(Factory::new(client)))
     }
 
     async fn restore(&self) -> Result<Option<ProviderSession>> {

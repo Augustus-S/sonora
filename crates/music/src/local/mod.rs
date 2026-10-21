@@ -70,6 +70,7 @@ impl LocalProvider {
                 pins: false,
                 transcode: false,
                 keeps: false,
+                downloads: false,
                 qualities: &[],
             },
         })

@@ -88,6 +88,7 @@ enum Slot {
     Normalisation,
     Gapless,
     KeepTracks,
+    CacheSize,
     Sleep,
     StayAwake,
     StreamQuality,
@@ -226,6 +227,9 @@ pub struct SettingsView {
     opacity: ScrubberState,
     sleep: ScrubberState,
     pending_sleep: Option<Option<Sleep>>,
+    cache: ScrubberState,
+    /// The cache size a drag of its slider points at, until it lets go.
+    pending_cache: Option<u32>,
     popovers: Popovers,
     /// The theme family whose variant menu opened last, which owns that menu's popover.
     theme_variants: Option<String>,
@@ -365,6 +369,8 @@ impl SettingsView {
             opacity: ScrubberState::new("opacity"),
             sleep: ScrubberState::new("sleep"),
             pending_sleep: None,
+            cache: ScrubberState::new("cache-size"),
+            pending_cache: None,
             popovers,
             theme_variants: None,
             server: cx.new(|cx| Input::new("login-server-hint", cx)),
@@ -738,6 +744,7 @@ impl SettingsView {
                 t!("settings-keep-tracks"),
                 t!("settings-keep-tracks-detail"),
             ),
+            Slot::CacheSize => (t!("settings-cache-size"), t!("settings-cache-size-detail")),
             Slot::StreamQuality => (
                 t!("settings-stream-quality"),
                 t!("settings-stream-quality-detail"),
@@ -897,6 +904,7 @@ impl SettingsView {
             Slot::Normalisation => self.playback_row(cx),
             Slot::Gapless => self.gapless_row(cx),
             Slot::KeepTracks => self.keep_tracks_row(cx),
+            Slot::CacheSize => self.cache_size_row(cx),
             Slot::StreamQuality => self.stream_quality_row(cx),
             Slot::StreamFormat => self.stream_format_row(cx),
             Slot::StreamBitrate => self.stream_bitrate_row(cx),

@@ -128,6 +128,17 @@ menu-remove-tracks-from-history = { $count ->
 }
 menu-delete-track-file = Delete track file
 menu-delete-track-files = Delete { $count } track files
+menu-download = Download
+menu-download-tracks = { $count ->
+    [one] Download { $count } track
+   *[other] Download { $count } tracks
+}
+menu-remove-download = Remove download
+menu-remove-downloads = { $count ->
+    [one] Remove { $count } download
+   *[other] Remove { $count } downloads
+}
+menu-downloading = Downloading. Click to stop
 menu-play-next = Play next
 menu-play-tracks-next = { $count ->
     [one] Play { $count } track next
@@ -291,6 +302,7 @@ filter-year = Year
 filter-hide-explicit = Hide explicit
 filter-playable = Playable only
 filter-favorites = Favorites only
+filter-downloaded = Downloaded
 filter-owned = By you
 
 # view
@@ -703,7 +715,10 @@ settings-normalisation-detail = Keeps tracks at a consistent volume
 settings-gapless = Gapless playback
 settings-gapless-detail = Runs one track into the next without a pause, the way an album was sequenced
 settings-keep-tracks = Keep played tracks
-settings-keep-tracks-detail = Saves what you play, locked to this computer, so playing it again downloads nothing. Turning this off deletes it. Spotify follows a change the next time Sonora starts
+settings-keep-tracks-detail = Saves what you play, locked to this computer, so playing it again downloads nothing. Turning this off deletes it and leaves your downloads alone. Spotify follows a change the next time Sonora starts
+settings-cache-size = Cache size
+settings-cache-size-detail = How much space the tracks you played may take. The ones played longest ago make room first, and downloads do not count toward it
+settings-cache-size-value = { $count } GB
 settings-stream-quality = Streaming quality
 settings-stream-quality-detail = Higher levels sound better and use more data. When your plan or a track has less, the next level down plays
 settings-stream-quality-hi-res = Hi-res
@@ -1212,6 +1227,7 @@ trouble-offline-detail = Check your internet connection and try again.
 trouble-not-loaded = Could not load
 trouble-retry = Try again
 toast-offline = No connection. Nothing will stream until it is back.
+toast-download-failed = Could not list the tracks to download.
 toast-settings-broken = Fix line { $name } of settings.json to save changes
 toast-tray-unavailable = There is no system tray to put the icon in
 toast-undo = Undo

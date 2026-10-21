@@ -41,7 +41,10 @@ impl PlaybackFactory for Factory {
             Subsonic {
                 client: self.client.clone(),
                 transcode: config.transcode,
-                shelf: config.vault.as_ref().map(|vault| vault.shelf("subsonic")),
+                shelf: config
+                    .vault
+                    .as_ref()
+                    .map(|vault| vault.shelf("subsonic").within(self.client.identity())),
             },
             config,
         )
@@ -112,6 +115,10 @@ impl Fetch for Subsonic {
 
     fn name(&self) -> &'static str {
         "subsonic"
+    }
+
+    fn shelf(&self) -> Option<&Shelf> {
+        self.shelf.as_ref()
     }
 
     /// Opens the stream and asks for the length and loudness at the same time, so neither round

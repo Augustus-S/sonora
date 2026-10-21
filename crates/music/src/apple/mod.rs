@@ -106,6 +106,7 @@ fn session(client: AppleClient, profile: crate::UserProfile) -> ProviderSession 
             follow_artists: true,
             pins: true,
             keeps: true,
+            downloads: false,
             qualities: stream::QUALITIES,
             ..Capabilities::NONE
         },

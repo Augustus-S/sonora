@@ -35,6 +35,9 @@ impl SettingsView {
         let mut playing = vec![Slot::Normalisation, Slot::Gapless];
         if capabilities.keeps {
             playing.push(Slot::KeepTracks);
+            if self.playback.read(cx).keep_tracks() {
+                playing.push(Slot::CacheSize);
+            }
         }
         playing.extend([Slot::Sleep, Slot::StayAwake]);
         let mut groups = vec![Group::new("settings-group-playing", "icons/play.svg").rows(playing)];
@@ -111,6 +114,55 @@ impl SettingsView {
                 }))
                 .into_any_element(),
         )
+    }
+
+    /// How many gigabytes the cache of played tracks may take, as a slider with the size before
+    /// it. The label follows a drag at once, and the limit changes when the drag lets go.
+    pub(super) fn cache_size_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.theme();
+        let (low, high) = state::CACHE_GB_RANGE;
+        let current = self
+            .pending_cache
+            .unwrap_or_else(|| self.playback.read(cx).cache_gb());
+        let fraction = (current.saturating_sub(low)) as f32 / (high - low) as f32;
+
+        let control = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .flex_none()
+                    .w(theme.metrics.cover * SLEEP_LABEL)
+                    .whitespace_nowrap()
+                    .text_right()
+                    .child(t!("settings-cache-size-value", count = current)),
+            )
+            .child(
+                div().w(theme.metrics.cover * SLEEP_WIDTH).child(
+                    Scrubber::new(&self.cache, fraction)
+                        .colors(
+                            theme.progress_bar,
+                            theme.muted_foreground.opacity(0.3),
+                            theme.foreground,
+                        )
+                        .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
+                            let span = (high - low) as f32;
+                            this.pending_cache =
+                                Some(low + (fraction.clamp(0., 1.) * span).round() as u32);
+                            cx.notify();
+                        }))
+                        .on_release(cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            let Some(gb) = this.pending_cache.take() else {
+                                return;
+                            };
+                            this.playback
+                                .update(cx, |playback, cx| playback.set_cache_gb(gb, cx));
+                        })),
+                ),
+            );
+
+        self.row(t!("settings-cache-size"), control.into_any_element())
     }
 
     /// The stream level of a service that streams every track at one level, stated rather than

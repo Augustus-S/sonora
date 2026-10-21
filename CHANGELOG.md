@@ -9,11 +9,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Sonora keeps up to 2 GB of the tracks you play from YouTube Music, Tidal, Deezer, Apple Music
-  and your Subsonic server, plus 1 GB from Spotify, so playing one again starts at once and
-  downloads nothing. The copies are locked to your computer and no other player can open them.
-  Apple Music and Spotify still check your subscription each time a kept track plays. Turn it
-  off with Keep played tracks in Settings → Playback, which also deletes them.
+- Download songs, albums and playlists from YouTube Music, Tidal, Deezer and your Subsonic
+  server with the button beside the heart on album and playlist pages, or from any right-click
+  menu. Downloads play with no connection at all, and a Downloaded filter on every library page
+  shows only what you saved.
+- Sonora keeps the tracks you play from YouTube Music, Tidal, Deezer, Apple Music and your
+  Subsonic server, up to 2 GB or whatever you set under Cache size, plus 1 GB from Spotify, so
+  playing one again starts at once and downloads nothing. Downloads and kept tracks are locked to
+  your computer and no other player can open them. Apple Music and Spotify still check your
+  subscription each time a kept track plays. Turn it off with Keep played tracks in Settings →
+  Playback, which also deletes them.
 - A refresh button beside Back and Forward, or Ctrl+R (Cmd+R on macOS), loads the page you are
   on again from your server, so changes made in another app show up without restarting Sonora.
 - With Blur UI on, pages, lyrics, the queue and pinned items scroll beneath a frosted player bar.

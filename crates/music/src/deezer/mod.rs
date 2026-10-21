@@ -14,8 +14,8 @@ use async_trait::async_trait;
 
 use crate::deezer::playback::Factory;
 use crate::{
-    Capabilities, InputSource, MusicApi as _, MusicProvider, PromptSink, ProviderSession, Shape,
-    SignIn, SignInPrompt, WebSignIn,
+    Capabilities, InputSource, MusicApi as _, MusicProvider, PlaybackFactory, PromptSink,
+    ProviderSession, Shape, SignIn, SignInPrompt, WebSignIn,
 };
 
 pub use auth::arl;
@@ -115,6 +115,14 @@ impl MusicProvider for DeezerProvider {
     fn public_art(&self) -> bool {
         // covers live on cdn-images.dzcdn.net, open to anyone with the url
         true
+    }
+
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        let remembered = auth::load()?;
+        let client = DeezerClient::offline(&remembered.arl)
+            .inspect_err(|error| log::warn!("deezer: cannot build an offline client: {error:#}"))
+            .ok()?;
+        Some(Arc::new(Factory::new(client)))
     }
 
     async fn restore(&self) -> Result<Option<ProviderSession>> {

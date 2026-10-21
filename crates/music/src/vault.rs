@@ -1,4 +1,6 @@
-//! Tracks kept on disk after they have played, so the next play needs no download.
+//! Tracks kept on disk, so the next play needs no download: the ones that played, in a cache
+//! with a size limit, and the ones the listener downloaded, which stay until they are removed
+//! and play with no network at all.
 //!
 //! A kept track is never a file another program can play. Each one is sealed with
 //! ChaCha20-Poly1305 under a key derived from a master key that the OS keychain holds, so the
@@ -23,6 +25,7 @@
 //! Every chunk's nonce carries its index and whether it is the last, so a truncated, reordered or
 //! swapped entry fails to open rather than playing wrong.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -75,48 +78,84 @@ enum Block {
     Facts = 2,
 }
 
-/// Every kept track on this machine, under one master key, within one size limit.
+/// Every kept track on this machine, under one master key.
+///
+/// Tracks live in one of two places. The cache holds what has played, within one size limit,
+/// and gives up the least recently played tracks to stay under it. Downloads are tracks the
+/// listener asked to keep, in Sonora's data folder rather than its cache, and stay until they
+/// are discarded.
 ///
 /// The vault exists before its key does. Until [`unlock`](Self::unlock) runs, nothing is found
 /// and nothing is kept, so playback never waits on the keychain.
 pub struct Vault {
     root: PathBuf,
-    limit: u64,
+    /// Where downloads live.
+    pinned: PathBuf,
+    /// The most the cache may hold, in bytes.
+    limit: AtomicU64,
+    /// Whether tracks that only played are kept in the cache.
+    caching: AtomicBool,
     keys: OnceLock<hkdf::Prk>,
-    /// What the entries take on disk, once a sweep has counted them.
+    /// What the cache takes on disk, once a sweep has counted it.
     used: Mutex<Option<u64>>,
+    /// The tracks being downloaded, by shelf and id. Whatever arrives for one of them goes to
+    /// the downloads rather than the cache.
+    wanted: Mutex<HashSet<(&'static str, String)>>,
 }
 
 impl fmt::Debug for Vault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Vault")
             .field("root", &self.root)
-            .field("limit", &self.limit)
+            .field("pinned", &self.pinned)
+            .field("limit", &self.limit())
             .field("unlocked", &self.keys.get().is_some())
             .finish()
     }
 }
 
 impl Vault {
-    /// A vault in `root` that keeps at most `limit` bytes.
-    pub fn new(root: PathBuf, limit: u64) -> Self {
+    /// A vault that caches at most `limit` bytes in `root` and keeps downloads in `pinned`.
+    pub fn new(root: PathBuf, pinned: PathBuf, limit: u64) -> Self {
         Self {
             root,
-            limit,
+            pinned,
+            limit: AtomicU64::new(limit),
+            caching: AtomicBool::new(true),
             keys: OnceLock::new(),
             used: Mutex::new(None),
+            wanted: Mutex::new(HashSet::new()),
         }
     }
 
-    /// A vault in Sonora's cache folder, `$XDG_CACHE_HOME/sonora/vault`.
+    /// A vault in Sonora's folders: the cache in `$XDG_CACHE_HOME/sonora/vault` and downloads in
+    /// `$XDG_DATA_HOME/sonora/downloads`.
     pub fn standard(limit: u64) -> Self {
-        Self::new(standard_root(), limit)
+        Self::new(standard_root(), pinned_root(), limit)
     }
 
     /// Tells a player that keeps its own files whether to keep them. Its session reads this
     /// when it opens, so a change reaches it at the next sign-in.
     pub fn set_keeping(on: bool) {
         KEEPING.store(on, Ordering::Relaxed);
+    }
+
+    /// Changes how much the cache may hold. A lower limit evicts the least recently played
+    /// tracks at once, which walks the cache on disk, so call it off the main thread.
+    pub fn set_limit(&self, limit: u64) {
+        let before = self.limit.swap(limit, Ordering::Relaxed);
+        if limit < before {
+            self.sweep();
+        }
+    }
+
+    fn limit(&self) -> u64 {
+        self.limit.load(Ordering::Relaxed)
+    }
+
+    /// Whether tracks that only played are cached. Downloads are kept either way.
+    pub fn set_caching(&self, on: bool) {
+        self.caching.store(on, Ordering::Relaxed);
     }
 
     /// Where a player that keeps its own files keeps them, when keeping is on. The folder sits
@@ -145,66 +184,74 @@ impl Vault {
         }
     }
 
+    /// Whether the vault has its key yet.
+    pub fn unlocked(&self) -> bool {
+        self.keys.get().is_some()
+    }
+
     /// The part of the vault one provider keeps its tracks in. `provider` names its folder and
     /// goes into every key, so no provider can open another's entries.
     pub(crate) fn shelf(self: &Arc<Self>, provider: &'static str) -> Shelf {
         Shelf {
             vault: self.clone(),
             provider,
+            scope: String::new(),
         }
     }
 
-    /// Removes every kept track.
+    /// Removes every cached track. Downloads stay.
     pub fn forget(&self) {
         match fs::remove_dir_all(&self.root) {
-            Ok(()) => log::info!("vault: forgot every kept track"),
+            Ok(()) => log::info!("vault: forgot every cached track"),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => log::warn!("vault: cannot forget the kept tracks: {error}"),
+            Err(error) => log::warn!("vault: cannot forget the cached tracks: {error}"),
         }
         *self.used.lock().unwrap_or_else(|held| held.into_inner()) = Some(0);
     }
 
-    /// Counts a new entry of `size` bytes and evicts the least recently played ones once the
-    /// vault holds more than its limit.
+    /// Removes every download.
+    pub fn forget_downloads(&self) {
+        match fs::remove_dir_all(&self.pinned) {
+            Ok(()) => log::info!("vault: removed every download"),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("vault: cannot remove the downloads: {error}"),
+        }
+    }
+
+    fn base(&self, place: Place) -> &Path {
+        match place {
+            Place::Cache => &self.root,
+            Place::Pinned => &self.pinned,
+        }
+    }
+
+    fn wanted(&self) -> std::sync::MutexGuard<'_, HashSet<(&'static str, String)>> {
+        self.wanted.lock().unwrap_or_else(|held| held.into_inner())
+    }
+
+    /// Counts a new cache entry of `size` bytes and evicts the least recently played ones once
+    /// the cache holds more than its limit.
     fn settle(&self, size: u64) {
         let over = {
             let mut used = self.used.lock().unwrap_or_else(|held| held.into_inner());
             *used = used.map(|used| used.saturating_add(size));
-            used.is_none_or(|used| used > self.limit)
+            used.is_none_or(|used| used > self.limit())
         };
         if over {
             self.sweep();
         }
     }
 
-    /// Walks every entry, drops what a crash left half-written and the least recently played
-    /// entries past the limit, and answers what is left.
+    /// Drops what a crash left half-written in either place and the least recently played cache
+    /// entries past the limit, and answers what the cache holds after.
     fn sweep(&self) -> u64 {
-        let now = SystemTime::now();
-        let mut entries = Vec::new();
-        for shelf in fs::read_dir(&self.root).into_iter().flatten().flatten() {
-            if shelf.file_name() == FOREIGN {
-                continue;
-            }
-            for item in fs::read_dir(shelf.path()).into_iter().flatten().flatten() {
-                let Ok(metadata) = item.metadata() else {
-                    continue;
-                };
-                let used = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                let partial = item.file_name().to_string_lossy().starts_with('.');
-                if partial {
-                    if now.duration_since(used).is_ok_and(|age| age > ABANDONED) {
-                        fs::remove_file(item.path()).ok();
-                    }
-                    continue;
-                }
-                entries.push((item.path(), used, metadata.len()));
-            }
-        }
+        let limit = self.limit();
+        abandoned(&self.pinned);
+        let mut entries = abandoned(&self.root);
         entries.sort_unstable_by_key(|(_, used, _)| *used);
         let mut total = entries.iter().map(|(_, _, size)| size).sum::<u64>();
         for (path, _, size) in entries {
-            if total <= self.limit {
+            if total <= limit {
                 break;
             }
             if fs::remove_file(&path).is_ok() {
@@ -216,11 +263,20 @@ impl Vault {
     }
 }
 
+/// Where in the vault an entry lives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Cache,
+    Pinned,
+}
+
 /// One provider's tracks in the vault.
 #[derive(Clone)]
-pub(crate) struct Shelf {
+pub struct Shelf {
     vault: Arc<Vault>,
     provider: &'static str,
+    /// What else tells two tracks with one id apart, such as the server a Subsonic id is from.
+    scope: String,
 }
 
 impl fmt::Debug for Shelf {
@@ -232,14 +288,113 @@ impl fmt::Debug for Shelf {
 }
 
 impl Shelf {
-    /// The kept copy of track `id` as `variant` describes it, when there is a whole one. An
-    /// entry that fails to open is removed, so a damaged file costs one download and no more.
+    /// The same shelf for ids that are only unique within `scope`.
+    pub(crate) fn within(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
+    }
+
+    /// The kept copy of track `id`, a download first and then a cached copy as `variant`
+    /// describes it, when there is a whole one. An entry that fails to open is removed, so a
+    /// damaged file costs one download and no more. A cached copy of a track being downloaded
+    /// moves to the downloads on the way out.
     ///
     /// `variant` is whatever changes the bytes for the same id, such as the quality asked for.
+    /// A download is found whatever the variant, since the listener asked for that copy.
     pub(crate) fn find(&self, id: &str, variant: &str) -> Option<Kept> {
         let prk = self.vault.keys.get()?;
-        let name = self.name(prk, id, variant)?;
-        let path = self.folder().join(&name);
+        if let Some(kept) = self.find_in(prk, Place::Pinned, id, variant) {
+            return Some(kept);
+        }
+        if !self.vault.caching.load(Ordering::Relaxed) {
+            return None;
+        }
+        let kept = self.find_in(prk, Place::Cache, id, variant)?;
+        if !self.is_wanted(id) {
+            return Some(kept);
+        }
+        match self.promote(prk, id, kept) {
+            Ok(kept) => Some(kept),
+            Err(error) => {
+                log::warn!("vault: cannot move a cached track to the downloads: {error:#}");
+                self.find_in(prk, Place::Cache, id, variant)
+            }
+        }
+    }
+
+    /// Wraps `source` so that everything it yields is sealed into the vault as it passes, and
+    /// the entry is kept once the source has yielded its last byte. `facts` answers whatever the
+    /// provider needs to play the track again without asking the network, which comes back
+    /// from [`Kept::facts`]. It runs when the entry is kept, so it can describe the whole
+    /// download, and answering `None` there keeps nothing.
+    ///
+    /// A track being downloaded goes to the downloads, and any other to the cache while caching
+    /// is on. The source passes through untouched whatever happens to the vault. A disk that
+    /// refuses the entry only means the track is not kept.
+    pub(crate) fn keep<S: Source>(
+        &self,
+        id: &str,
+        variant: &str,
+        facts: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
+        source: S,
+    ) -> Recording<S> {
+        let place = match self.is_wanted(id) {
+            true => Place::Pinned,
+            false if self.vault.caching.load(Ordering::Relaxed) => Place::Cache,
+            false => return Recording::through(source),
+        };
+        let pending = match self.begin(place, id, variant, Box::new(facts)) {
+            Ok(pending) => pending,
+            Err(error) => {
+                log::debug!("vault: not keeping a {} track: {error:#}", self.provider);
+                None
+            }
+        };
+        Recording { source, pending }
+    }
+
+    /// Marks track `id` as being downloaded, so the next fetch of it is kept as a download.
+    pub(crate) fn want(&self, id: &str) {
+        self.vault.wanted().insert((self.provider, id.to_owned()));
+    }
+
+    /// Ends what [`want`](Self::want) started.
+    pub(crate) fn unwant(&self, id: &str) {
+        self.vault.wanted().remove(&(self.provider, id.to_owned()));
+    }
+
+    /// Whether track `id` has been downloaded.
+    pub(crate) fn holds(&self, id: &str) -> bool {
+        let Some(prk) = self.vault.keys.get() else {
+            return false;
+        };
+        self.spot(prk, Place::Pinned, id, "")
+            .is_some_and(|(_, path)| path.is_file())
+    }
+
+    /// Removes the download of track `id`.
+    pub(crate) fn discard(&self, id: &str) {
+        let Some(prk) = self.vault.keys.get() else {
+            return;
+        };
+        let Some((_, path)) = self.spot(prk, Place::Pinned, id, "") else {
+            return;
+        };
+        match fs::remove_file(path) {
+            Ok(()) => log::debug!("vault: removed a {} download", self.provider),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("vault: cannot remove a {} download: {error}", self.provider),
+        }
+    }
+
+    fn is_wanted(&self, id: &str) -> bool {
+        self.vault
+            .wanted()
+            .contains(&(self.provider, id.to_owned()))
+    }
+
+    fn find_in(&self, prk: &hkdf::Prk, place: Place, id: &str, variant: &str) -> Option<Kept> {
+        let (name, path) = self.spot(prk, place, id, variant)?;
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
@@ -250,10 +405,12 @@ impl Shelf {
         };
         match self.open(prk, &name, &path, file) {
             Ok(kept) => {
-                let now = SystemTime::now();
-                if let Ok(file) = OpenOptions::new().write(true).open(&path) {
-                    file.set_times(FileTimes::new().set_accessed(now).set_modified(now))
-                        .ok();
+                if place == Place::Cache {
+                    let now = SystemTime::now();
+                    if let Ok(file) = OpenOptions::new().write(true).open(&path) {
+                        file.set_times(FileTimes::new().set_accessed(now).set_modified(now))
+                            .ok();
+                    }
                 }
                 Some(kept)
             }
@@ -268,37 +425,34 @@ impl Shelf {
         }
     }
 
-    /// Wraps `source` so that everything it yields is sealed into the vault as it passes, and
-    /// the entry is kept once the source has yielded its last byte. `facts` answers whatever the
-    /// provider needs to play the track again without asking the network, which comes back
-    /// from [`Kept::facts`]. It runs when the entry is kept, so it can describe the whole
-    /// download, and answering `None` there keeps nothing.
-    ///
-    /// The source passes through untouched whatever happens to the vault. A disk that refuses
-    /// the entry only means the track is not kept.
-    pub(crate) fn keep<S: Source>(
+    /// Seals a cached copy again as a download and removes the cached one.
+    fn promote(&self, prk: &hkdf::Prk, id: &str, mut kept: Kept) -> Result<Kept> {
+        let facts = kept.facts.clone();
+        let mut pending = self
+            .begin(Place::Pinned, id, "", Box::new(move || Some(facts)))?
+            .context("the vault is locked")?;
+        while let Some(bytes) = kept.source.open_next()? {
+            pending.write(&bytes)?;
+        }
+        pending.commit()?;
+        fs::remove_file(&kept.source.path).ok();
+        log::debug!(
+            "vault: moved a cached {} track to the downloads",
+            self.provider
+        );
+        self.find_in(prk, Place::Pinned, id, "")
+            .context("the download does not open")
+    }
+
+    /// The file name and path of a track in `place`. The name is a keyed hash that says nothing
+    /// to anyone without the key. A download's ignores `variant`.
+    fn spot(
         &self,
+        prk: &hkdf::Prk,
+        place: Place,
         id: &str,
         variant: &str,
-        facts: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
-        source: S,
-    ) -> Recording<S> {
-        let pending = match self.begin(id, variant, Box::new(facts)) {
-            Ok(pending) => pending,
-            Err(error) => {
-                log::debug!("vault: not keeping a {} track: {error:#}", self.provider);
-                None
-            }
-        };
-        Recording { source, pending }
-    }
-
-    fn folder(&self) -> PathBuf {
-        self.vault.root.join(self.provider)
-    }
-
-    /// The file name of a track, a keyed hash that says nothing to anyone without the key.
-    fn name(&self, prk: &hkdf::Prk, id: &str, variant: &str) -> Option<String> {
+    ) -> Option<(String, PathBuf)> {
         let key: hmac::Key = prk
             .expand(&[b"name", self.provider.as_bytes()], hmac::HMAC_SHA256)
             .ok()?
@@ -306,9 +460,15 @@ impl Shelf {
         let mut context = hmac::Context::with_key(&key);
         context.update(id.as_bytes());
         context.update(&[0]);
-        context.update(variant.as_bytes());
-        let tag = context.sign();
-        Some(hex(&tag.as_ref()[..16]))
+        context.update(self.scope.as_bytes());
+        context.update(&[0]);
+        match place {
+            Place::Cache => context.update(variant.as_bytes()),
+            Place::Pinned => context.update(&[1]),
+        }
+        let name = hex(&context.sign().as_ref()[..16]);
+        let path = self.vault.base(place).join(self.provider).join(&name);
+        Some((name, path))
     }
 
     /// The key that seals one entry, from the master key, this shelf and the entry's salt.
@@ -320,16 +480,24 @@ impl Shelf {
         Ok(LessSafeKey::new(UnboundKey::from(okm)))
     }
 
-    /// Opens a temporary file for a new entry, or answers `None` while the vault is locked.
-    fn begin(&self, id: &str, variant: &str, facts: Describe) -> Result<Option<Pending>> {
+    /// Opens a temporary file for a new entry in `place`, or answers `None` while the vault is
+    /// locked.
+    fn begin(
+        &self,
+        place: Place,
+        id: &str,
+        variant: &str,
+        facts: Describe,
+    ) -> Result<Option<Pending>> {
         let Some(prk) = self.vault.keys.get() else {
             return Ok(None);
         };
-        let name = self
-            .name(prk, id, variant)
+        let (name, path) = self
+            .spot(prk, place, id, variant)
             .context("cannot name the entry")?;
-        let folder = self.folder();
-        create_private(&self.vault.root)?;
+        let base = self.vault.base(place);
+        let folder = base.join(self.provider);
+        create_private(base)?;
         create_private(&folder)?;
         let mut salt = [0; SALT];
         SystemRandom::new()
@@ -343,9 +511,13 @@ impl Shelf {
         ));
         let mut file = private_file(&temporary)?;
         file.write_all(&salt).context("cannot start the entry")?;
+        let (cache, ceiling) = match place {
+            Place::Cache => (Some(self.vault.clone()), self.vault.limit() / SHARE),
+            Place::Pinned => (None, u64::MAX),
+        };
         Ok(Some(Pending {
-            vault: self.vault.clone(),
-            path: folder.join(&name),
+            cache,
+            path,
             temporary,
             name,
             file,
@@ -354,7 +526,7 @@ impl Shelf {
             buffer: Vec::with_capacity(CHUNK + TAG),
             index: 0,
             written: SALT as u64,
-            ceiling: self.vault.limit / SHARE,
+            ceiling,
         }))
     }
 
@@ -495,7 +667,8 @@ impl<S: Source> Source for Recording<S> {
 /// An entry being written. Dropping it before [`commit`](Self::commit) removes the file, so
 /// a skipped or broken track leaves nothing behind.
 struct Pending {
-    vault: Arc<Vault>,
+    /// The vault whose cache the entry counts against, or `None` for a download.
+    cache: Option<Arc<Vault>>,
     path: PathBuf,
     temporary: PathBuf,
     name: String,
@@ -564,7 +737,9 @@ impl Pending {
             "vault: kept a track, {:.1} MiB",
             size as f64 / (1024.0 * 1024.0)
         );
-        self.vault.settle(size);
+        if let Some(vault) = &self.cache {
+            vault.settle(size);
+        }
         Ok(())
     }
 
@@ -642,4 +817,40 @@ fn private_file(path: &Path) -> Result<File> {
 /// Sonora's vault folder, `$XDG_CACHE_HOME/sonora/vault`.
 fn standard_root() -> PathBuf {
     crate::credentials::root().join("vault")
+}
+
+/// Sonora's downloads folder, `$XDG_DATA_HOME/sonora/downloads`.
+fn pinned_root() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("sonora")
+        .join("downloads")
+}
+
+/// Removes what a crash left half-written under `root` a while ago, and answers every whole
+/// entry there with when it last played and its size. The folder of players keeping their own
+/// files is left alone.
+fn abandoned(root: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
+    let now = SystemTime::now();
+    let mut entries = Vec::new();
+    for shelf in fs::read_dir(root).into_iter().flatten().flatten() {
+        if shelf.file_name() == FOREIGN {
+            continue;
+        }
+        for item in fs::read_dir(shelf.path()).into_iter().flatten().flatten() {
+            let Ok(metadata) = item.metadata() else {
+                continue;
+            };
+            let used = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let partial = item.file_name().to_string_lossy().starts_with('.');
+            if partial {
+                if now.duration_since(used).is_ok_and(|age| age > ABANDONED) {
+                    fs::remove_file(item.path()).ok();
+                }
+                continue;
+            }
+            entries.push((item.path(), used, metadata.len()));
+        }
+    }
+    entries
 }

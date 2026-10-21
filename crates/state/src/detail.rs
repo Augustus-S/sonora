@@ -1,16 +1,16 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use gpui::{Context, Entity, Task};
+use gpui::{App, Context, Entity, Task};
 use music::{
     Album, AlbumCatalogue, AlbumDetail, ArtistRef, Contributor, Playlist, PlaylistDetail,
     ReleaseType, SavedArtist, Track,
 };
 use tokio::task::AbortHandle;
 
-use crate::{Io, Library, LibraryEvent, Session, SessionEvent, join, mosaic};
+use crate::{Io, Library, LibraryEvent, Session, SessionEvent, Sonora, join, mosaic};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Collection {
     Album,
     Playlist,
@@ -448,6 +448,9 @@ impl Detail {
         self.header = known;
 
         let Some(catalog) = self.session.read(cx).catalog(id) else {
+            if let Some(kept) = kept(kind, id, cx) {
+                self.adopt(kept, cx);
+            }
             cx.notify();
             return true;
         };
@@ -494,7 +497,10 @@ impl Detail {
                 this.request = None;
                 match crate::settled(loaded, cx) {
                     Ok(detail) => this.adopt(detail, cx),
-                    Err(reason) => this.error = Some(reason),
+                    Err(reason) => match kept(kind, &id, cx) {
+                        Some(kept) => this.adopt(kept, cx),
+                        None => this.error = Some(reason),
+                    },
                 }
                 cx.notify();
             })
@@ -714,5 +720,19 @@ fn playlist_header(playlist: &Playlist) -> Header {
         owner_name,
         track_count: playlist.track_count,
         cover: playlist.cover.clone(),
+    }
+}
+
+/// The downloaded copy of an album or playlist, which stands in for its page while the provider
+/// is out of reach.
+fn kept(kind: Collection, id: &str, cx: &App) -> Option<Loaded> {
+    let downloads = cx.try_global::<Sonora>()?.downloads.read(cx);
+    match kind {
+        Collection::Album => downloads
+            .album_detail(id)
+            .map(|detail| Loaded::Album(Arc::new(detail))),
+        Collection::Playlist => downloads
+            .playlist_detail(id)
+            .map(|detail| Loaded::Playlist(Arc::new(detail))),
     }
 }

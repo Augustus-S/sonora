@@ -307,6 +307,18 @@ impl LibraryView {
             cx.notify();
         })
         .detach();
+        // The Downloaded filter follows downloads as they land.
+        let downloads = Sonora::global(cx).downloads.clone();
+        cx.observe(&downloads, |this, _, cx| {
+            for table in this.tables() {
+                if table.narrowed(cx) {
+                    table.rebuild(cx);
+                }
+            }
+            this.cards_dirty = true;
+            cx.notify();
+        })
+        .detach();
 
         let chrome = Chrome::entity(cx);
         cx.observe(&chrome, |_, _, cx| cx.notify()).detach();

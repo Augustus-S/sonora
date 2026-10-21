@@ -67,6 +67,7 @@ impl SpotifyProvider {
             authenticated: true,
             capabilities: Capabilities {
                 pins: true,
+                downloads: false,
                 qualities: playback::QUALITIES,
                 ..Capabilities::ALL
             },

@@ -373,7 +373,7 @@ pub struct PlaybackConfig {
     /// Shared like `equalizer`: every output the engine opens lets it hear the music ahead of the
     /// equalizer while it is watched.
     pub analyzer: Analyzer,
-    /// Where tracks are kept once they have played, or `None` when keeping them is off.
+    /// Where tracks are kept, the downloads and, while caching is on, the ones that played.
     pub vault: Option<Arc<vault::Vault>>,
 }
 
@@ -643,6 +643,20 @@ pub trait Player: Send + Sync {
     fn spectrum(&self) -> Option<Spectrum> {
         None
     }
+
+    /// Fetches all of a track into the downloads without playing it. The future answers once it
+    /// is kept, or why it could not be. A player that cannot download says so at once.
+    fn download(&self, _track_id: &str) -> futures::future::BoxFuture<'static, Result<()>> {
+        Box::pin(async { Err(anyhow::anyhow!("this player cannot download")) })
+    }
+
+    /// Whether a track has been downloaded.
+    fn downloaded(&self, _track_id: &str) -> bool {
+        false
+    }
+
+    /// Removes the download of a track.
+    fn discard(&self, _track_id: &str) {}
 }
 
 #[async_trait]
@@ -710,6 +724,8 @@ pub struct Capabilities {
     pub transcode: bool,
     /// Played tracks can be kept in the [`vault`], so playing one again downloads nothing.
     pub keeps: bool,
+    /// Tracks can be downloaded, and a downloaded track plays with no network at all.
+    pub downloads: bool,
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.
     pub qualities: &'static [Offer],
@@ -726,6 +742,7 @@ impl Capabilities {
         pins: false,
         transcode: false,
         keeps: true,
+        downloads: true,
         qualities: &[],
     };
 
@@ -737,6 +754,7 @@ impl Capabilities {
         pins: false,
         transcode: false,
         keeps: false,
+        downloads: false,
         qualities: &[],
     };
 }
@@ -914,6 +932,11 @@ pub trait MusicProvider: Send + Sync {
     /// it, so the default is no.
     fn public_art(&self) -> bool {
         false
+    }
+    /// A playback factory built from the stored sign-in alone, with no network, for a provider
+    /// whose downloads play offline. The session starts it when the account cannot be reached.
+    fn offline_playback(&self) -> Option<Arc<dyn PlaybackFactory>> {
+        None
     }
     async fn restore(&self) -> Result<Option<ProviderSession>>;
     async fn sign_in(

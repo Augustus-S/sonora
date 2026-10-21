@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
+use futures::future::BoxFuture;
 use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Task, WeakEntity};
 use music::connect::{self, Command};
 use music::vault::Vault;
@@ -91,8 +92,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::devices::{collection_of, mode_of};
 use crate::{
-    AppSettings, Devices, Equalizer, Io, Network, Outcome, Session, SessionEvent, Sonora, Steered,
-    Target, Toast, Toasts, join,
+    AppSettings, Devices, Equalizer, Io, Network, Outcome, Session, SessionEvent, SessionState,
+    Sonora, Steered, Target, Toast, Toasts, join,
 };
 
 const POSITION_INTERVAL: Duration = Duration::from_millis(500);
@@ -405,14 +406,18 @@ pub struct Playback {
     gapless: bool,
     transcode: Transcode,
     quality: Quality,
-    /// Whether tracks that played are kept in `vault`, so playing one again downloads nothing.
+    /// Whether tracks that played are cached in `vault`, so playing one again downloads nothing.
     keep_tracks: bool,
-    /// Where tracks are kept, shared with every engine started while keeping is on.
+    /// How many gigabytes the cache in `vault` may take.
+    cache_gb: u32,
+    /// Where tracks are kept, the downloads and the cache, shared with every engine.
     vault: Arc<Vault>,
     /// Reads the vault's master key from the keychain. The vault keeps nothing until it ends.
     _unlock: Task<()>,
-    /// Removes the kept tracks after keeping was turned off.
+    /// Removes the cached tracks after caching was turned off.
     forget: Option<Task<()>>,
+    /// Evicts what no longer fits after the cache limit came down.
+    resize: Option<Task<()>>,
     /// The `state::Equalizer`'s reader, shared with every engine started here, so a change
     /// reaches the output without a restart.
     equalizer: music::Equalizer,
@@ -525,6 +530,18 @@ impl Playback {
             }
         })
         .detach();
+        // An account out of reach still plays its downloads, through an engine the session builds
+        // from the stored sign-in alone.
+        cx.observe(&session, |this, session, cx| {
+            let session = session.read(cx);
+            if this.engine.is_none()
+                && matches!(session.state(), SessionState::Offline(_))
+                && let Some(playback) = session.playback()
+            {
+                this.start_engine(playback, cx);
+            }
+        })
+        .detach();
         cx.observe(&queue, |this, _, cx| {
             this.continue_station(cx);
             this.suggest_similar(false, cx);
@@ -537,7 +554,9 @@ impl Playback {
         let transcode = settings.read(cx).transcode();
         let quality = settings.read(cx).quality();
         let keep_tracks = settings.read(cx).keep_tracks();
-        let vault = Arc::new(Vault::standard(crate::vault::LIMIT));
+        let cache_gb = settings.read(cx).cache_gb();
+        let vault = Arc::new(Vault::standard(crate::vault::bytes(cache_gb)));
+        vault.set_caching(keep_tracks);
         let unlock = crate::vault::unlock(vault.clone(), cx);
         let (equalizer, meter) = (equalizer.read(cx).reader(), equalizer.read(cx).meter());
         let repeat = settings.read(cx).repeat();
@@ -559,9 +578,11 @@ impl Playback {
             transcode,
             quality,
             keep_tracks,
+            cache_gb,
             vault,
             _unlock: unlock,
             forget: None,
+            resize: None,
             equalizer,
             meter,
             analyzer: Analyzer::default(),
@@ -835,7 +856,7 @@ impl Playback {
         if !track.playable {
             return self.failed(format!("{} is not available to stream", track.name), cx);
         }
-        if !is_local && Network::lost(cx) {
+        if !is_local && Network::lost(cx) && !self.downloaded(&id) {
             return self.unreachable(start, cx);
         }
         if self.engine_for(&id).is_none() {
@@ -2374,21 +2395,68 @@ impl Playback {
         self.keep_tracks
     }
 
-    /// Turns keeping played tracks on or off. Turning it off also removes every track already
-    /// kept, and the streaming engine restarts either way so it picks the change up.
+    pub fn cache_gb(&self) -> u32 {
+        self.cache_gb
+    }
+
+    /// Changes how many gigabytes the cache of played tracks may take. A lower limit evicts
+    /// the least recently played tracks right away. Downloads do not count toward it.
+    pub fn set_cache_gb(&mut self, gb: u32, cx: &mut Context<Self>) {
+        let (low, high) = crate::vault::CACHE_GB_RANGE;
+        let gb = gb.clamp(low, high);
+        if self.cache_gb == gb {
+            return;
+        }
+        self.cache_gb = gb;
+        self.settings
+            .update(cx, |settings, cx| settings.set_cache_gb(gb, cx));
+        let vault = self.vault.clone();
+        let bytes = crate::vault::bytes(gb);
+        self.resize = Some(cx.background_spawn(async move { vault.set_limit(bytes) }));
+        cx.notify();
+    }
+
+    /// Fetches all of a streaming track into the downloads without playing it, through the
+    /// engine that would play it. `None` while there is no streaming engine.
+    pub fn download(&self, id: &str) -> Option<BoxFuture<'static, Result<()>>> {
+        self.engine.as_deref().map(|engine| engine.download(id))
+    }
+
+    /// Whether a streaming track has been downloaded, so it plays with no network.
+    pub fn downloaded(&self, id: &str) -> bool {
+        self.engine
+            .as_deref()
+            .is_some_and(|engine| engine.downloaded(id))
+    }
+
+    /// Removes the download of a streaming track.
+    pub fn discard(&self, id: &str) {
+        if let Some(engine) = self.engine.as_deref() {
+            engine.discard(id);
+        }
+    }
+
+    /// The vault downloads and the cache share, for removing every download at once.
+    pub fn vault(&self) -> &Arc<Vault> {
+        &self.vault
+    }
+
+    /// Turns caching played tracks on or off. Turning it off also removes every cached track,
+    /// and downloads stay. Spotify keeps its own files and follows at its next sign-in.
     pub fn set_keep_tracks(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.keep_tracks == on {
             return;
         }
         self.keep_tracks = on;
         Vault::set_keeping(on);
+        self.vault.set_caching(on);
         self.settings
             .update(cx, |settings, cx| settings.set_keep_tracks(on, cx));
         if !on {
             let vault = self.vault.clone();
             self.forget = Some(cx.background_spawn(async move { vault.forget() }));
         }
-        self.restart_engine(cx);
+        cx.notify();
     }
 
     pub fn set_gapless(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -2566,7 +2634,7 @@ impl Playback {
             equalizer: self.equalizer.clone(),
             meter: self.meter.clone(),
             analyzer: self.analyzer.clone(),
-            vault: self.keep_tracks.then(|| self.vault.clone()),
+            vault: Some(self.vault.clone()),
         };
         let (engine, events) = playback.start(config);
 
@@ -2593,7 +2661,7 @@ impl Playback {
             equalizer: self.equalizer.clone(),
             meter: self.meter.clone(),
             analyzer: self.analyzer.clone(),
-            vault: self.keep_tracks.then(|| self.vault.clone()),
+            vault: Some(self.vault.clone()),
         };
         let (engine, events) = playback.start(config);
 
