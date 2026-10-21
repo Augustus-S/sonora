@@ -95,6 +95,12 @@ pub trait Fetch: Send + Sync + 'static {
         None
     }
 
+    /// Whether a track on the shelf plays with no network. A provider that has to license every
+    /// play says no, and its downloads only save the fetch.
+    fn plays_offline(&self) -> bool {
+        true
+    }
+
     /// Fetches a track: enough of it to start decoding, not all of it.
     async fn load(&self, id: &str) -> Result<Self::Loaded>;
 
@@ -168,6 +174,7 @@ pub fn start<F: Fetch>(
     let engine_spectrum = spectrum.clone();
     let name = fetch.name();
     let shelf = fetch.shelf().cloned();
+    let offline = fetch.plays_offline();
     let spawned = std::thread::Builder::new()
         .name(format!("{name}-playback"))
         .spawn(move || run(Arc::new(fetch), config, command_rx, events, engine_spectrum));
@@ -179,6 +186,7 @@ pub fn start<F: Fetch>(
             commands,
             spectrum,
             shelf,
+            offline,
         }),
         Box::new(Events(event_rx)),
     )
@@ -238,6 +246,8 @@ struct Handle {
     /// Where the provider keeps tracks, which says what is downloaded without asking the
     /// engine thread.
     shelf: Option<Shelf>,
+    /// Whether what is on the shelf plays with no network, as [`Fetch::plays_offline`] said.
+    offline: bool,
 }
 
 impl Player for Handle {
@@ -315,6 +325,10 @@ impl Player for Handle {
         self.shelf
             .as_ref()
             .is_some_and(|shelf| shelf.holds(track_id))
+    }
+
+    fn plays_offline(&self, track_id: &str) -> bool {
+        self.offline && self.downloaded(track_id)
     }
 
     fn discard(&self, track_id: &str) {

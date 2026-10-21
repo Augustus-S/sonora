@@ -101,12 +101,14 @@ fn session(client: AppleClient, profile: crate::UserProfile) -> ProviderSession 
         authenticated: true,
         // Apple keeps no play counts. Stations it does have, through the same endpoint the web
         // player's autoplay uses. An artist can be favorited like anything else, and pins live
-        // behind `me/library/pins`.
+        // behind `me/library/pins`. A download only saves the fetch, since every play still
+        // needs a license.
         capabilities: Capabilities {
             radio: true,
             follow_artists: true,
             pins: true,
             keeps: true,
+            downloads: true,
             qualities: stream::QUALITIES,
             ..Capabilities::NONE
         },

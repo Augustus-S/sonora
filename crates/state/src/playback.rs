@@ -859,8 +859,8 @@ impl Playback {
         if !track.playable {
             return self.failed(format!("{} is not available to stream", track.name), cx);
         }
-        if !is_local && Network::lost(cx) && !self.downloaded(&id) {
-            return self.unreachable(start, cx);
+        if !is_local && Network::lost(cx) && !self.plays_offline(&id) {
+            return self.unreachable(&id, start, cx);
         }
         if self.engine_for(&id).is_none() {
             return;
@@ -2479,11 +2479,12 @@ impl Playback {
             .map(|engine| engine.download(id, progress))
     }
 
-    /// Whether a streaming track has been downloaded, so it plays with no network.
-    pub fn downloaded(&self, id: &str) -> bool {
+    /// Whether a streaming track plays with no network, which takes a download the provider can
+    /// open offline.
+    fn plays_offline(&self, id: &str) -> bool {
         self.engine
             .as_deref()
-            .is_some_and(|engine| engine.downloaded(id))
+            .is_some_and(|engine| engine.plays_offline(id))
     }
 
     /// Removes the download of a streaming track.
@@ -3039,11 +3040,23 @@ impl Playback {
 
     /// Turns down a track that has to be streamed while the network is gone. Whatever plays
     /// keeps playing, since a local file needs nothing, and only a track the user picked says
-    /// so out loud: the queue moving on by itself would otherwise toast once a track.
-    fn unreachable(&mut self, start: Start, cx: &mut Context<Self>) {
+    /// so out loud: the queue moving on by itself would otherwise toast once a track. A download
+    /// that still needs the network, as Apple Music's do, says why instead.
+    fn unreachable(&mut self, id: &str, start: Start, cx: &mut Context<Self>) {
         log::warn!("playback: nothing streams while the network is gone");
-        if start == Start::Pick {
-            Toasts::show(Outcome::Failed, "toast-offline", cx);
+        if start != Start::Pick {
+            return;
+        }
+        match crate::downloads::downloaded(id, cx) {
+            true => {
+                let provider = self
+                    .session
+                    .read(cx)
+                    .provider_name()
+                    .unwrap_or("this provider");
+                Toasts::about(Outcome::Failed, "toast-offline-unsupported", provider, cx);
+            }
+            false => Toasts::show(Outcome::Failed, "toast-offline", cx),
         }
     }
 

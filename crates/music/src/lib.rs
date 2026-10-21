@@ -661,6 +661,11 @@ pub trait Player: Send + Sync {
         false
     }
 
+    /// Whether a track plays with no network, which only a download can.
+    fn plays_offline(&self, track_id: &str) -> bool {
+        self.downloaded(track_id)
+    }
+
     /// Removes the download of a track.
     fn discard(&self, _track_id: &str) {}
 }
@@ -757,7 +762,8 @@ pub struct Capabilities {
     pub transcode: bool,
     /// Played tracks can be kept in the [`vault`], so playing one again downloads nothing.
     pub keeps: bool,
-    /// Tracks can be downloaded, and a downloaded track plays with no network at all.
+    /// Tracks can be downloaded. Whether a download then plays with no network is up to the
+    /// player, through [`Player::plays_offline`].
     pub downloads: bool,
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.

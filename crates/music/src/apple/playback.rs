@@ -95,6 +95,12 @@ impl Fetch for Apple {
         self.shelf.as_ref()
     }
 
+    /// A kept track is still encrypted, and the key that opens it is licensed afresh for each
+    /// play and lasts about fifteen minutes, so a download cannot play without the network.
+    fn plays_offline(&self) -> bool {
+        false
+    }
+
     /// Resolves and licenses the track, and asks the catalog how long and how loud it is at the
     /// same time.
     /// The length comes back beside the media rather than after it, because the tail trim that
