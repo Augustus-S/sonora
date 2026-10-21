@@ -1,29 +1,30 @@
 //! Minting YouTube's proof-of-origin token in a hidden browser window.
 //!
-//! YouTube stops serving streams to an address it has flagged unless the request carries a token
-//! that proves it came from a browser. Google's BotGuard virtual machine produces one only after
-//! attesting the engine it is running in, and no hand-written javascript environment passes that,
-//! so the app opens the one real engine it ships: a `webview` page on youtube.com running
-//! `potoken.js`, off the screen, which leaves each token in a cookie.
+//! YouTube stops serving some streams unless the request carries a token that proves it came from
+//! a browser. Google's BotGuard virtual machine produces one only after attesting the engine it is
+//! running in, and no hand-written javascript environment passes that, so the app opens the one
+//! real engine it ships: a `webview` page on youtube.com running `potoken.js`, off the screen,
+//! which leaves each token in a cookie.
 //!
 //! Nothing here drives it on a schedule. `music::potoken` records the identifier the YouTube
 //! client is waiting on, this entity notices, mints, and files the answer. The client uses a cold
 //! start token until then, which covers the start of a track and no more. A host where webkit2gtk
 //! does not load never opens a window and never mints.
 //!
-//! YouTube binds the token to each track while it runs its content binding experiment, so a token
-//! is wanted for every track. Attesting takes seconds and the page weighs hundreds of megabytes,
-//! so the page stays open while tracks keep asking and mints each later token in milliseconds. It
-//! closes once nothing has asked for a while, and after a few hours so it never outlives the
-//! integrity token behind its minter.
+//! The YouTube client only asks for a track that neither tokenless client serves, and playback
+//! preloads the next track, so the ask usually comes in while the previous one is still playing.
+//! The page is the embed player, the lightest YouTube page that carries the minting client, at
+//! about 270 MiB. A token outlives the page that minted it, so the page closes [`LINGER`] after
+//! its last answer and only a burst of asks shares one.
 
 use std::time::{Duration, Instant};
 
 use gpui::{App, AppContext as _, Context, Task};
 
-/// Where the minting page is loaded from. The first binding rides in the query string because the
-/// page has nothing else to read it from before it loads.
-const PAGE: &str = "https://www.youtube.com/";
+/// Where the minting page is loaded from: the embed player of the first video on YouTube, which
+/// is never taken down. The first binding rides in the query string because the page has nothing
+/// else to read it from before it loads.
+const PAGE: &str = "https://www.youtube.com/embed/jNQXAC9IVRw";
 const LANDING: &str = "www.youtube.com";
 const DOMAIN: &str = "youtube.com";
 /// The cookie the page leaves its answers in.
@@ -41,11 +42,8 @@ const BUSY_TICK: Duration = Duration::from_millis(100);
 const PATIENCE: Duration = Duration::from_secs(45);
 /// How long an attested page gets to answer one more ask.
 const ANSWER: Duration = Duration::from_secs(10);
-/// How long an open page waits for the next ask before it is closed.
-const IDLE: Duration = Duration::from_secs(10 * 60);
-/// How long one page, and so one attestation, is used. Google's integrity token lasts twelve
-/// hours and `music::potoken` hands a token out for six more after it is minted.
-const LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
+/// How long a page stays open after its last answer, for a skip or two that ask again at once.
+const LINGER: Duration = Duration::from_secs(20);
 
 /// The browser window that mints proof-of-origin tokens, and the ask it is serving.
 pub struct PoToken {
@@ -56,7 +54,6 @@ pub struct PoToken {
 /// A minting page that is open, and where it is with its asks.
 struct Open {
     page: webview::Page,
-    opened: Instant,
     /// Whether the page has minted once, which means its minter is attested.
     warm: bool,
     /// The binding the page is minting for, and when it was asked.
@@ -136,7 +133,6 @@ impl PoToken {
                 let now = Instant::now();
                 self.open = Some(Open {
                     page,
-                    opened: now,
                     warm: false,
                     asked: Some((binding, now)),
                     used: now,
@@ -149,19 +145,14 @@ impl PoToken {
         }
     }
 
-    /// Hands an attested page the next ask, or closes it once it has gone unused or outlived its
-    /// attestation. An ask that comes in while the page is being closed waits for the next page.
+    /// Hands an attested page the next ask, or closes it once [`LINGER`] has passed without one.
+    /// An ask that comes in after that waits for the next page.
     fn ask(&mut self) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        if open.used.elapsed() > IDLE {
-            log::debug!("potoken: nothing asked for a token in {IDLE:?}, closing the minting page");
-            self.close();
-            return;
-        }
-        if open.opened.elapsed() > LIFETIME {
-            log::debug!("potoken: the minting page is {LIFETIME:?} old, closing it");
+        if open.used.elapsed() > LINGER {
+            log::debug!("potoken: nothing more to mint, closing the minting page");
             self.close();
             return;
         }
