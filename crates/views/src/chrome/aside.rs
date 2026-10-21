@@ -104,6 +104,63 @@ fn track(queue: &Queue, position: QueuePosition) -> Option<Track> {
     }
 }
 
+/// Where the queue list reads its songs: this app's own queue, or the queue of the device that has
+/// playback. That one is shown read only, with the songs people queued by hand first.
+#[derive(Clone)]
+enum Listing {
+    Own(Entity<Queue>),
+    Steered {
+        current: Option<Rc<Track>>,
+        upcoming: Rc<[Track]>,
+        playing: bool,
+    },
+}
+
+impl Listing {
+    /// The steered device's queue and the row counts it lays out as.
+    fn steered(steered: &Steered) -> (Self, Sections) {
+        let (queued, following) = steered
+            .upcoming
+            .iter()
+            .partition::<Vec<_>, _>(|upcoming| upcoming.queued);
+        let sections = Sections {
+            past: 0,
+            current: steered.track.is_some(),
+            manual: queued.len(),
+            upcoming: steered.upcoming.len(),
+            similar: 0,
+        };
+        let upcoming = queued
+            .into_iter()
+            .chain(following)
+            .map(|upcoming| upcoming.track.clone())
+            .collect();
+        let listing = Self::Steered {
+            current: steered.track.clone().map(Rc::new),
+            upcoming,
+            playing: steered.playing,
+        };
+        (listing, sections)
+    }
+
+    fn track(&self, position: QueuePosition, cx: &App) -> Option<Track> {
+        match self {
+            Self::Own(queue) => track(queue.read(cx), position),
+            Self::Steered {
+                current, upcoming, ..
+            } => match position {
+                QueuePosition::Current => current.as_deref().cloned(),
+                QueuePosition::Upcoming(index) => upcoming.get(index).cloned(),
+                QueuePosition::Past(_) | QueuePosition::Similar(_) => None,
+            },
+        }
+    }
+
+    fn remote(&self) -> bool {
+        matches!(self, Self::Steered { .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum QueuePosition {
     Past(usize),
@@ -252,6 +309,8 @@ struct RowLook {
     drop_line: Option<Edge>,
     /// Whether the row is a song someone queued by hand, which names who did when it is known.
     queued: bool,
+    /// Whether the row is on another device's queue, which this app shows but cannot change.
+    remote: bool,
 }
 
 /// The credit under a sheet, resolved once for the answer it names and the language it was read
@@ -328,6 +387,9 @@ pub(crate) struct Aside {
     scroll: UniformListScrollHandle,
     scrollbar: Entity<Scrollbar>,
     past_len: usize,
+    /// The id of the steered device's track the list was last pinned for, or `None` over this
+    /// app's own queue. A change pins the now-playing row again.
+    remote_track: Option<Option<String>>,
     anchor: bool,
     titled: bool,
     aiming: bool,
@@ -431,6 +493,7 @@ impl Aside {
             scroll,
             scrollbar,
             past_len: 0,
+            remote_track: None,
             anchor: true,
             titled: true,
             aiming: false,
@@ -773,11 +836,13 @@ impl Aside {
             playing,
             drop_line,
             queued,
+            remote,
         } = look;
         let theme = *cx.theme();
-        let past_index = position.past();
-        let queue_index = position.upcoming();
-        let similar_index = position.similar();
+        let past_index = position.past().filter(|_| !remote);
+        let queue_index = position.upcoming().filter(|_| !remote);
+        let similar_index = position.similar().filter(|_| !remote);
+        let current = position == QueuePosition::Current;
         let title = match position {
             QueuePosition::Past(_) => theme.muted_foreground,
             QueuePosition::Current => theme.primary,
@@ -814,19 +879,23 @@ impl Aside {
         )
         .tint(title)
         .when(track.explicit, Card::explicit)
-        .play(
-            playing,
-            cx.listener(move |this, _, _, cx| {
-                let stale = this.queue.read(cx).revision() != queue_revision;
-                this.playback.update(cx, |playback, cx| match position {
-                    QueuePosition::Current => playback.toggle_play(cx),
-                    QueuePosition::Past(index) if !stale => playback.play_past(index, cx),
-                    QueuePosition::Upcoming(index) if !stale => playback.play_upcoming(index, cx),
-                    QueuePosition::Similar(index) if !stale => playback.play_similar(index, cx),
-                    _ => {}
-                });
-            }),
-        )
+        .when(!remote || current, |card| {
+            card.play(
+                playing,
+                cx.listener(move |this, _, _, cx| {
+                    let stale = this.queue.read(cx).revision() != queue_revision;
+                    this.playback.update(cx, |playback, cx| match position {
+                        QueuePosition::Current => playback.toggle_play(cx),
+                        QueuePosition::Past(index) if !stale => playback.play_past(index, cx),
+                        QueuePosition::Upcoming(index) if !stale => {
+                            playback.play_upcoming(index, cx)
+                        }
+                        QueuePosition::Similar(index) if !stale => playback.play_similar(index, cx),
+                        _ => {}
+                    });
+                }),
+            )
+        })
         .menu(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
             this.track_menu.reset(cx);
             this.context_menu = Some(ContextMenuState {
@@ -923,63 +992,6 @@ impl Aside {
             .when_some(drop_line, |this, edge| this.child(drop_marker(edge, cx)))
     }
 
-    /// The queue of the device that has playback, which is read only: what is playing, what
-    /// people queued with who did, and what follows from the album or playlist. `bottom` is the
-    /// room kept under the last row so it scrolls clear of the player bar and its strip.
-    fn other(steered: &Steered, bottom: Pixels, cx: &App) -> impl IntoElement {
-        let theme = *cx.theme();
-        let (queued, following) = steered
-            .upcoming
-            .iter()
-            .partition::<Vec<_>, _>(|upcoming| upcoming.queued);
-        let row = |id: &'static str, index: usize, track: &Track, color| {
-            Card::new((id, index), SharedString::from(track.name.clone()))
-                .cover(track.cover.clone())
-                .bare_meta(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(theme.text(Text::Small))
-                        .text_color(theme.muted_foreground)
-                        .child(SharedString::from(track.artists.clone()))
-                        .when_some(track.added_by.as_deref(), |this, added| {
-                            this.child(adder(added, theme))
-                        }),
-                )
-                .tint(color)
-                .when(track.explicit, Card::explicit)
-        };
-
-        div()
-            .id("queue-other")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .px_2()
-            .pb(bottom)
-            .overflow_y_scroll()
-            .when_some(steered.track.as_ref(), |this, track| {
-                this.child(section_label("queue-now-playing", cx))
-                    .child(row("other-now", 0, track, theme.primary))
-            })
-            .when(!queued.is_empty(), |this| {
-                this.child(section_label("queue-next-in-queue", cx))
-                    .children(queued.iter().enumerate().map(|(at, upcoming)| {
-                        row("other-queued", at, &upcoming.track, theme.foreground)
-                    }))
-            })
-            .when(!following.is_empty(), |this| {
-                this.child(section_label("queue-up-next", cx)).children(
-                    following.iter().enumerate().map(|(at, upcoming)| {
-                        row("other-following", at, &upcoming.track, theme.foreground)
-                    }),
-                )
-            })
-    }
-
     fn menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let ContextMenuState {
             track, position, ..
@@ -991,9 +1003,12 @@ impl Aside {
         )
     }
 
+    /// The panel's title and, over this app's own queue, the controls that change it. They go
+    /// while another device has playback, since its queue is shown read only.
     fn header(
         &self,
         sections: Sections,
+        remote: bool,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1019,7 +1034,7 @@ impl Aside {
             .when(!self.titled, |this| {
                 this.justify_end().pr(theme.metrics.control + px(8.))
             })
-            .when(self.tab == SideTab::Queue, |this| {
+            .when(self.tab == SideTab::Queue && !remote, |this| {
                 this.child(
                     div()
                         .flex()
@@ -1926,13 +1941,25 @@ impl Aside {
         Some((name, place))
     }
 
-    fn rows(&self, sections: Sections, cx: &mut Context<Self>) -> gpui::UniformList {
+    fn rows(
+        &self,
+        listing: Listing,
+        sections: Sections,
+        cx: &mut Context<Self>,
+    ) -> gpui::UniformList {
         let queue = self.queue.clone();
-        let from = self.playing_from(cx);
+        let remote = listing.remote();
+        let from = match remote {
+            true => None,
+            false => self.playing_from(cx),
+        };
         let drop_gap = self.drop_gap;
         let upcoming = sections.upcoming;
         let manual = sections.manual;
-        let audible = matches!(self.playback.read(cx).state(), PlaybackState::Playing);
+        let audible = match &listing {
+            Listing::Own(_) => matches!(self.playback.read(cx).state(), PlaybackState::Playing),
+            Listing::Steered { playing, .. } => *playing,
+        };
         // A uniform list only draws rows inside its padding, so the space under a see-through
         // player bar is made of blank rows, which keeps the songs scrolling under it drawn.
         let under = (self.bottom(cx) / cx.theme().metrics.list_row).ceil() as usize;
@@ -1945,12 +1972,11 @@ impl Aside {
                 let near = (range.start.saturating_sub(reach)..range.start)
                     .chain(range.end..(range.end + reach).min(sections.len()));
                 let (revision, slots, ahead) = {
-                    let queue = queue.read(cx);
                     let ahead = near
                         .filter_map(|index| match sections.slot(index) {
-                            Slot::Track(position) => {
-                                track(queue, position).map(|found| (index, position, found))
-                            }
+                            Slot::Track(position) => listing
+                                .track(position, cx)
+                                .map(|found| (index, position, found)),
                             Slot::Header(_) => None,
                         })
                         .collect::<Vec<_>>();
@@ -1959,13 +1985,13 @@ impl Aside {
                         .map(|index| {
                             let slot = (index < sections.len()).then(|| sections.slot(index));
                             let found = match slot {
-                                Some(Slot::Track(position)) => track(queue, position),
+                                Some(Slot::Track(position)) => listing.track(position, cx),
                                 Some(Slot::Header(_)) | None => None,
                             };
                             (index, slot, found)
                         })
                         .collect::<Vec<_>>();
-                    (queue.revision(), slots, ahead)
+                    (queue.read(cx).revision(), slots, ahead)
                 };
 
                 let rows = slots
@@ -2010,6 +2036,7 @@ impl Aside {
                                 playing,
                                 drop_line,
                                 queued,
+                                remote,
                             };
                             Self::row(found, index, position, revision, look, cx).into_any_element()
                         }
@@ -2021,6 +2048,7 @@ impl Aside {
                         playing: false,
                         drop_line: None,
                         queued: matches!(position, QueuePosition::Upcoming(at) if at < manual),
+                        remote,
                     };
                     let row = Self::row(found, index, position, revision, look, cx);
                     prefetch(row.into_any_element(), window, cx);
@@ -2034,15 +2062,22 @@ impl Aside {
 impl Render for Aside {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.scrollbar.read(cx).sync();
-        let queue = self.queue.read(cx);
-        let sections = Sections {
-            past: queue.past().len(),
-            current: queue.current().is_some(),
-            manual: queue.manual().len(),
-            upcoming: queue.upcoming().len(),
-            similar: queue.similar().len(),
-        };
         let steered = self.playback.read(cx).steered(cx);
+        let (listing, sections) = match &steered {
+            Some(steered) => Listing::steered(steered),
+            None => {
+                let queue = self.queue.read(cx);
+                let sections = Sections {
+                    past: queue.past().len(),
+                    current: queue.current().is_some(),
+                    manual: queue.manual().len(),
+                    upcoming: queue.upcoming().len(),
+                    similar: queue.similar().len(),
+                };
+                (Listing::Own(self.queue.clone()), sections)
+            }
+        };
+        let remote = listing.remote();
         let empty = sections.len() == 0;
         if !cx.has_active_drag() {
             self.drop_gap = None;
@@ -2050,6 +2085,13 @@ impl Render for Aside {
 
         if self.past_len != sections.past {
             self.past_len = sections.past;
+            self.anchor = true;
+        }
+        let remote_track = steered
+            .as_ref()
+            .map(|steered| steered.track.as_ref().and_then(|track| track.id.clone()));
+        if self.remote_track != remote_track {
+            self.remote_track = remote_track;
             self.anchor = true;
         }
         if self.anchor && self.tab == SideTab::Queue {
@@ -2069,7 +2111,7 @@ impl Render for Aside {
                 }
             }))
             .when(self.titled || self.tab == SideTab::Queue, |this| {
-                this.child(self.header(sections, window, cx))
+                this.child(self.header(sections, remote, window, cx))
             })
             .child(
                 div()
@@ -2079,7 +2121,7 @@ impl Render for Aside {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .when(self.tab == SideTab::Queue, |this| {
+                    .when(self.tab == SideTab::Queue && !remote, |this| {
                         this.on_drop(
                             cx.listener(|this, dragged: &DraggedPin, _, cx| this.land(dragged, cx)),
                         )
@@ -2087,35 +2129,27 @@ impl Render for Aside {
                     .when(self.tab == SideTab::Lyrics, |this| {
                         this.child(self.verses(window, cx)).child(self.witness())
                     })
-                    .when_some(
-                        steered.as_ref().filter(|_| self.tab == SideTab::Queue),
-                        |this, steered| this.child(Self::other(steered, self.bottom(cx), cx)),
-                    )
-                    .when(
-                        self.tab == SideTab::Queue && steered.is_none() && empty,
-                        |this| this.child(vacant(t!("queue-empty"), cx).flex_1()),
-                    )
-                    .when(
-                        self.tab == SideTab::Queue && steered.is_none() && !empty,
-                        |this| {
-                            this.child(
-                                div().flex_1().min_h_0().child(
-                                    Scroller::listing("queue-rows", &self.scrollbar)
-                                        .bottom_inset(self.bottom(cx))
-                                        .when(effects(), |this| {
-                                            this.fade_edges(px(FADE * 0.5), Pixels::ZERO)
-                                        })
-                                        .child(
-                                            self.rows(sections, cx)
-                                                .px_2()
-                                                .pt(px(FADE * 0.5))
-                                                .track_scroll(&self.scroll)
-                                                .size_full(),
-                                        ),
-                                ),
-                            )
-                        },
-                    )
+                    .when(self.tab == SideTab::Queue && empty, |this| {
+                        this.child(vacant(t!("queue-empty"), cx).flex_1())
+                    })
+                    .when(self.tab == SideTab::Queue && !empty, |this| {
+                        this.child(
+                            div().flex_1().min_h_0().child(
+                                Scroller::listing("queue-rows", &self.scrollbar)
+                                    .bottom_inset(self.bottom(cx))
+                                    .when(effects(), |this| {
+                                        this.fade_edges(px(FADE * 0.5), Pixels::ZERO)
+                                    })
+                                    .child(
+                                        self.rows(listing, sections, cx)
+                                            .px_2()
+                                            .pt(px(FADE * 0.5))
+                                            .track_scroll(&self.scroll)
+                                            .size_full(),
+                                    ),
+                            ),
+                        )
+                    })
                     .children(self.follow(cx))
                     .children(self.recall(sections, window, cx)),
             )
