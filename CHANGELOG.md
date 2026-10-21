@@ -185,7 +185,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The fullscreen visualizer no longer mixes up the left and right channels after a mono track.
 - On Linux, middle-clicking a text field such as the search box pastes the text you last
   selected in any app, and text you select in Sonora's fields can be middle-click pasted
-  elsewhere.
+  elsewhere. On GNOME it follows the middle-click paste switch in Tweaks.
 
 ## [0.43.0] - 2026-10-13
 

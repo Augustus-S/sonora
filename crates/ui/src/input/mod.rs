@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::actions;
 use gpui::{
@@ -49,7 +50,43 @@ const CARET_LINES: f32 = 1.25;
 /// Linux and FreeBSD.
 const PRIMARY_SELECTION: bool = cfg!(any(target_os = "linux", target_os = "freebsd"));
 
+/// Whether the desktop lets a middle click paste the primary selection. GNOME can switch it off,
+/// and `refresh_primary_paste` keeps this in step with that switch.
+static PRIMARY_PASTE: AtomicBool = AtomicBool::new(true);
+
 type Motion = fn(&str, usize) -> usize;
+
+/// Re-reads GNOME's middle-click paste switch through the settings portal and repaints every
+/// window when it changed. A desktop that does not expose the switch keeps middle-click paste on.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub fn refresh_primary_paste(cx: &mut App) {
+    use gpui::AppContext as _;
+
+    cx.spawn(async move |cx| {
+        let enabled = cx
+            .background_spawn(async {
+                let settings = ashpd::desktop::settings::Settings::new().await.ok()?;
+                settings
+                    .read::<bool>("org.gnome.desktop.interface", "gtk-enable-primary-paste")
+                    .await
+                    .ok()
+            })
+            .await
+            .unwrap_or(true);
+        if PRIMARY_PASTE.swap(enabled, Ordering::Relaxed) != enabled {
+            cx.update(|cx| cx.refresh_windows());
+        }
+    })
+    .detach();
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+pub fn refresh_primary_paste(_cx: &mut App) {}
+
+/// Whether a middle click in a field pastes the primary selection right now.
+fn primary_paste() -> bool {
+    PRIMARY_SELECTION && PRIMARY_PASTE.load(Ordering::Relaxed)
+}
 
 fn clamp_offset(text: &str, offset: usize) -> usize {
     let mut offset = offset.min(text.len());
