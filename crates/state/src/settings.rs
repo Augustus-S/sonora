@@ -862,7 +862,15 @@ impl AppSettings {
                 log::warn!("settings: cannot parse {}: {error}", path.display());
                 (Values::default().settled(), false, None, Some(error.line()))
             }
-            None => (Values::default().settled(), writable, None, None),
+            // The default provider list already has Subsonic, so a fresh install marks it offered
+            // and a user who turns it off does not get it back on the next launch.
+            None => {
+                let values = Values {
+                    subsonic_lyrics_offered: true,
+                    ..Values::default()
+                };
+                (values.settled(), writable, None, None)
+            }
         };
 
         let state = match store.load() {
