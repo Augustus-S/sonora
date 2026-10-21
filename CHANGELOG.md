@@ -125,6 +125,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Every language Sonora ships is now translated in full, so downloads, the equalizer, Jam,
+  scrobbling and the newer settings no longer show up in English.
 - Open lyrics, album grids and long text cost less to draw, so scrolling keeps up with high
   refresh rate screens more often. The equalizer page redraws about half as often while music
   plays.
