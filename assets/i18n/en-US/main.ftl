@@ -882,7 +882,8 @@ equalizer-import-too-many = Not imported: { $count ->
         [one] one filter is on
        *[other] { $count } filters are on
     }, more than a profile holds
-equalizer-filter-limit = A profile holds up to { $max } filters.
+equalizer-import-too-large = Not imported: the text is over 1 MB, too large for an equalizer profile
+equalizer-filter-limit =A profile holds up to { $max } filters.
 equalizer-paste-empty = The clipboard holds no text
 equalizer-copied = Copied the profile as Equalizer APO text
 equalizer-exported = Exported the profile
