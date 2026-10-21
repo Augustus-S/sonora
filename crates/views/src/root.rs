@@ -16,7 +16,7 @@ use state::{
 use ui::WindowFrame;
 use ui::{ActiveTheme as _, Dismiss, Entrance, Look, Stillness, Theme, ThemeKind, clear_listing};
 
-use crate::chrome::{Busy, TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
+use crate::chrome::{Busy, JamInvite, TitleBar, TitleBarEvent, TitleBarOptions, Toolbar, Tooled};
 use crate::screens::search::SearchView;
 use crate::screens::settings::SettingsHeader;
 use crate::shared::ambient::{self, Ambient};
@@ -92,6 +92,9 @@ pub struct Root {
     login: Entity<LoginView>,
     title_bar: Entity<TitleBar>,
     ambient: Entity<Ambient>,
+    /// The question before a Jam link is joined, drawn over whichever shell is up so a link
+    /// opened in fullscreen is answered there.
+    jam_invite: Entity<JamInvite>,
     shells: Shells,
     view: RootView,
     signing_in: bool,
@@ -341,6 +344,7 @@ impl Root {
             },
             adaptive,
             ambient,
+            jam_invite: cx.new(JamInvite::new),
             background: None,
             font: None,
             #[cfg(target_os = "windows")]
@@ -1102,7 +1106,8 @@ impl Render for Root {
                         .bg(theme.background)
                         .opacity(hidden),
                 )
-            });
+            })
+            .child(self.jam_invite.clone());
 
         let root = div()
             .relative()

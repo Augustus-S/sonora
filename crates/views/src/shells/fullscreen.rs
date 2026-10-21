@@ -265,7 +265,8 @@ impl FullscreenView {
 
     /// Whether anything under the pointer should hold the chrome awake. A hover flag only counts
     /// while the pointer is over the window: one set when it left stays set, and a stale flag
-    /// would keep the controls up for good.
+    /// would keep the controls up for good. A Jam invite drawn over the view holds it too, since
+    /// the pointer over the dialog never reaches the view and the cursor would hide under it.
     fn busy(&self, cx: &App) -> bool {
         let parked = self.over_volume
             || self.over_zone
@@ -279,6 +280,7 @@ impl FullscreenView {
             || self.volume_held
             || self.pending.is_some()
             || self.context_menu.is_some()
+            || Sonora::global(cx).devices.read(cx).invite().is_some()
     }
 
     /// Follows the pointer in and out of the window, once a frame. A hover flag clears on an
