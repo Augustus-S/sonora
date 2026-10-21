@@ -63,12 +63,15 @@ impl RenderOnce for ExplicitBadge {
 
 /// How far a capital letter in a line `side` tall has to move down to sit in the middle of it,
 /// snapped to the device's pixels. The line box centres the font's ascent and descent, so a
-/// capital, which has no descender, sits above the middle by the difference.
+/// capital, which has no descender, sits above the middle by the difference. The font's metrics
+/// carry the descent negated where the laid out line has it positive, hence the `abs`.
 fn capital_offset(side: Pixels, window: &Window) -> Pixels {
     let size = rems(LETTER).to_pixels(window.rem_size());
     let text = window.text_system();
     let font = text.resolve_font(&window.text_style().font());
-    let baseline = text.baseline_offset(font, size, side);
+    let ascent = text.ascent(font, size);
+    let descent = text.descent(font, size).abs();
+    let baseline = (side - ascent - descent) / 2. + ascent;
     let middle = baseline - text.cap_height(font, size) / 2.;
     snapped(side / 2. - middle, window)
 }
