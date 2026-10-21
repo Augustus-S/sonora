@@ -371,7 +371,13 @@ impl Shelf {
         if !self.is_wanted(id) {
             return Some(kept);
         }
-        match self.promote(prk, id, kept) {
+        let shelf = self.clone();
+        let owned = id.to_owned();
+        let promoted = tokio::task::spawn_blocking(move || shelf.promote(&owned, kept))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|promoted| promoted);
+        match promoted {
             Ok(kept) => Some(kept),
             Err(error) => {
                 log::warn!("vault: cannot move a cached track to the downloads: {error:#}");
@@ -513,8 +519,10 @@ impl Shelf {
         }
     }
 
-    /// Seals a cached copy again as a download and removes the cached one.
-    fn promote(&self, prk: &hkdf::Prk, id: &str, mut kept: Kept) -> Result<Kept> {
+    /// Seals a cached copy again as a download and removes the cached one. It reads and writes
+    /// the whole track, so it runs on a blocking thread rather than an engine's.
+    fn promote(&self, id: &str, mut kept: Kept) -> Result<Kept> {
+        let prk = self.vault.keys.get().context("the vault is locked")?;
         let facts = kept.facts.clone();
         let mut pending = self
             .begin(Place::Pinned, id, "", Box::new(move || Some(facts)))?
