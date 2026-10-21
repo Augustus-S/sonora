@@ -859,3 +859,4 @@ toast-download-set-failed = Не удалось скачать часть тре
 toast-download-song-failed = Не удалось скачать { $name }
 toast-download-songs-failed = Не удалось скачать часть треков
 toast-percent = { $percent }%
+toast-stop = Остановить

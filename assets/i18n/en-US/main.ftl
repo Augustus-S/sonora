@@ -1261,6 +1261,7 @@ toast-download-set-failed = Some tracks of { $name } could not be downloaded
 toast-download-song-failed = { $name } could not be downloaded
 toast-download-songs-failed = Some of the tracks could not be downloaded
 toast-percent = { $percent }%
+toast-stop = Stop
 toast-settings-broken = Fix line { $name } of settings.json to save changes
 toast-tray-unavailable = There is no system tray to put the icon in
 toast-undo = Undo

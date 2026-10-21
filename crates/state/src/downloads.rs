@@ -97,6 +97,15 @@ enum About {
     Songs(usize),
 }
 
+/// What the Stop button of a running download takes off.
+#[derive(Clone)]
+enum Stop {
+    /// An album or playlist, with its tracks, and the listing of them when it is still out.
+    Set(Collection, String),
+    /// Songs picked one by one. The ones already in stay.
+    Tracks(Vec<String>),
+}
+
 impl About {
     fn of(head: &Head) -> Self {
         match head {
@@ -129,6 +138,22 @@ impl About {
                 toast.name(name.clone()).target(Some(target.clone()))
             }
             Self::Songs(count) => toast.count(*count),
+        }
+    }
+
+    /// What stopping the download of `ids` takes off. An album or playlist goes whole, the way
+    /// the button on its page removes it.
+    fn stop(&self, ids: &[String]) -> Stop {
+        match self {
+            Self::Set {
+                target: Target::Album(id),
+                ..
+            } => Stop::Set(Collection::Album, id.to_string()),
+            Self::Set {
+                target: Target::Playlist(id),
+                ..
+            } => Stop::Set(Collection::Playlist, id.to_string()),
+            _ => Stop::Tracks(ids.to_vec()),
         }
     }
 }
@@ -407,7 +432,8 @@ impl Downloads {
             name: album.name.clone().into(),
             target: Target::Album(id.clone().into()),
         };
-        let toast = Toasts::post(about.toast(Outcome::Loading).progress(0.), cx);
+        let stop = Stop::Set(Collection::Album, id.clone());
+        let toast = Toasts::post(running(&about, stop, cx), cx);
         let request = self.io.spawn({
             let id = id.clone();
             async move { catalog.album(&id).await }
@@ -440,7 +466,8 @@ impl Downloads {
             name: playlist.name.clone().into(),
             target: Target::Playlist(id.clone().into()),
         };
-        let toast = Toasts::post(about.toast(Outcome::Loading).progress(0.), cx);
+        let stop = Stop::Set(Collection::Playlist, id.clone());
+        let toast = Toasts::post(running(&about, stop, cx), cx);
         let request = self.io.spawn({
             let id = id.clone();
             async move { whole_playlist(&catalog, &id).await }
@@ -829,8 +856,13 @@ impl Downloads {
         toast: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        let toast =
-            toast.unwrap_or_else(|| Toasts::post(about.toast(Outcome::Loading).progress(0.), cx));
+        let toast = match toast {
+            Some(toast) => toast,
+            None => {
+                let stop = about.stop(&ids);
+                Toasts::post(running(&about, stop, cx), cx)
+            }
+        };
         self.watched.push(Watched { toast, ids, about });
         self.report(cx);
     }
@@ -861,6 +893,23 @@ impl Downloads {
             false
         });
         self.watched = watched;
+    }
+
+    /// Stops a download from its toast. Songs picked one by one that are already in stay.
+    fn stop(&mut self, stop: &Stop, cx: &mut Context<Self>) {
+        match stop {
+            Stop::Set(kind, id) => {
+                if let Some((toast, _)) = self.fetching.remove(id) {
+                    Toasts::close(toast, cx);
+                }
+                self.remove_set(*kind, id, cx);
+            }
+            Stop::Tracks(ids) => {
+                let unfinished: Vec<String> =
+                    ids.iter().filter(|id| !self.has(id)).cloned().collect();
+                self.remove_tracks(&unfinished, cx);
+            }
+        }
     }
 
     /// Takes down the toasts of albums and playlists whose tracks are still being listed, as their
@@ -1161,6 +1210,19 @@ fn rest(refusals: u32) -> Duration {
     FIRST_REST
         .saturating_mul(1 << refusals.saturating_sub(1).min(8))
         .min(LONGEST_REST)
+}
+
+/// The toast a download shows while it runs, with a button that stops it.
+fn running(about: &About, stop: Stop, cx: &mut Context<Downloads>) -> Toast {
+    let downloads = cx.weak_entity();
+    about
+        .toast(Outcome::Loading)
+        .progress(0.)
+        .cancel("toast-stop", move |cx| {
+            downloads
+                .update(cx, |downloads, cx| downloads.stop(&stop, cx))
+                .ok();
+        })
 }
 
 fn album_set(detail: AlbumDetail) -> (String, Set) {
