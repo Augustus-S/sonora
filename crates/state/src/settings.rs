@@ -359,7 +359,6 @@ struct Values {
     equalizer_bass: f64,
     #[serde(deserialize_with = "equalizer::read_tone")]
     equalizer_treble: f64,
-    sleep_timer: bool,
     spotify_connect: bool,
     spotify_connect_name: ConnectName,
     spotify_connect_custom_name: String,
@@ -571,7 +570,6 @@ impl Default for Values {
             equalizer_advanced: false,
             equalizer_bass: 0.,
             equalizer_treble: 0.,
-            sleep_timer: false,
             spotify_connect: true,
             spotify_connect_name: ConnectName::Both,
             spotify_connect_custom_name: String::new(),
@@ -935,10 +933,6 @@ impl AppSettings {
 
     pub fn cache_gb(&self) -> u32 {
         self.values.cache_gb
-    }
-
-    pub fn sleep_timer(&self) -> bool {
-        self.values.sleep_timer
     }
 
     /// Whether Sonora shows up as a Spotify Connect device while a Spotify account is signed in.
@@ -1442,11 +1436,6 @@ impl AppSettings {
 
     pub fn set_cache_gb(&mut self, cache_gb: u32, cx: &mut Context<Self>) {
         self.values.cache_gb = cache_gb;
-        self.schedule_save(cx);
-    }
-
-    pub fn set_sleep_timer(&mut self, sleep_timer: bool, cx: &mut Context<Self>) {
-        self.values.sleep_timer = sleep_timer;
         self.schedule_save(cx);
     }
 
