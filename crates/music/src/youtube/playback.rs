@@ -264,8 +264,12 @@ async fn attempt_open(
                 codec: format.codec.clone(),
                 kbps: format.bitrate / 1000,
             };
-            let facts = serde_json::to_vec(&facts).unwrap_or_default();
-            shelf.keep(id, &variant(ceiling), facts, audio)
+            shelf.keep(
+                id,
+                &variant(ceiling),
+                move || serde_json::to_vec(&facts).ok(),
+                audio,
+            )
         }
         None => Recording::through(audio),
     };

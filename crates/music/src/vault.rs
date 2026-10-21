@@ -7,8 +7,13 @@
 //!
 //! What goes in is what the provider sent, before its [`Body`](crate::stream::Body) touched it.
 //! A Deezer track stays striped with Blowfish inside the vault, so its decrypted audio still
-//! never reaches the disk. A provider whose stream is under DRM would keep its tracks that way
-//! too, and peeling off the vault's layer would leave nothing easier to play than the stream.
+//! never reaches the disk. An Apple Music track stays under Widevine and is licensed again on
+//! every play, so peeling off the vault's layer leaves nothing easier to play than the stream
+//! and nothing that plays once Apple stops handing out the key.
+//!
+//! Spotify is the exception. librespot keeps its own files, as the CDN sent them and still
+//! under the key Spotify hands out on every play, in a folder inside the vault that
+//! [`Vault::foreign`] names.
 //!
 //! The owner of the machine can always read the master key out of their keychain, or the audio
 //! out of the process. The vault only makes the cache no easier to rip than the stream.
@@ -22,7 +27,7 @@ use std::fmt;
 use std::fs::{self, File, FileTimes, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
@@ -47,11 +52,20 @@ pub const MASTER: usize = 32;
 const VERSION: &[u8] = b"sonora vault 1";
 /// What one track may take of the whole vault at most, as a fraction of the limit.
 const SHARE: u64 = 4;
+/// The folder inside the vault that players keeping their own files share.
+const FOREIGN: &str = "players";
 /// How long a half-written entry left by a crash stays before a sweep removes it.
 const ABANDONED: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Tells apart the temporary files of two recordings running at once in one process.
 static WRITES: AtomicU64 = AtomicU64::new(0);
+/// Whether keeping played tracks is on, for a player that keeps its own files and is set up
+/// before any engine starts. Spotify reads it when its session opens.
+static KEEPING: AtomicBool = AtomicBool::new(false);
+
+/// Answers the facts a provider keeps beside a track once the whole track has arrived, or
+/// `None` when the provider cannot vouch that it has.
+type Describe = Box<dyn FnOnce() -> Option<Vec<u8>> + Send>;
 
 /// What a sealed block is, which its nonce carries so one cannot stand in for another.
 #[derive(Clone, Copy)]
@@ -96,7 +110,22 @@ impl Vault {
 
     /// A vault in Sonora's cache folder, `$XDG_CACHE_HOME/sonora/vault`.
     pub fn standard(limit: u64) -> Self {
-        Self::new(crate::credentials::root().join("vault"), limit)
+        Self::new(standard_root(), limit)
+    }
+
+    /// Tells a player that keeps its own files whether to keep them. Its session reads this
+    /// when it opens, so a change reaches it at the next sign-in.
+    pub fn set_keeping(on: bool) {
+        KEEPING.store(on, Ordering::Relaxed);
+    }
+
+    /// Where a player that keeps its own files keeps them, when keeping is on. The folder sits
+    /// inside the standard vault, so forgetting the vault removes it too, but the sweep leaves
+    /// it to the player's own limit.
+    pub(crate) fn foreign(player: &str) -> Option<PathBuf> {
+        KEEPING
+            .load(Ordering::Relaxed)
+            .then(|| standard_root().join(FOREIGN).join(player))
     }
 
     /// A fresh random master key, for a machine whose keychain has none yet.
@@ -154,6 +183,9 @@ impl Vault {
         let now = SystemTime::now();
         let mut entries = Vec::new();
         for shelf in fs::read_dir(&self.root).into_iter().flatten().flatten() {
+            if shelf.file_name() == FOREIGN {
+                continue;
+            }
             for item in fs::read_dir(shelf.path()).into_iter().flatten().flatten() {
                 let Ok(metadata) = item.metadata() else {
                     continue;
@@ -237,9 +269,10 @@ impl Shelf {
     }
 
     /// Wraps `source` so that everything it yields is sealed into the vault as it passes, and
-    /// the entry is kept once the source has yielded its last byte. `facts` is whatever the
-    /// provider needs to play the track again without asking the network, and comes back
-    /// from [`Kept::facts`].
+    /// the entry is kept once the source has yielded its last byte. `facts` answers whatever the
+    /// provider needs to play the track again without asking the network, which comes back
+    /// from [`Kept::facts`]. It runs when the entry is kept, so it can describe the whole
+    /// download, and answering `None` there keeps nothing.
     ///
     /// The source passes through untouched whatever happens to the vault. A disk that refuses
     /// the entry only means the track is not kept.
@@ -247,10 +280,10 @@ impl Shelf {
         &self,
         id: &str,
         variant: &str,
-        facts: Vec<u8>,
+        facts: impl FnOnce() -> Option<Vec<u8>> + Send + 'static,
         source: S,
     ) -> Recording<S> {
-        let pending = match self.begin(id, variant, facts) {
+        let pending = match self.begin(id, variant, Box::new(facts)) {
             Ok(pending) => pending,
             Err(error) => {
                 log::debug!("vault: not keeping a {} track: {error:#}", self.provider);
@@ -288,7 +321,7 @@ impl Shelf {
     }
 
     /// Opens a temporary file for a new entry, or answers `None` while the vault is locked.
-    fn begin(&self, id: &str, variant: &str, facts: Vec<u8>) -> Result<Option<Pending>> {
+    fn begin(&self, id: &str, variant: &str, facts: Describe) -> Result<Option<Pending>> {
         let Some(prk) = self.vault.keys.get() else {
             return Ok(None);
         };
@@ -317,7 +350,7 @@ impl Shelf {
             name,
             file,
             key,
-            facts,
+            facts: Some(facts),
             buffer: Vec::with_capacity(CHUNK + TAG),
             index: 0,
             written: SALT as u64,
@@ -468,7 +501,8 @@ struct Pending {
     name: String,
     file: File,
     key: LessSafeKey,
-    facts: Vec<u8>,
+    /// Answers the provider's facts once the whole track is in. Taken when the entry is kept.
+    facts: Option<Describe>,
     /// What has arrived since the last sealed chunk, and the room to seal it in.
     buffer: Vec<u8>,
     index: u64,
@@ -503,11 +537,16 @@ impl Pending {
 
     /// Seals what is held as the last chunk, then the facts, and moves the entry into place.
     fn commit(mut self) -> Result<()> {
+        let told = self
+            .facts
+            .take()
+            .and_then(|facts| facts())
+            .context("the provider cannot vouch for the whole track")?;
         let length = self.written - SALT as u64;
         self.seal(Block::Last)?;
-        let mut facts = Vec::with_capacity(8 + self.facts.len() + TAG);
+        let mut facts = Vec::with_capacity(8 + told.len() + TAG);
         facts.extend_from_slice(&length.to_le_bytes());
-        facts.extend_from_slice(&self.facts);
+        facts.extend_from_slice(&told);
         self.key
             .seal_in_place_append_tag(
                 nonce(Block::Facts, 0),
@@ -598,4 +637,9 @@ fn private_file(path: &Path) -> Result<File> {
     options
         .open(path)
         .with_context(|| format!("cannot create {}", path.display()))
+}
+
+/// Sonora's vault folder, `$XDG_CACHE_HOME/sonora/vault`.
+fn standard_root() -> PathBuf {
+    crate::credentials::root().join("vault")
 }

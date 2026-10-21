@@ -2381,6 +2381,7 @@ impl Playback {
             return;
         }
         self.keep_tracks = on;
+        Vault::set_keeping(on);
         self.settings
             .update(cx, |settings, cx| settings.set_keep_tracks(on, cx));
         if !on {

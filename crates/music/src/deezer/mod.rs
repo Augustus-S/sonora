@@ -79,7 +79,6 @@ fn session(client: DeezerClient, profile: crate::UserProfile) -> ProviderSession
         capabilities: Capabilities {
             playcounts: false,
             qualities: client::QUALITIES,
-            keeps: true,
             ..Capabilities::ALL
         },
     }

@@ -25,6 +25,7 @@ use crate::audio::Trimmed;
 use crate::engine::{self, Fetch, Loudness};
 use crate::stream::Reader;
 use crate::trim;
+use crate::vault::Shelf;
 use crate::{Encoding, PlaybackConfig, PlaybackEvents, PlaybackFactory, Player, Quality};
 
 /// Priming frames at the head of an Apple AAC encode, before the first frame of music.
@@ -66,6 +67,7 @@ impl PlaybackFactory for Factory {
             Apple {
                 client: self.client.clone(),
                 quality: config.quality,
+                shelf: config.vault.as_ref().map(|vault| vault.shelf("apple")),
             },
             config,
         )
@@ -76,6 +78,8 @@ struct Apple {
     client: AppleClient,
     /// The level every track is asked for at.
     quality: Quality,
+    /// Where played tracks are kept, still encrypted the way Apple sent them.
+    shelf: Option<Shelf>,
 }
 
 #[async_trait]
@@ -98,7 +102,8 @@ impl Fetch for Apple {
                 self.client.http(),
                 id,
                 self.client.user_token(),
-                self.quality
+                self.quality,
+                self.shelf.as_ref(),
             ),
             self.client.playback_details(id),
         );

@@ -117,8 +117,12 @@ impl Fetch for Deezer {
                     duration_s: opened.duration.map(|duration| duration.as_secs()),
                     lufs: opened.loudness.map(|loudness| loudness.lufs),
                 };
-                let facts = serde_json::to_vec(&facts).unwrap_or_default();
-                shelf.keep(id, self.quality.id(), facts, opened.response)
+                shelf.keep(
+                    id,
+                    self.quality.id(),
+                    move || serde_json::to_vec(&facts).ok(),
+                    opened.response,
+                )
             }
             None => Recording::through(opened.response),
         };

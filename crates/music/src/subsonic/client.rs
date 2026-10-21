@@ -38,6 +38,8 @@ const PLAYBACK_REPORT: &str = "playbackReport";
 pub struct SubsonicClient {
     client: Client,
     username: String,
+    /// The server address with no trailing slash.
+    server: String,
     http: reqwest::Client,
     /// The cover art endpoint with the fixed signature already on it. The library client signs
     /// every url afresh, which would give one cover a new url on every conversion and defeat
@@ -76,6 +78,7 @@ impl SubsonicClient {
         Ok(Self {
             client,
             username,
+            server,
             http: reqwest::Client::new(),
             covers,
             playback_report: Arc::default(),
@@ -936,6 +939,12 @@ impl SubsonicClient {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The account and server this client plays from. A track id only means something on its
+    /// own server, so this tells apart two servers' tracks that share one.
+    pub fn identity(&self) -> String {
+        format!("{}@{}", self.username, self.server)
     }
 
     /// Opens the audio of a track, converted as `transcode` asks, and answers once the response

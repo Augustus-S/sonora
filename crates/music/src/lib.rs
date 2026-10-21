@@ -725,7 +725,7 @@ impl Capabilities {
         playcounts: true,
         pins: false,
         transcode: false,
-        keeps: false,
+        keeps: true,
         qualities: &[],
     };
 
