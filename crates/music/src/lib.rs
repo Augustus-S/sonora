@@ -32,6 +32,7 @@ pub mod subsonic;
 pub mod tidal;
 mod trim;
 pub mod trouble;
+pub mod vault;
 pub mod youtube;
 
 use std::collections::HashMap;
@@ -372,6 +373,8 @@ pub struct PlaybackConfig {
     /// Shared like `equalizer`: every output the engine opens lets it hear the music ahead of the
     /// equalizer while it is watched.
     pub analyzer: Analyzer,
+    /// Where tracks are kept once they have played, or `None` when keeping them is off.
+    pub vault: Option<Arc<vault::Vault>>,
 }
 
 /// How good a stream to ask a streaming service for. Each provider lists the levels it serves in
@@ -705,6 +708,8 @@ pub struct Capabilities {
     pub pins: bool,
     /// The server converts tracks on request, as [`Transcode`] asks.
     pub transcode: bool,
+    /// Played tracks can be kept in the [`vault`], so playing one again downloads nothing.
+    pub keeps: bool,
     /// The stream levels the service serves, best first. Empty when there is nothing to choose
     /// between, so the setting stays hidden.
     pub qualities: &'static [Offer],
@@ -720,6 +725,7 @@ impl Capabilities {
         playcounts: true,
         pins: false,
         transcode: false,
+        keeps: false,
         qualities: &[],
     };
 
@@ -730,6 +736,7 @@ impl Capabilities {
         playcounts: false,
         pins: false,
         transcode: false,
+        keeps: false,
         qualities: &[],
     };
 }

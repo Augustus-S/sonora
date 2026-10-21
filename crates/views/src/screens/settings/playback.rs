@@ -32,14 +32,12 @@ const SLEEP_LAST: usize = (SLEEP_MAX_MINUTES - SLEEP_MIN_MINUTES + 1) as usize
 impl SettingsView {
     pub(super) fn playback_groups(&self, cx: &App) -> Vec<Group> {
         let capabilities = self.session.read(cx).capabilities();
-        let mut groups = vec![
-            Group::new("settings-group-playing", "icons/play.svg").rows([
-                Slot::Normalisation,
-                Slot::Gapless,
-                Slot::Sleep,
-                Slot::StayAwake,
-            ]),
-        ];
+        let mut playing = vec![Slot::Normalisation, Slot::Gapless];
+        if capabilities.keeps {
+            playing.push(Slot::KeepTracks);
+        }
+        playing.extend([Slot::Sleep, Slot::StayAwake]);
+        let mut groups = vec![Group::new("settings-group-playing", "icons/play.svg").rows(playing)];
         // one level is nothing to choose between, so it is stated in a row rather than offered
         match capabilities.qualities.len() {
             0 => {}
@@ -96,6 +94,20 @@ impl SettingsView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
                         .update(cx, |playback, cx| playback.set_gapless(!on, cx));
+                }))
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn keep_tracks_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let on = self.playback.read(cx).keep_tracks();
+
+        self.row(
+            t!("settings-keep-tracks"),
+            Switch::new("keep-tracks", on)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.playback
+                        .update(cx, |playback, cx| playback.set_keep_tracks(!on, cx));
                 }))
                 .into_any_element(),
         )

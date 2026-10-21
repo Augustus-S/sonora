@@ -87,6 +87,7 @@ enum Slot {
     LyricsForLocal,
     Normalisation,
     Gapless,
+    KeepTracks,
     Sleep,
     StayAwake,
     StreamQuality,
@@ -733,6 +734,10 @@ impl SettingsView {
                 t!("settings-normalisation-detail"),
             ),
             Slot::Gapless => (t!("settings-gapless"), t!("settings-gapless-detail")),
+            Slot::KeepTracks => (
+                t!("settings-keep-tracks"),
+                t!("settings-keep-tracks-detail"),
+            ),
             Slot::StreamQuality => (
                 t!("settings-stream-quality"),
                 t!("settings-stream-quality-detail"),
@@ -891,6 +896,7 @@ impl SettingsView {
             Slot::AdaptiveMenu => self.adaptive_menu_row(cx),
             Slot::Normalisation => self.playback_row(cx),
             Slot::Gapless => self.gapless_row(cx),
+            Slot::KeepTracks => self.keep_tracks_row(cx),
             Slot::StreamQuality => self.stream_quality_row(cx),
             Slot::StreamFormat => self.stream_format_row(cx),
             Slot::StreamBitrate => self.stream_bitrate_row(cx),

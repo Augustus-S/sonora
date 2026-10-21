@@ -129,6 +129,9 @@ struct Inner {
 pub struct Opened {
     pub response: reqwest::Response,
     pub key: decrypt::Secret,
+    /// The id the stream belongs to, which differs from the one asked for when Deezer
+    /// substitutes another release of the same recording. The key is derived from it.
+    pub effective_id: String,
     pub duration: Option<Duration>,
     /// The gateway's `GAIN`. Despite the name it is the track's integrated loudness rather than
     /// an adjustment, and it lands within about a decibel of Apple's LUFS for the same
@@ -488,11 +491,11 @@ impl DeezerClient {
                         .context("cannot stream the deezer track")?
                         .error_for_status()
                         .context("the deezer cdn refused the stream")?;
-                    let secret = self.inner.secret.get().copied().unwrap_or_default();
-                    let key = decrypt::track_key(&effective_id, &secret);
+                    let key = self.track_key(&effective_id);
                     return Ok(Opened {
                         response,
                         key,
+                        effective_id,
                         duration,
                         loudness,
                     });
@@ -502,6 +505,12 @@ impl DeezerClient {
             }
         }
         Err(last.context("the deezer track has no playable stream"))
+    }
+
+    /// The Blowfish key of the stream with id `effective_id`, which needs nothing from the network.
+    pub fn track_key(&self, effective_id: &str) -> decrypt::Secret {
+        let secret = self.inner.secret.get().copied().unwrap_or_default();
+        decrypt::track_key(effective_id, &secret)
     }
 
     /// One `get_url` attempt for one format. None when the license does not cover it.

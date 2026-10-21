@@ -36,6 +36,7 @@ mod tags;
 mod toast;
 mod updates;
 mod usage;
+mod vault;
 mod wake;
 mod window_shape;
 

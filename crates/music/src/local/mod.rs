@@ -69,6 +69,7 @@ impl LocalProvider {
                 playcounts: false,
                 pins: false,
                 transcode: false,
+                keeps: false,
                 qualities: &[],
             },
         })

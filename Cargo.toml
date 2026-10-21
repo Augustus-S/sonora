@@ -142,6 +142,7 @@ reqwest = { version = "0.13", default-features = false, features = [
 qrcodegen = "1"
 raw-window-handle = "0.6"
 resvg = { version = "0.46", default-features = false }
+ring = "0.17"
 roxmltree = "0.21"
 rodio = { version = "0.22", default-features = false, features = ["playback"] }
 rtrb = "0.3"

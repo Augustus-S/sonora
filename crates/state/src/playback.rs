@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
-use gpui::{App, Context, Entity, EventEmitter, SharedString, Task, WeakEntity};
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, SharedString, Task, WeakEntity};
 use music::connect::{self, Command};
+use music::vault::Vault;
 use music::{
     Analyzer, Meter, MusicApi, PlaybackConfig, PlaybackEvent as BackendEvent, PlaybackEvents,
     PlaybackFactory, Player, Quality, Spectrum, Track, TrackSignal, Transcode,
@@ -404,6 +405,14 @@ pub struct Playback {
     gapless: bool,
     transcode: Transcode,
     quality: Quality,
+    /// Whether tracks that played are kept in `vault`, so playing one again downloads nothing.
+    keep_tracks: bool,
+    /// Where tracks are kept, shared with every engine started while keeping is on.
+    vault: Arc<Vault>,
+    /// Reads the vault's master key from the keychain. The vault keeps nothing until it ends.
+    _unlock: Task<()>,
+    /// Removes the kept tracks after keeping was turned off.
+    forget: Option<Task<()>>,
     /// The `state::Equalizer`'s reader, shared with every engine started here, so a change
     /// reaches the output without a restart.
     equalizer: music::Equalizer,
@@ -527,6 +536,9 @@ impl Playback {
         let gapless = settings.read(cx).gapless();
         let transcode = settings.read(cx).transcode();
         let quality = settings.read(cx).quality();
+        let keep_tracks = settings.read(cx).keep_tracks();
+        let vault = Arc::new(Vault::standard(crate::vault::LIMIT));
+        let unlock = crate::vault::unlock(vault.clone(), cx);
         let (equalizer, meter) = (equalizer.read(cx).reader(), equalizer.read(cx).meter());
         let repeat = settings.read(cx).repeat();
         let radio = settings.read(cx).radio();
@@ -546,6 +558,10 @@ impl Playback {
             gapless,
             transcode,
             quality,
+            keep_tracks,
+            vault,
+            _unlock: unlock,
+            forget: None,
             equalizer,
             meter,
             analyzer: Analyzer::default(),
@@ -2354,6 +2370,26 @@ impl Playback {
         self.quality
     }
 
+    pub fn keep_tracks(&self) -> bool {
+        self.keep_tracks
+    }
+
+    /// Turns keeping played tracks on or off. Turning it off also removes every track already
+    /// kept, and the streaming engine restarts either way so it picks the change up.
+    pub fn set_keep_tracks(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.keep_tracks == on {
+            return;
+        }
+        self.keep_tracks = on;
+        self.settings
+            .update(cx, |settings, cx| settings.set_keep_tracks(on, cx));
+        if !on {
+            let vault = self.vault.clone();
+            self.forget = Some(cx.background_spawn(async move { vault.forget() }));
+        }
+        self.restart_engine(cx);
+    }
+
     pub fn set_gapless(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.gapless == on {
             return;
@@ -2529,6 +2565,7 @@ impl Playback {
             equalizer: self.equalizer.clone(),
             meter: self.meter.clone(),
             analyzer: self.analyzer.clone(),
+            vault: self.keep_tracks.then(|| self.vault.clone()),
         };
         let (engine, events) = playback.start(config);
 
@@ -2555,6 +2592,7 @@ impl Playback {
             equalizer: self.equalizer.clone(),
             meter: self.meter.clone(),
             analyzer: self.analyzer.clone(),
+            vault: self.keep_tracks.then(|| self.vault.clone()),
         };
         let (engine, events) = playback.start(config);
 
