@@ -513,7 +513,11 @@ impl Playback {
                 let Some(playback) = session.read(cx).playback() else {
                     return;
                 };
-                this.start_engine(playback, cx);
+                // an engine left from playing offline hands its track over where it stands
+                match this.engine.is_some() && !this.local_active() {
+                    true => this.rebind(playback, cx),
+                    false => this.start_engine(playback, cx),
+                }
                 this.adopt(cx);
             }
             SessionEvent::Reconnected => {
@@ -2665,7 +2669,7 @@ impl Playback {
     fn rebind(&mut self, playback: Arc<dyn PlaybackFactory>, cx: &mut Context<Self>) {
         let resume = self.state == PlaybackState::Playing || self.awaiting_reconnect;
         self.awaiting_reconnect = false;
-        let at = self.position;
+        let at = self.live_position();
         self.task = None;
         self.engine = None;
         self.preloaded = None;
