@@ -1083,6 +1083,7 @@ toast-playlist-removed = Playlist removed from your library
 toast-playlist-visibility = Playlist visibility changed
 toast-track-added = Added to { $name }
 toast-track-removed = Removed from { $name }
+toast-track-removed-unnamed = Removed from the playlist
 toast-playlist-failed = That change could not be saved
 toast-playlist-busy = Another change is still running
 toast-playlist-signed-out = Sign in to change playlists
@@ -1156,6 +1157,10 @@ toast-tracks-removed = Removed { $count ->
         [one] one song
        *[other] { $count } songs
     } from { $name }
+toast-tracks-removed-unnamed = Removed { $count ->
+        [one] one song
+       *[other] { $count } songs
+    } from the playlist
 toast-unpinned = Unpinned { $name }
 
 # lyrics

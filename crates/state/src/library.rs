@@ -2150,9 +2150,15 @@ impl Library {
         };
         tracks.extend(removed);
         let target = Some(Target::Playlist(SharedString::from(playlist_id.to_owned())));
-        let mut toast = match tracks.len() {
-            1 => Toast::new(Outcome::Done, "toast-track-removed"),
-            count => Toast::new(Outcome::Done, "toast-tracks-removed").count(count),
+        // A playlist no longer in the library has no name to fill `$name`, so it gets the
+        // message that does without one.
+        let mut toast = match (tracks.len(), name.is_some()) {
+            (1, true) => Toast::new(Outcome::Done, "toast-track-removed"),
+            (1, false) => Toast::new(Outcome::Done, "toast-track-removed-unnamed"),
+            (count, true) => Toast::new(Outcome::Done, "toast-tracks-removed").count(count),
+            (count, false) => {
+                Toast::new(Outcome::Done, "toast-tracks-removed-unnamed").count(count)
+            }
         }
         .target(target);
         if let Some(name) = name {
