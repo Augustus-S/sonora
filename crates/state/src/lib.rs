@@ -235,7 +235,10 @@ pub fn init(
     });
     // Spotify sets up its own file cache when its session opens, which can be before Playback
     // exists, so it hears the setting first.
-    music::vault::Vault::set_keeping(settings.read(cx).keep_tracks());
+    music::vault::Vault::set_keeping(
+        settings.read(cx).keep_tracks(),
+        vault::bytes(settings.read(cx).cache_gb()),
+    );
     let session =
         cx.new(|cx| Session::new(providers, local_provider, settings.clone(), io.clone(), cx));
     let network = cx.new(|_| Network::new(session.clone(), io.clone()));

@@ -1,14 +1,16 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 
+use crate::spotify::offline;
 use crate::vault::Vault;
 use crate::{PromptSink, SignInFailure, SignInProblem, SignInPrompt, credentials};
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
-use librespot_core::{Session, SessionConfig};
+use librespot_core::{FileId, Session, SessionConfig};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope,
     TokenResponse as _, TokenUrl, basic::BasicClient,
@@ -19,8 +21,8 @@ pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
 
 const PRODUCT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const PRODUCT_POLL: std::time::Duration = std::time::Duration::from_millis(100);
-/// What librespot may keep of Spotify's own files while keeping played tracks is on.
-const KEPT_FILES: u64 = 1024 * 1024 * 1024;
+/// The bytes of a Spotify file id, which librespot names its kept files by.
+const FILE_ID: usize = 20;
 
 pub const SCOPES: &[&str] = &[
     "playlist-read-collaborative",
@@ -249,8 +251,8 @@ pub(crate) fn session(config: &AuthConfig) -> Result<Session> {
     let cache = Cache::new(
         Some(config.cache_dir.as_path()),
         None,
-        audio.as_deref(),
-        audio.is_some().then_some(KEPT_FILES),
+        audio.as_ref().map(|(folder, _)| folder.as_path()),
+        audio.as_ref().map(|(_, room)| *room),
     )
     .with_context(|| format!("cannot open cache at {}", config.cache_dir.display()))?;
 
@@ -260,7 +262,43 @@ pub(crate) fn session(config: &AuthConfig) -> Result<Session> {
         ..Default::default()
     };
 
-    Ok(Session::new(session_config, Some(cache)))
+    let session = Session::new(session_config, Some(cache));
+    if let Some(((folder, _), cache)) = audio.zip(session.cache()) {
+        let cache = Arc::downgrade(cache);
+        Vault::adopt("spotify", move || {
+            cache
+                .upgrade()
+                .map(|cache| clear(&cache, &folder))
+                .is_some()
+        });
+    }
+    Ok(session)
+}
+
+/// Removes every audio file librespot keeps in `folder` through `cache`, so its count of what
+/// it holds stays true while its session runs. librespot files each one under the first two
+/// hex digits of its id, and anything else in the folder is removed as it is.
+fn clear(cache: &Cache, folder: &Path) {
+    for group in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let prefix = group.file_name().to_string_lossy().into_owned();
+        for item in std::fs::read_dir(group.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = format!("{prefix}{}", item.file_name().to_string_lossy());
+            let removed = match offline::hex(&name).filter(|raw| raw.len() == FILE_ID) {
+                Some(raw) => cache
+                    .remove_file(FileId::from_raw(&raw))
+                    .map_err(anyhow::Error::from),
+                None => std::fs::remove_file(item.path()).map_err(anyhow::Error::from),
+            };
+            if let Err(error) = removed {
+                log::warn!("spotify: cannot remove a kept file: {error:#}");
+            }
+        }
+        std::fs::remove_dir(group.path()).ok();
+    }
 }
 
 /// The id this install goes by on Spotify's device list. A new one each launch would leave a

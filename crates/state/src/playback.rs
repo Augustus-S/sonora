@@ -2488,7 +2488,8 @@ impl Playback {
     }
 
     /// Changes how many gigabytes the cache of played tracks may take. A lower limit evicts
-    /// the least recently played tracks right away. Downloads do not count toward it.
+    /// the least recently played tracks right away. Downloads do not count toward it, and
+    /// Spotify's own files do but only follow a new limit at its next sign-in.
     pub fn set_cache_gb(&mut self, gb: u32, cx: &mut Context<Self>) {
         let (low, high) = crate::vault::CACHE_GB_RANGE;
         let gb = gb.clamp(low, high);
@@ -2500,6 +2501,7 @@ impl Playback {
             .update(cx, |settings, cx| settings.set_cache_gb(gb, cx));
         let vault = self.vault.clone();
         let bytes = crate::vault::bytes(gb);
+        Vault::set_keeping(self.keep_tracks, bytes);
         self.resize = Some(cx.background_spawn(async move { vault.set_limit(bytes) }));
         cx.notify();
     }
@@ -2548,7 +2550,7 @@ impl Playback {
             return;
         }
         self.keep_tracks = on;
-        Vault::set_keeping(on);
+        Vault::set_keeping(on, crate::vault::bytes(self.cache_gb));
         self.vault.set_caching(on);
         self.settings
             .update(cx, |settings, cx| settings.set_keep_tracks(on, cx));

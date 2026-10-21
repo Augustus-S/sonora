@@ -142,7 +142,7 @@ fn failure(error: librespot_core::Error, id: &str) -> anyhow::Error {
 }
 
 /// The bytes a run of hex digits spells, or `None` for anything else.
-fn hex(digits: &str) -> Option<Vec<u8>> {
+pub(crate) fn hex(digits: &str) -> Option<Vec<u8>> {
     (0..digits.len())
         .step_by(2)
         .map(|at| u8::from_str_radix(digits.get(at..at + 2)?, 16).ok())

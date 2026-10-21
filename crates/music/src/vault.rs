@@ -69,10 +69,17 @@ static WRITES: AtomicU64 = AtomicU64::new(0);
 /// Whether keeping played tracks is on, for a player that keeps its own files and is set up
 /// before any engine starts. Spotify reads it when its session opens.
 static KEEPING: AtomicBool = AtomicBool::new(false);
+/// The most the standard cache may hold, in bytes, for the same players.
+static LIMIT: AtomicU64 = AtomicU64::new(0);
+/// The players that keep their own files and are running, each with what empties its folder
+/// through the player itself.
+static PLAYERS: Mutex<Vec<(&'static str, Clear)>> = Mutex::new(Vec::new());
 
 /// Answers the facts a provider keeps beside a track once the whole track has arrived, or
 /// `None` when the provider cannot vouch that it has.
 type Describe = Box<dyn FnOnce() -> Option<Vec<u8>> + Send>;
+/// Empties a player's own folder through the player, or answers false once the player is gone.
+type Clear = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// What a sealed block is, which its nonce carries so one cannot stand in for another.
 #[derive(Clone, Copy)]
@@ -142,10 +149,12 @@ impl Vault {
         Self::new(standard_root(), pinned_root(), limit)
     }
 
-    /// Tells a player that keeps its own files whether to keep them. Its session reads this
-    /// when it opens, so a change reaches it at the next sign-in.
-    pub fn set_keeping(on: bool) {
+    /// Tells a player that keeps its own files whether to keep them and how much the whole
+    /// cache may hold. Its session reads this when it opens, so a change reaches it at the next
+    /// sign-in.
+    pub fn set_keeping(on: bool, limit: u64) {
         KEEPING.store(on, Ordering::Relaxed);
+        LIMIT.store(limit, Ordering::Relaxed);
     }
 
     /// Changes how much the cache may hold. A lower limit evicts the least recently played
@@ -166,13 +175,38 @@ impl Vault {
         self.caching.store(on, Ordering::Relaxed);
     }
 
-    /// Where a player that keeps its own files keeps them, when keeping is on. The folder sits
-    /// inside the standard vault, so forgetting the vault removes it too, but the sweep leaves
-    /// it to the player's own limit.
-    pub(crate) fn foreign(player: &str) -> Option<PathBuf> {
-        KEEPING
-            .load(Ordering::Relaxed)
-            .then(|| standard_root().join(FOREIGN).join(player))
+    /// Where a player that keeps its own files keeps them when keeping is on, and how many bytes
+    /// it may keep there. The folder is made private before the player can create it.
+    ///
+    /// The listener's limit covers the whole cache, the player's folder included. The player
+    /// gets what Sonora's own entries leave of it, and at least half, so the oldest of those
+    /// entries are evicted here when they take more. The share is fixed for the session, so a
+    /// new limit reaches the player at its next sign-in.
+    pub(crate) fn foreign(player: &str) -> Option<(PathBuf, u64)> {
+        if !KEEPING.load(Ordering::Relaxed) {
+            return None;
+        }
+        let root = standard_root();
+        let folder = root.join(FOREIGN).join(player);
+        if let Err(error) = create_private(&root)
+            .and_then(|()| create_private(&root.join(FOREIGN)))
+            .and_then(|()| create_private(&folder))
+        {
+            log::warn!("vault: {player} keeps no files: {error:#}");
+            return None;
+        }
+        let limit = LIMIT.load(Ordering::Relaxed);
+        let own = evict(&root, limit - limit / 2);
+        Some((folder, limit.saturating_sub(own)))
+    }
+
+    /// Registers a running player that keeps its own files, with `clear` emptying its folder
+    /// through the player so its own count of what it keeps stays true. `clear` answers false
+    /// once the player is gone. A later registration for the same player replaces this one.
+    pub(crate) fn adopt(player: &'static str, clear: impl Fn() -> bool + Send + Sync + 'static) {
+        let mut players = PLAYERS.lock().unwrap_or_else(|held| held.into_inner());
+        players.retain(|(name, _)| *name != player);
+        players.push((player, Box::new(clear)));
     }
 
     /// A fresh random master key, for a machine whose keychain has none yet.
@@ -234,14 +268,27 @@ impl Vault {
         }
     }
 
-    /// Removes every cached track. Downloads stay.
+    /// Removes every cached track. Downloads stay. A running player's own files are removed
+    /// through the player, which keeps its folder and its count of what it holds.
     pub fn forget(&self) {
-        match fs::remove_dir_all(&self.root) {
-            Ok(()) => log::info!("vault: forgot every cached track"),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => log::warn!("vault: cannot forget the cached tracks: {error}"),
+        let players = PLAYERS.lock().unwrap_or_else(|held| held.into_inner());
+        let mut failed = false;
+        for item in fs::read_dir(&self.root).into_iter().flatten().flatten() {
+            let path = item.path();
+            let removed = match item.file_name() == FOREIGN {
+                true => forget_players(&path, &players),
+                false => remove(&path),
+            };
+            if let Err(error) = removed {
+                failed = true;
+                log::warn!("vault: cannot forget the cached tracks: {error}");
+            }
         }
-        *self.used.lock().unwrap_or_else(|held| held.into_inner()) = Some(0);
+        drop(players);
+        if !failed {
+            log::info!("vault: forgot every cached track");
+        }
+        *self.used.lock().unwrap_or_else(|held| held.into_inner()) = None;
     }
 
     /// What the cache and the downloads take on disk, in bytes, the cache counting the files
@@ -287,12 +334,14 @@ impl Vault {
     }
 
     /// Counts a new cache entry of `size` bytes and evicts the least recently played ones once
-    /// the cache holds more than its limit.
+    /// the cache, players' own files included, holds more than its limit.
     fn settle(&self, size: u64) {
         let over = {
             let mut used = self.used.lock().unwrap_or_else(|held| held.into_inner());
             *used = used.map(|used| used.saturating_add(size));
-            used.is_none_or(|used| used > self.limit())
+            used.is_none_or(|used| {
+                used.saturating_add(footprint(&self.root.join(FOREIGN))) > self.limit()
+            })
         };
         if over {
             self.sweep();
@@ -300,23 +349,14 @@ impl Vault {
     }
 
     /// Drops what a crash left half-written in either place and the least recently played cache
-    /// entries past the limit, and answers what the cache holds after.
-    fn sweep(&self) -> u64 {
+    /// entries until they and the players' own files fit the limit. Only a player removes its
+    /// own files, so those are counted and never evicted here.
+    fn sweep(&self) {
         let limit = self.limit();
         abandoned(&self.pinned);
-        let mut entries = abandoned(&self.root);
-        entries.sort_unstable_by_key(|(_, used, _)| *used);
-        let mut total = entries.iter().map(|(_, _, size)| size).sum::<u64>();
-        for (path, _, size) in entries {
-            if total <= limit {
-                break;
-            }
-            if fs::remove_file(&path).is_ok() {
-                total = total.saturating_sub(size);
-            }
-        }
-        *self.used.lock().unwrap_or_else(|held| held.into_inner()) = Some(total);
-        total
+        let room = limit.saturating_sub(footprint(&self.root.join(FOREIGN)));
+        let own = evict(&self.root, room);
+        *self.used.lock().unwrap_or_else(|held| held.into_inner()) = Some(own);
     }
 }
 
@@ -975,7 +1015,8 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Creates `path` readable by the owner alone, when it does not exist yet.
+/// Creates `path` readable by the owner alone, or makes it so when another program created it
+/// open to everyone.
 fn create_private(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -983,7 +1024,62 @@ fn create_private(path: &Path) -> Result<()> {
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
     builder
         .create(path)
-        .with_context(|| format!("cannot create {}", path.display()))
+        .with_context(|| format!("cannot create {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = fs::metadata(path)
+            .with_context(|| format!("cannot read {}", path.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("cannot make {} private", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Removes a file or a whole folder.
+fn remove(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path)?.is_dir() {
+        true => fs::remove_dir_all(path),
+        false => fs::remove_file(path),
+    }
+}
+
+/// Empties the folder of players keeping their own files. A running player clears its own
+/// folder through `players`, and the folder of any other is removed.
+fn forget_players(folder: &Path, players: &[(&'static str, Clear)]) -> io::Result<()> {
+    for item in fs::read_dir(folder)?.flatten() {
+        let name = item.file_name();
+        let running = players
+            .iter()
+            .find(|(player, _)| name == *player)
+            .is_some_and(|(_, clear)| clear());
+        if !running {
+            remove(&item.path())?;
+        }
+    }
+    Ok(())
+}
+
+/// Evicts the least recently played entries under `root` until they take `room` bytes or
+/// fewer, and answers what they take after. Half-written entries a crash left are dropped on
+/// the way, and the folder of players keeping their own files is left alone.
+fn evict(root: &Path, room: u64) -> u64 {
+    let mut entries = abandoned(root);
+    entries.sort_unstable_by_key(|(_, used, _)| *used);
+    let mut total = entries.iter().map(|(_, _, size)| size).sum::<u64>();
+    for (path, _, size) in entries {
+        if total <= room {
+            break;
+        }
+        if fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
+    }
+    total
 }
 
 /// A new file readable and writable by the owner alone.
