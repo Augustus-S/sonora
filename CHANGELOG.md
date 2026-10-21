@@ -143,6 +143,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- YouTube Music songs play to the end again instead of skipping after about a minute. YouTube
+  stopped serving most songs to the guest stream and now wants a token for each song.
 - While controlling another Spotify device, the volume slider follows that device and responds
   immediately to changes. Fullscreen shows its album art and hides the local audio visualizer.
 - Spotify liked songs and saved albums now load for accounts with hundreds of playlists, instead
