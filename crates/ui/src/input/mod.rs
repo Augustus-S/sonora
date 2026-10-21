@@ -552,6 +552,8 @@ impl Input {
         let hovered = word_at(&self.content, offset);
         self.selected_range = hovered.start.min(anchor.start)..hovered.end.max(anchor.end);
         self.selection_reversed = offset < anchor.start;
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        self.publish_selection(cx);
         cx.notify();
     }
 
@@ -642,7 +644,20 @@ impl Input {
             self.selection_reversed = !self.selection_reversed;
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        self.publish_selection(cx);
         cx.notify();
+    }
+
+    /// Offers the selected text as the primary selection, so a middle click pastes it in other
+    /// apps. A masked field never offers its text.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn publish_selection(&self, cx: &mut Context<Self>) {
+        let range = clamp_range(&self.content, &self.selected_range);
+        if self.masked || range.is_empty() {
+            return;
+        }
+        cx.write_to_primary(ClipboardItem::new_string(self.content[range].to_owned()));
     }
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
