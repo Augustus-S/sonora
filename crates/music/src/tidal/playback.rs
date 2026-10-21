@@ -661,9 +661,16 @@ impl Fetch for Tidal {
         loaded.stream.finished().await;
     }
 
+    /// A file reports bytes against its length. A segmented track has no length until its last
+    /// segment is in, since the manifest gives no sizes, so it reports segments against their
+    /// count until then.
     fn progress(&self, loaded: &Loaded) -> Option<f32> {
-        let total = loaded.stream.total().filter(|total| *total > 0)?;
-        Some(loaded.stream.arrived() as f32 / total as f32)
+        if let Some(total) = loaded.stream.total().filter(|total| *total > 0) {
+            return Some(loaded.stream.arrived() as f32 / total as f32);
+        }
+        let timeline = lock(loaded.timeline.as_ref()?);
+        let parts = timeline.starts.len() + 1;
+        Some(timeline.offsets.len().min(parts) as f32 / parts as f32)
     }
 
     /// A segmented stream has no index for symphonia to jump around in, so a seek opens a
