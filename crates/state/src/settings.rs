@@ -2238,7 +2238,20 @@ impl AppSettings {
             }
             return SettingsSave::Complete;
         }
-        if let Err(error) = fs::write(&self.path, &bytes) {
+        // the file can hold scrobbling keys, so on unix only its owner may read it
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let written = options.open(&self.path).and_then(|mut file| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                file.set_permissions(fs::Permissions::from_mode(0o600)).ok();
+            }
+            std::io::Write::write_all(&mut file, &bytes)
+        });
+        if let Err(error) = written {
             log::error!("settings: cannot write {}: {error}", self.path.display());
             return SettingsSave::Retry(error.to_string());
         }
