@@ -707,7 +707,8 @@ impl Downloads {
     }
 
     /// Takes tracks off the list and removes their audio. A download of one still under way is
-    /// left to end, and its file is removed when it does.
+    /// left to end, and its file is removed when it does. Its place in line goes to the next
+    /// track at once.
     fn drop_tracks(&mut self, provider: &'static str, ids: &[String], cx: &mut Context<Self>) {
         if ids.is_empty() {
             return;
@@ -725,6 +726,7 @@ impl Downloads {
         self.queue.retain(|id| !ids.contains(id));
         let ids = ids.to_vec();
         self.write(move |store| store.forget(provider, &ids));
+        self.pump(cx);
     }
 
     /// Every track a downloaded set holds.
