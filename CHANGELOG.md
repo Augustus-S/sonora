@@ -183,6 +183,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Songs on YouTube Music and Apple Music no longer sometimes play with left and right swapped
   after you seek or pick up partway through.
 - The fullscreen visualizer no longer mixes up the left and right channels after a mono track.
+- On Linux, middle-clicking a text field such as the search box pastes the text you last
+  selected in any app, and text you select in Sonora's fields can be middle-click pasted
+  elsewhere.
 
 ## [0.43.0] - 2026-10-13
 
