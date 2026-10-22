@@ -413,10 +413,13 @@ impl<S: TableSource> TableDelegate<S> {
         self.reorder(cx);
     }
 
-    pub fn toggles(&self) -> Vec<Toggle> {
+    /// The columns the listener can show or hide. A column the source has nothing for is left
+    /// out, since showing it would draw nothing.
+    pub fn toggles(&self, cx: &App) -> Vec<Toggle> {
         self.source
             .columns()
             .iter()
+            .filter(|spec| self.source.populated(spec.field, cx))
             .map(|spec| Toggle {
                 key: spec.key,
                 label: spec.label(),
@@ -442,12 +445,14 @@ impl<S: TableSource> TableDelegate<S> {
         );
     }
 
-    pub fn sortables(&self) -> Vec<SortAxis> {
+    /// The columns the rows can be sorted by. A column the source has nothing for is left out,
+    /// as it is from the table.
+    pub fn sortables(&self, cx: &App) -> Vec<SortAxis> {
         let active = self.sorting();
         self.source
             .columns()
             .iter()
-            .filter(|spec| spec.sortable)
+            .filter(|spec| spec.sortable && self.source.populated(spec.field, cx))
             .map(|spec| SortAxis {
                 key: spec.key,
                 label: spec.label(),
@@ -1456,7 +1461,7 @@ impl<S: TableSource> Listing for Entity<TableState<S>> {
     }
 
     fn sortables(&self, cx: &App) -> Vec<SortAxis> {
-        self.read(cx).delegate().sortables()
+        self.read(cx).delegate().sortables(cx)
     }
 
     fn cycle_sort(&self, column: &str, cx: &mut App) {
@@ -1469,7 +1474,7 @@ impl<S: TableSource> Listing for Entity<TableState<S>> {
     }
 
     fn toggles(&self, cx: &App) -> Vec<Toggle> {
-        self.read(cx).delegate().toggles()
+        self.read(cx).delegate().toggles(cx)
     }
 
     fn row_count(&self, cx: &App) -> usize {

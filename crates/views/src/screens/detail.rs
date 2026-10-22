@@ -884,7 +884,7 @@ impl DetailView {
         self.table
             .read(cx)
             .delegate()
-            .toggles()
+            .toggles(cx)
             .into_iter()
             .filter(|toggle| !PINNED.contains(&toggle.key))
             .collect()
