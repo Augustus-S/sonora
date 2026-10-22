@@ -16,7 +16,7 @@ use gpui::{
 };
 use music::Track;
 use router::Destination;
-use state::{Detail, History, Library, Origin, Playback, Progress, Shelf, Sonora};
+use state::{Detail, History, Library, Network, Origin, Playback, Progress, Shelf, Sonora};
 use ui::{
     ArrowRing, Button, Cell, ColumnSpec, Menu, Pending, Pin, ROW_GROUP, Scrollbar, TableSource,
     TableState,
@@ -34,7 +34,7 @@ pub(crate) use sort::initial;
 
 use sort::hits;
 
-/// How strongly a finished download's mark shows on its row.
+/// How strongly a finished download's mark and an unsaved track's heart show on a row.
 const SETTLED: f32 = 0.5;
 
 /// The current track and its `Playback::control`. A screen keeps the last one and redraws only
@@ -165,6 +165,8 @@ pub(crate) struct TrackSource {
     playback: Entity<Playback>,
     is_liked: Option<Entity<Library>>,
     starrable: Option<Shelf>,
+    /// The library shelf the rows are, which offline mode keeps to its downloads.
+    library_shelf: Option<Shelf>,
     album: Option<Entity<Detail>>,
     playlist: Option<Entity<Detail>>,
     history: Option<Entity<History>>,
@@ -211,6 +213,7 @@ impl TrackSource {
             playback,
             is_liked: None,
             starrable: None,
+            library_shelf: None,
             album: None,
             playlist: None,
             history: None,
@@ -277,6 +280,18 @@ impl TrackSource {
     pub(crate) fn starrable(mut self, shelf: Shelf) -> Self {
         self.starrable = Some(shelf);
         self
+    }
+
+    /// Marks the rows as a library shelf, which offline mode keeps to what was downloaded.
+    pub(crate) fn shelved(mut self, shelf: Shelf) -> Self {
+        self.library_shelf = Some(shelf);
+        self
+    }
+
+    /// Whether offline mode keeps these rows to their downloads.
+    fn downloads_only(&self, cx: &App) -> bool {
+        self.library_shelf
+            .is_some_and(|shelf| Network::downloads_only(shelf, cx))
     }
 
     fn catalog(&self, cx: &App) -> bool {
@@ -451,7 +466,7 @@ impl TrackSource {
                 })
                 .tint(match saved {
                     true => theme.primary,
-                    false => theme.muted_foreground,
+                    false => theme.muted_foreground.opacity(SETTLED),
                 })
                 .when(!saved, |this| {
                     this.invisible()
@@ -534,7 +549,7 @@ impl TableSource for TrackSource {
             if self.sieve.favorites && !self.starred(track, cx) {
                 return false;
             }
-            if self.sieve.downloaded
+            if (self.sieve.downloaded || self.downloads_only(cx))
                 && !track
                     .id
                     .as_deref()
@@ -581,7 +596,9 @@ impl TableSource for TrackSource {
                 on: self.sieve.favorites,
             }));
         }
-        if self.sieve.downloaded || !Sonora::global(cx).downloads.read(cx).is_empty() {
+        // Offline mode already keeps a shelf to its downloads, so the filter would do nothing.
+        let offered = self.sieve.downloaded || !Sonora::global(cx).downloads.read(cx).is_empty();
+        if offered && !self.downloads_only(cx) {
             axes.push(Filter::Flag(FlagAxis {
                 key: "filter-downloaded",
                 label: t!("filter-downloaded"),

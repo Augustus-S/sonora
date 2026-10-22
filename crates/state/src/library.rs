@@ -12,7 +12,9 @@ use music::{
 use tokio::sync::Semaphore;
 
 use crate::snapshot::{Kind, Remembered, Snapshots};
-use crate::{Io, Network, Outcome, Session, SessionEvent, Target, Toast, Toasts, join, mosaic};
+use crate::{
+    Io, Network, Outcome, Session, SessionEvent, SessionState, Target, Toast, Toasts, join, mosaic,
+};
 
 const FATAL: [LibraryPart; 3] = [
     LibraryPart::Tracks,
@@ -1164,6 +1166,8 @@ impl Library {
                 this.held_mut(Shelf::Streaming).clear();
                 cx.notify();
             }
+            // What was loaded stays up, read through the downloads filter.
+            SessionEvent::WentOffline => {}
             SessionEvent::Reconnected => {
                 if matches!(this.held(Shelf::Streaming).state, LibraryState::Failed(_)) {
                     this.load(Shelf::Streaming, cx);
@@ -1179,6 +1183,15 @@ impl Library {
                         cx.notify();
                     }
                 }
+            }
+        })
+        .detach();
+        // An account kept offline never signs in, whether at launch or after a switch, so its shelf
+        // starts from what the last run kept the moment the session settles there.
+        cx.observe(&session, |this, session, cx| {
+            let offline = matches!(session.read(cx).state(), SessionState::Offline(_));
+            if offline && matches!(this.held(Shelf::Streaming).state, LibraryState::Empty) {
+                this.prime(Shelf::Streaming, cx);
             }
         })
         .detach();

@@ -8,7 +8,7 @@ use music::{
 };
 use tokio::task::AbortHandle;
 
-use crate::{Io, Library, LibraryEvent, Session, SessionEvent, Sonora, join, mosaic};
+use crate::{Io, Library, LibraryEvent, Network, Session, SessionEvent, Sonora, join, mosaic};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Collection {
@@ -88,7 +88,7 @@ impl Detail {
                     }
                 }
             }
-            SessionEvent::Reconnected => {}
+            SessionEvent::Reconnected | SessionEvent::WentOffline => {}
             SessionEvent::LocalChanged => {
                 if let (Some(kind), Some(id)) = (
                     this.kind,
@@ -382,7 +382,10 @@ impl Detail {
         self.kind = Some(kind);
         self.header = known;
 
-        let Some(catalog) = self.session.read(cx).catalog(id) else {
+        // With no network, or none allowed, a downloaded page opens from its kept copy.
+        let offline = Network::lost(cx) && !music::is_local_id(id);
+        let catalog = self.session.read(cx).catalog(id).filter(|_| !offline);
+        let Some(catalog) = catalog else {
             if let Some(kept) = kept(kind, id, cx) {
                 self.adopt(kept, cx);
             }

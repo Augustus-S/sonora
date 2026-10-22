@@ -332,6 +332,9 @@ struct Values {
     keep_tracks: bool,
     /// How many gigabytes the cache of played tracks may take. Downloads do not count.
     cache_gb: u32,
+    /// Whether the listener put Sonora offline, so it shows and plays only what was downloaded
+    /// until they go online again.
+    offline_mode: bool,
     equalizer: bool,
     /// The ten band gains an older Sonora saved. Read once to seed the profiles when there are
     /// none, never written back, and read leniently like the keys that replaced it.
@@ -561,6 +564,7 @@ impl Default for Values {
             normalisation: false,
             gapless: true,
             keep_tracks: true,
+            offline_mode: false,
             cache_gb: crate::vault::CACHE_GB,
             equalizer: false,
             equalizer_bands: Vec::new(),
@@ -936,6 +940,10 @@ impl AppSettings {
     pub fn cache_gb(&self) -> u32 {
         let (low, high) = crate::vault::CACHE_GB_RANGE;
         self.values.cache_gb.clamp(low, high)
+    }
+
+    pub fn offline_mode(&self) -> bool {
+        self.values.offline_mode
     }
 
     /// Whether Sonora shows up as a Spotify Connect device while a Spotify account is signed in.
@@ -1434,6 +1442,11 @@ impl AppSettings {
 
     pub fn set_keep_tracks(&mut self, keep_tracks: bool, cx: &mut Context<Self>) {
         self.values.keep_tracks = keep_tracks;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_offline_mode(&mut self, offline_mode: bool, cx: &mut Context<Self>) {
+        self.values.offline_mode = offline_mode;
         self.schedule_save(cx);
     }
 
