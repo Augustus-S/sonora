@@ -177,10 +177,9 @@ impl Tracks for ShelfTracks {
     }
 }
 
-/// Whether a section is still waiting for rows. Never while offline mode keeps the shelf to its
-/// downloads, since nothing more arrives then.
+/// Whether a section is still waiting for rows.
 fn loading(library: &Entity<Library>, shelf: Shelf, section: Section, cx: &App) -> bool {
-    !Network::downloads_only(shelf, cx) && library.read(cx).loading(shelf, section.part())
+    library.read(cx).waiting(shelf, section.part(), cx)
 }
 
 pub struct LibraryView {
@@ -543,6 +542,9 @@ impl LibraryView {
     fn note(&self, cx: &App) -> Option<Vacancy> {
         if let Some(scanning) = self.scanning(cx) {
             return Some(scanning);
+        }
+        if loading(&self.library, self.shelf, self.section, cx) {
+            return None;
         }
         // Offline mode lists only what was downloaded, and with nothing there it says why.
         if Network::downloads_only(self.shelf, cx) {

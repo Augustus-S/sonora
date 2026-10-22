@@ -1098,6 +1098,8 @@ pub struct Library {
     mosaics: HashMap<String, Task<()>>,
     snapshots: Snapshots,
     priming: [Option<Task<()>>; 2],
+    /// Whether each shelf is done reading the last run's snapshot, found or not.
+    primed: [bool; 2],
     /// Counts the accounts and folder sets each shelf has had, so an Undo made under one never
     /// acts on the next.
     epochs: [u64; 2],
@@ -1214,6 +1216,7 @@ impl Library {
             mosaics: HashMap::new(),
             snapshots: Snapshots::new(cache),
             priming: [None, None],
+            primed: [true, true],
             epochs: [0, 0],
             sweeps: HashMap::new(),
             gathering: HashMap::new(),
@@ -1248,12 +1251,19 @@ impl Library {
 
         let snapshots = self.snapshots.clone();
         let io = self.io.clone();
+        self.primed[shelf.slot()] = false;
         self.priming[shelf.slot()] = Some(cx.spawn(async move |this, cx| {
-            let Ok(Some(remembered)) = io.spawn_blocking(move || snapshots.restore(provider)).await
-            else {
-                return;
-            };
+            let remembered = io
+                .spawn_blocking(move || snapshots.restore(provider))
+                .await
+                .ok()
+                .flatten();
             this.update(cx, |this, cx| {
+                this.primed[shelf.slot()] = true;
+                cx.notify();
+                let Some(remembered) = remembered else {
+                    return;
+                };
                 let held = this.held_mut(shelf);
                 if !matches!(held.state, LibraryState::Empty | LibraryState::Loading) {
                     return;
@@ -1337,6 +1347,7 @@ impl Library {
             return;
         };
         self.priming[shelf.slot()] = None;
+        self.primed[shelf.slot()] = true;
         let snapshots = self.snapshots.clone();
         drop(self.io.spawn_blocking(move || snapshots.forget(provider)));
     }
@@ -1566,6 +1577,15 @@ impl Library {
     pub fn loading(&self, shelf: Shelf, part: LibraryPart) -> bool {
         let held = self.held(shelf);
         matches!(held.state, LibraryState::Loading) || held.awaited.contains(&part)
+    }
+
+    /// Whether a part of `shelf` still has rows on their way. While offline mode keeps the shelf
+    /// to its downloads the provider sends nothing, so only the last run's snapshot is waited on.
+    pub fn waiting(&self, shelf: Shelf, part: LibraryPart, cx: &App) -> bool {
+        match Network::downloads_only(shelf, cx) {
+            true => !self.primed[shelf.slot()],
+            false => self.loading(shelf, part),
+        }
     }
 
     pub fn saved(&self, track_id: &str) -> bool {

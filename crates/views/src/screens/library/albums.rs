@@ -281,13 +281,10 @@ impl TableSource for AlbumSource {
         })
     }
 
-    /// Never while offline mode keeps the shelf to its downloads, since nothing more arrives.
     fn is_loading(&self, cx: &App) -> bool {
-        !Network::downloads_only(self.shelf, cx)
-            && self
-                .library
-                .read(cx)
-                .loading(self.shelf, LibraryPart::Albums)
+        self.library
+            .read(cx)
+            .waiting(self.shelf, LibraryPart::Albums, cx)
     }
 
     fn pin(&self, row: usize, cx: &App) -> Option<Pin> {
