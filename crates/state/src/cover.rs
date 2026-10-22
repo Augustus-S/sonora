@@ -25,7 +25,10 @@ impl Cover {
             .detach();
         cx.subscribe(&session, |this, _, event, cx| match event {
             SessionEvent::SignedOut => this.forget(cx),
-            SessionEvent::SignedIn | SessionEvent::Reconnected | SessionEvent::LocalChanged => {}
+            SessionEvent::SignedIn
+            | SessionEvent::Reconnected
+            | SessionEvent::WentOffline
+            | SessionEvent::LocalChanged => {}
         })
         .detach();
 
