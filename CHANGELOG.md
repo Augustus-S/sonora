@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Album and playlist pages only show Pause when the current song was played from that collection. Playing another collection containing the same song starts that collection.
+
 ## [0.44.1] - 2026-10-22
 
 ### Added
