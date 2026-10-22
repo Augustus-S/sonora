@@ -81,7 +81,6 @@ const SPRING_STALL: Duration = Duration::from_millis(64);
 
 pub struct FullscreenView {
     playback: Entity<Playback>,
-    queue: Entity<Queue>,
     cover: Entity<Cover>,
     settings: Entity<AppSettings>,
     aside: Entity<Aside>,
@@ -137,7 +136,6 @@ impl FullscreenView {
 
         Self {
             playback,
-            queue,
             cover,
             settings,
             aside,
@@ -781,7 +779,7 @@ impl FullscreenView {
                         this.over_transport = *hovering;
                         cx.notify();
                     }))
-                    .child(transport(&self.playback, &self.queue, true, cx))
+                    .child(transport(&self.playback, true, cx))
                     .child(
                         div()
                             .absolute()

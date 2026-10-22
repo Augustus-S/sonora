@@ -3,7 +3,7 @@ use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{App, Context, Entity, SharedString, Task};
 use music::{
@@ -1170,11 +1170,7 @@ impl Library {
             }
             // What was loaded stays up, read through the downloads filter.
             SessionEvent::WentOffline => {}
-            SessionEvent::Reconnected => {
-                if matches!(this.held(Shelf::Streaming).state, LibraryState::Failed(_)) {
-                    this.load(Shelf::Streaming, cx);
-                }
-            }
+            SessionEvent::Reconnected => this.refresh(Shelf::Streaming, cx),
             SessionEvent::LocalChanged => {
                 this.epochs[Shelf::Local.slot()] += 1;
                 this.hidden_local_tracks.clear();
@@ -1390,7 +1386,7 @@ impl Library {
         let Some(client) = self.session.read(cx).client_of(Shelf::Streaming) else {
             return;
         };
-        // Keep a polling response from overwriting the result of this mutation.
+        // Keep an older refresh from overwriting the result of this mutation.
         self.pin_targets_task = None;
         let io = self.io.clone();
         self.pin_task = Some(cx.spawn(async move |this, cx| {
@@ -1432,7 +1428,6 @@ impl Library {
                         done(false, cx);
                     }
                 }
-                this.sync_pin_targets(cx);
                 cx.notify();
             })
             .ok();
@@ -1448,32 +1443,24 @@ impl Library {
         let Some(client) = self.session.read(cx).client_of(Shelf::Streaming) else {
             return;
         };
-        let io = self.io.clone();
-        self.pin_targets_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                let client = client.clone();
-                let loaded = join(io.spawn(async move { client.pin_targets().await })).await;
-                if this
-                    .update(cx, |this, cx| match loaded {
-                        Ok(items) if items != this.pin_targets => {
-                            this.pin_targets = items;
-                            cx.notify();
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            log::warn!("library: cannot read the provider's pins: {error:#}");
-                            crate::noted(&error, cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
+        self.pin_targets_task = Some(self.io.load(
+            async move { client.pin_targets().await },
+            |this, loaded, cx| {
+                this.pin_targets_task = None;
+                match loaded {
+                    Ok(items) if items != this.pin_targets => {
+                        this.pin_targets = items;
+                        cx.notify();
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        log::warn!("library: cannot read the provider's pins: {error:#}");
+                        crate::noted(&error, cx);
+                    }
                 }
-                cx.background_executor()
-                    .timer(Duration::from_secs(60))
-                    .await;
-            }
-        }));
+            },
+            cx,
+        ));
     }
 
     fn held(&self, shelf: Shelf) -> &Held {
@@ -2603,6 +2590,16 @@ impl Library {
         }
     }
 
+    /// Invalidates notified playlists and reconciles the library through its normal refresh path.
+    pub(crate) fn changed_elsewhere(&mut self, playlists: HashSet<String>, cx: &mut Context<Self>) {
+        for id in playlists {
+            self.reading.remove(&id);
+            self.contents.remove(&id);
+            cx.emit(LibraryEvent::PlaylistChanged(id));
+        }
+        self.refresh(Shelf::Streaming, cx);
+    }
+
     /// Loads a shelf again from its provider. A shelf that is showing rows keeps them, each part
     /// until all of its new rows have arrived, and its old problems are dropped so the fresh rows
     /// can be snapshotted.
@@ -2679,7 +2676,7 @@ impl Library {
                 Landed::Tracks,
                 cx,
             ),
-            self.fetch(
+            self.io.load(
                 async move { playlists.playlists().await },
                 move |this, loaded, cx| this.land(shelf, Landed::Playlists(loaded), cx),
                 cx,
@@ -2713,17 +2710,17 @@ impl Library {
             let tracks = client.clone();
             let albums = client.clone();
             tasks.extend([
-                self.fetch(
+                self.io.load(
                     async move { tracks.saved_tracks().await },
                     move |this, loaded, cx| this.land_starred(shelf, Landed::Tracks(loaded), cx),
                     cx,
                 ),
-                self.fetch(
+                self.io.load(
                     async move { albums.saved_albums().await },
                     move |this, loaded, cx| this.land_starred(shelf, Landed::Albums(loaded), cx),
                     cx,
                 ),
-                self.fetch(
+                self.io.load(
                     async move { client.saved_artists().await },
                     move |this, loaded, cx| this.land_starred(shelf, Landed::Artists(loaded), cx),
                     cx,
@@ -2731,19 +2728,6 @@ impl Library {
             ]);
         }
         self.held_mut(shelf).tasks = tasks;
-    }
-
-    fn fetch<T, R, A>(&self, work: R, apply: A, cx: &mut Context<Self>) -> Task<()>
-    where
-        R: Future<Output = anyhow::Result<T>> + Send + 'static,
-        T: Send + 'static,
-        A: FnOnce(&mut Self, anyhow::Result<T>, &mut Context<Self>) + 'static,
-    {
-        let io = self.io.clone();
-        cx.spawn(async move |this, cx| {
-            let loaded = join(io.spawn(work)).await;
-            this.update(cx, |this, cx| apply(this, loaded, cx)).ok();
-        })
     }
 
     /// Loads one part a page at a time. A part with nothing primed shows each page as it lands

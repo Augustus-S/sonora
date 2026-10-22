@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Spotify Connect syncs queue history in both directions and preserves song identities, queue
+  order, shuffle and repeat across transfers. Queue edits no longer restart playback, and
+  queue displays and controls follow the active device.
+- Going back through the queue keeps replayed songs separate from manual additions.
+- Spotify library, playlist and pin changes refresh automatically from live notifications.
+- Linux song-change OSDs show the current song instead of a blank label.
+
 ## [0.44.1] - 2026-10-22
 
 ### Added
