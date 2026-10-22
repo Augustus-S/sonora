@@ -383,9 +383,21 @@ impl TrackSource {
         )
     }
 
+    /// Whether a row can start playback now, which a track that has to be streamed cannot while
+    /// the network is gone.
+    fn plays_now(&self, track: &Track, cx: &App) -> bool {
+        track.playable
+            && self
+                .playback
+                .read(cx)
+                .unreachable_reason(track, cx)
+                .is_none()
+    }
+
     fn index_cell(&self, cell: &Cell<TrackField>, track: &Track, cx: &App) -> AnyElement {
         let playing = self.now_playing(cell.row, cx);
-        let (preload, press) = match track.playable {
+        let playable = self.plays_now(track, cx);
+        let (preload, press) = match playable {
             false => (None, None),
             true => {
                 let playback = self.playback.clone();
@@ -415,7 +427,7 @@ impl TrackSource {
 
         let number = self.number(track, cx);
 
-        cells::index(cell, playing, track.playable, number, preload, press, cx)
+        cells::index(cell, playing, playable, number, preload, press, cx)
     }
 
     fn title_cell(
@@ -650,6 +662,18 @@ impl TableSource for TrackSource {
         self.provider.is_loading(cx)
     }
 
+    /// Why a track that has to be streamed cannot play while the network is gone, in the words
+    /// of the toast picking it would raise.
+    fn tip(&self, row: usize, cx: &App) -> Option<SharedString> {
+        let track = self.provider.tracks(cx).get(row)?;
+        let reason = self.playback.read(cx).unreachable_reason(track, cx)?;
+        let mut args = i18n::FluentArgs::new();
+        if let Some(provider) = reason.provider() {
+            args.set("name", i18n::Value::value(provider.as_ref()));
+        }
+        Some(i18n::lookup(reason.key(), Some(&args)))
+    }
+
     fn pending(&self, cx: &App) -> Option<Pending> {
         self.provider.pending(cx)
     }
@@ -669,7 +693,7 @@ impl TableSource for TrackSource {
             return self.index_cell(&cell, track, cx);
         }
         let faded = muted.opacity(0.5);
-        let (title, detail) = match track.playable {
+        let (title, detail) = match self.plays_now(track, cx) {
             true => (None, muted),
             false => (Some(faded), faded),
         };

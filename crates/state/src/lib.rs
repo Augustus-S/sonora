@@ -62,7 +62,7 @@ pub use network::{Network, Reconnected};
 pub use outputs::Outputs;
 pub use overload::OutputLevel;
 pub use pins::{PinSort, Pins};
-pub use playback::{Origin, Playback, PlaybackState, Repeat, Sleep, Whence};
+pub use playback::{Origin, Playback, PlaybackState, Repeat, Sleep, Unreachable, Whence};
 pub use profile::Profile;
 pub use queue::{Named, Queue, Resume, Stub};
 pub use remote::{Remote, attach as attach_remote};

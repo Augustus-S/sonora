@@ -22,6 +22,7 @@ use crate::pin::{Pin, Pinnable};
 use crate::popup::Popup;
 use crate::skeleton::Skeleton;
 use crate::theme::ActiveTheme as _;
+use crate::tooltip::{Perch, Tipped as _};
 use crate::{Filter, SortAxis};
 
 pub use layout::{ColumnSpec, Layout, Sort, Sorting, Width, rank};
@@ -109,6 +110,12 @@ pub trait TableSource: 'static {
     fn context_menu_will_open(&self, _rows: &[usize], _cx: &App) {}
 
     fn pin(&self, _row: usize, _cx: &App) -> Option<Pin> {
+        None
+    }
+
+    /// Text shown over the whole row the moment the pointer reaches it, following the pointer
+    /// for as long as it stays.
+    fn tip(&self, _row: usize, _cx: &App) -> Option<SharedString> {
         None
     }
 
@@ -1106,6 +1113,9 @@ impl<S: TableSource> TableState<S> {
                         this.hover(move |style| style.bg(theme.table_hover))
                     })
                     .when_some(self.delegate.source.pin(row, cx), Pinnable::pin)
+                    .when_some(self.delegate.source.tip(row, cx), |this, text| {
+                        this.tip_label(text, Perch::Follow)
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
