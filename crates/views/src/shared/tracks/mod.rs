@@ -34,7 +34,7 @@ pub(crate) use sort::initial;
 
 use sort::hits;
 
-/// How strongly a finished download's mark and an unsaved track's heart show on a row.
+/// How strongly an unsaved track's heart shows on its row.
 const SETTLED: f32 = 0.5;
 
 /// The current track and its `Playback::control`. A screen keeps the last one and redraws only
@@ -750,21 +750,25 @@ impl TableSource for TrackSource {
     }
 }
 
-/// How far a download the listener asked for has got, shown before the heart. A finished one
-/// stays faint so a downloaded list does not shout, and one still waiting its turn shows nothing,
-/// as does a track only cached because it played.
+/// How far a download the listener asked for has got, shown before the heart. The arrow sits on
+/// a filled disc like the explicit badge, the accent ring fades once the download lands, and a
+/// track still waiting its turn or only cached because it played shows nothing.
 fn download_mark(cell: &Cell<TrackField>, track: &Track, cx: &App) -> Option<AnyElement> {
     let id = track.id.as_deref()?;
     let downloads = Sonora::global(cx).downloads.read(cx);
     let theme = cx.theme();
     let mark = ("download-mark", cell.row);
+    let ring = |done| {
+        ArrowRing::new(mark, done)
+            .color(theme.primary)
+            .arrow(theme.muted_foreground)
+            .backdrop(theme.muted)
+    };
     let ring = match downloads.track(id)? {
-        Progress::Done => {
-            ArrowRing::new(mark, Some(1.)).color(theme.muted_foreground.opacity(SETTLED))
-        }
-        Progress::Running => ArrowRing::new(mark, downloads.fraction(id)).color(theme.primary),
+        Progress::Done => ring(Some(1.)),
+        Progress::Running => ring(downloads.fraction(id)),
         Progress::Waiting => return None,
-        Progress::Failed => ArrowRing::new(mark, Some(0.)).color(theme.danger),
+        Progress::Failed => ring(Some(0.)).arrow(theme.danger),
     };
     Some(div().flex_none().child(ring).into_any_element())
 }
