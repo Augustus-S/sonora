@@ -17,8 +17,6 @@ const STALL: Duration = Duration::from_millis(250);
 #[derive(Default)]
 struct State {
     shown: Levels,
-    /// The spectrum the frames read, replaced on every `show` since a rebuilt engine brings a
-    /// new one and the old one stops moving.
     spectrum: Spectrum,
     armed: bool,
     visible: bool,
