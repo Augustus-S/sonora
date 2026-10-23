@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Playing YouTube Music videos and looking up lyrics no longer fills your YouTube search history
+  with song names. Only what you search for yourself shows up there.
+
 ## [0.44.1] - 2026-10-22
 
 ### Added
