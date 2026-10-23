@@ -15,6 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   audio, instead of freezing until Sonora is restarted.
 - An album or playlist page shows Pause only when you are playing from that album or playlist,
   not whenever the current song happens to be on it. Pressing Play there starts it.
+- YouTube Music tracks on an album with a numeric title, such as 17, show their real length
+  instead of the album title read as seconds.
 
 ## [0.44.1] - 2026-10-22
 
