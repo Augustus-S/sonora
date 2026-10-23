@@ -17,6 +17,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not whenever the current song happens to be on it. Pressing Play there starts it.
 - YouTube Music tracks on an album with a numeric title, such as 17, show their real length
   instead of the album title read as seconds.
+- Music sounds right again on 5.1 and 7.1 speakers. The left channel no longer plays from the
+  centre speaker with the front left silent, because Sonora now plays in stereo and lets your
+  system spread it across the speakers.
 
 ## [0.44.1] - 2026-10-22
 
