@@ -106,6 +106,7 @@ macro_rules! symbols {
 symbols! {
     webkit_get_major_version: unsafe extern "C" fn() -> c_uint,
     webkit_get_minor_version: unsafe extern "C" fn() -> c_uint,
+    webkit_get_micro_version: unsafe extern "C" fn() -> c_uint,
     gdk_set_allowed_backends: unsafe extern "C" fn(*const c_char),
     gdk_display_get_default: unsafe extern "C" fn() -> Ptr,
     g_type_name_from_instance: unsafe extern "C" fn(Ptr) -> *const c_char,
@@ -602,6 +603,14 @@ fn gtk(api: &'static Api) -> &'static Host {
 /// Initialises GTK, then alternates between parking and running a main loop for as long as there
 /// are windows. Never returns unless GTK itself refuses to start.
 fn run(api: &'static Api, host: &'static Host) {
+    let (major, minor, micro) = unsafe {
+        (
+            (api.webkit_get_major_version)(),
+            (api.webkit_get_minor_version)(),
+            (api.webkit_get_micro_version)(),
+        )
+    };
+    log::debug!("webview: webkitgtk {major}.{minor}.{micro}");
     // GDK opens its own connection to whichever server it finds, Wayland first and X11 through
     // XWayland otherwise, so the sign-in window never depends on an XWayland being present. A
     // GDK_BACKEND in the environment outranks this list, which is fine: either name works.

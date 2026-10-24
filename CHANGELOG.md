@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Linux sign-in diagnostics now record the loaded WebKitGTK version, display backend and
+  automatic renderer workaround in the application log.
+
 ### Fixed
 
 - Changing playback volume no longer notifies every settings observer, avoiding unrelated
