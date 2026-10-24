@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- On Linux, sign-in windows use shared-memory rendering with WebKitGTK 2.54 and newer to
+  avoid the runaway GPU-buffer allocations reported during Apple Music sign-in.
+
 ## [0.44.1] - 2026-10-22
 
 ### Added
