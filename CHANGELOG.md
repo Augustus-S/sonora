@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Apple Music Home now shows recently added library albums and playlists when available.
+
 ## [0.44.1] - 2026-10-22
 
 ### Added
