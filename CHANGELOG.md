@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Apple Music Home now shows recently added library albums and playlists when available.
 - Linux sign-in diagnostics now record the loaded WebKitGTK version, display backend and
   automatic renderer workaround in the application log.
 
