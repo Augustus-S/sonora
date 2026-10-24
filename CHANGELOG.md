@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Changing playback volume no longer notifies every settings observer, avoiding unrelated
+  layout work while dragging the volume slider.
 - On Linux, sign-in windows use shared-memory rendering with WebKitGTK 2.54 and newer to
   avoid the runaway GPU-buffer allocations reported during Apple Music sign-in.
 
