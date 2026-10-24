@@ -20,6 +20,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Music sounds right again on 5.1 and 7.1 speakers. The left channel no longer plays from the
   centre speaker with the front left silent, because Sonora now plays in stereo and lets your
   system spread it across the speakers.
+- Sign-ins no longer disappear when a cleaner app or the system empties the cache folder.
+  Sonora now keeps them with its other data and moves existing ones there on the next launch.
 
 ## [0.44.1] - 2026-10-22
 
