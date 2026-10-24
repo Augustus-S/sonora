@@ -71,6 +71,7 @@ Status: `pending` = not implemented; `investigate` = evidence required; `deferre
 - **A02 stations:** The response confirms station resources exist, but `GenreItem` cannot represent them and track-seeded radio is not a general personalized-station playback contract. Do not present discovery as working station playback; a separate model, queue and continuation design is still needed.
 - **A03:** No uploaded/matched sample was available in the returned songs. Catalog-free enumeration and authorized playback remain unverified; no fabricated catalog identifiers were introduced.
 - **A04:** No authorized Cast receiver or playback handshake is available. Login alone does not unblock the receiver/DRM requirements.
+- Published [draft PR #1071](https://github.com/sonorahq/sonora/pull/1071) from `feat/apple-recent-library`, commit `423ec42b`, containing only the provider change and changelog. Aggregate commit `52804014` includes this audit record and is pushed to `chore/linux-apple-round-one`. Draft status retains the nonempty-library, GUI and lint-check limitations.
 
 ### Local build for manual Apple Music login
 
