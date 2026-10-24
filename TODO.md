@@ -59,6 +59,13 @@ Status: `pending` = not implemented; `investigate` = evidence required; `deferre
 
 ## Progress log
 
+### Local build for manual Apple Music login
+
+- Built the complete application from `b5dbf9fe` with `cargo +stable build --locked --package sonora`, `RUSTFLAGS=''` and six build jobs. Stable is Rust 1.99.1; the repository requests 1.98.1. The final successful invocation took 7 minutes 15 seconds, excluding dependency preparation and earlier interrupted attempts.
+- Missing Fedora development packages were downloaded and extracted under `~/.cache/sonora-build/sysroot`; its relocated pkg-config files point at the user-local headers and installed host runtime libraries. No system package installation or repository build-configuration change was made.
+- Binary: `target/debug/sonora`. Build log: `~/.cache/sonora-build/build.log`. `ldd` reported no missing linked libraries. This supersedes the earlier dependency blocker for local compilation, not the outstanding GUI/login/profiling verification.
+- No application or login page was launched during this build. The 10-second runtime-test limit remains in force until explicitly changed; any login run must also retain a child-process-inclusive memory limit.
+
 ### Planning baseline
 
 - Queried local OS, session, GPU, host WebKitGTK and installed Flatpak without launching Sonora.
