@@ -39,7 +39,7 @@ Status: `pending` = not implemented; `investigate` = evidence required; `deferre
 | A02 | deferred | Recently added library and additional personalized station entries: [#1061](https://github.com/sonorahq/sonora/issues/1061). Recommendations, recently played and track-seeded stations already exist. | Confirm available provider data, then add only missing navigation/content. Split recently added and station browsing into separate changes. |
 | A03 | deferred | Uploaded / matched iTunes cloud library: [#955](https://github.com/sonorahq/sonora/issues/955). | First establish enumeration and authorized playback with an account containing these items. Keep cloud tracks distinct from catalog-only identifiers. Do not mark complete with listing alone. |
 | A04 | deferred | Google Cast with Apple Music: [#995](https://github.com/sonorahq/sonora/issues/995). | Establish authorized receiver playback feasibility before implementation. Then separate discovery, connection/control and queue integration. Discovery alone is not Apple Music Cast support; requires a receiver and account verification. |
-| G01 | in progress | GitHub fork and topic PRs. | User renews CLI authentication; verify it without displaying credentials, create a fork under the authenticated account, retain upstream remote, and submit independently reviewable topic PRs. Do not force-push shared branches. |
+| G01 | completed; draft PRs published | GitHub fork and topic PRs. | User renews CLI authentication; verify it without displaying credentials, create a fork under the authenticated account, retain upstream remote, and submit independently reviewable topic PRs. Do not force-push shared branches. |
 
 ## Capability boundaries (not promised features)
 
@@ -105,4 +105,9 @@ Every item below was reviewed in this round; deferred does not mean implemented 
 ### Publication plan
 
 - Keep the complete audit and deferred-work record on the round branch. Publish focused webview and volume branches without unrelated audit material in their upstream diffs.
-- Submit draft PRs because locked workspace compilation, real Apple login and GUI profiling remain outstanding. Preserve SKetU-l's PR #925 attribution in the webview topic documentation and PR.
+- Published draft PRs because locked workspace compilation, real Apple login and GUI profiling remain outstanding. The webview PR explicitly credits SKetU-l's PR #925 and its commit.
+- [PR #1069](https://github.com/sonorahq/sonora/pull/1069): `fix/linux-webkit-sign-in`, commit `5143f5d5`, renderer workaround and startup diagnostics.
+- [PR #1070](https://github.com/sonorahq/sonora/pull/1070): `fix/volume-settings-notifications`, commit `9b3a263e`, quiet volume persistence.
+- Both focused branches and `chore/linux-apple-round-one` were pushed to `Augustus-S/sonora`. The focused upstream diffs omit this local audit plan.
+- Final standalone webview rerun: all four existing tests passed in 0.12 seconds of build time plus effectively zero test time. An initial invocation from the repository directory inherited its unavailable mold linker and failed; rerunning from the standalone directory avoided that repository-specific linker setting. This does not remove the whole-workspace build limitation.
+- Final `cargo +stable fmt --all -- --check` and topic-branch `git diff --check` passed. No permanent test source was added. Draft status is intentional, not a claim of merge readiness.
