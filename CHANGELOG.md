@@ -7,8 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- When Spotify refuses to play on your account, a Why? button opens the FAQ explaining it.
+
 ### Fixed
 
+- Arabic, Hebrew and other right-to-left text reads in the right order on Windows.
+- Right-to-left lyrics, descriptions and bios wrap between words and keep their reading order.
+- Arabic and Hebrew lyrics sit against the right edge, and the karaoke highlight sweeps from there.
+- The tails of letters such as ر and ز are no longer cut off at the bottom of titles.
+- Typing Arabic or Hebrew in the search box puts the caret where it belongs.
 - YouTube Music libraries with more than about two dozen playlists or albums now show all of
   them. A new playlist no longer drops out of Add to playlist after you sign in again.
 
