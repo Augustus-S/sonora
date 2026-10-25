@@ -22,6 +22,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   system spread it across the speakers.
 - Sign-ins no longer disappear when a cleaner app or the system empties the cache folder.
   Sonora now keeps them with its other data and moves existing ones there on the next launch.
+- Switching your sound output, such as picking another default device from the Windows taskbar,
+  no longer stops playback until Sonora is restarted.
 
 ## [0.44.1] - 2026-10-22
 
