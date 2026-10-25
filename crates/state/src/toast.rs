@@ -21,19 +21,25 @@ pub enum Outcome {
     Loading,
 }
 
+/// A page a toast leads to, which the views turn into a destination.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Target {
     Song(SharedString),
     Album(SharedString),
     Artist(SharedString),
     Playlist(SharedString),
+    /// The Playback tab of settings, where the Widevine module is managed.
+    PlaybackSettings,
 }
 
-/// A button on a toast. Pressing it runs the handler and then dismisses the toast.
+/// A button on a toast. Pressing it runs the handler, opens the target if there is one, and
+/// then dismisses the toast.
 #[derive(Clone)]
 pub struct ToastAction {
     /// The Fluent key of the button's label.
     pub key: SharedString,
+    /// The page the button opens after the handler has run.
+    pub target: Option<Target>,
     run: Run,
 }
 
@@ -41,6 +47,7 @@ impl ToastAction {
     pub fn new(key: impl Into<SharedString>, run: impl Fn(&mut App) + 'static) -> Self {
         Self {
             key: key.into(),
+            target: None,
             run: Rc::new(run),
         }
     }
@@ -61,11 +68,22 @@ pub struct Toast {
     pub count: Option<usize>,
     /// A line of its own below the text, such as the error behind a failure. Not translated.
     pub detail: Option<SharedString>,
+    /// The Fluent key of a line below the text that explains it. `detail` takes the line when
+    /// both are set.
+    pub note: Option<SharedString>,
     pub target: Option<Target>,
     /// The emphasised button, such as Undo.
     pub action: Option<ToastAction>,
     /// The quiet button beside the action, such as Cancel.
     pub cancel: Option<ToastAction>,
+    /// How far the work a loading toast waits on has got, from 0 to 1, which shows a filling
+    /// ring in place of the spinner. `None` while there is no telling.
+    pub progress: Option<f32>,
+    /// Whether the message keeps to one line, cut short with an ellipsis, rather than wrapping.
+    pub single_line: bool,
+    /// Runs when the listener dismisses the toast by its cross or a swipe. Closing it from code
+    /// or letting it expire runs nothing.
+    dismissed: Option<Run>,
     /// How long the toast stays while nobody holds it, or `None` to stay until dismissed.
     linger: Option<Duration>,
     /// When the clock last started running.
@@ -83,9 +101,13 @@ impl Toast {
             name: None,
             count: None,
             detail: None,
+            note: None,
             target: None,
             action: None,
             cancel: None,
+            progress: None,
+            dismissed: None,
+            single_line: false,
             linger: match outcome {
                 Outcome::Loading => None,
                 _ => Some(LINGER),
@@ -108,6 +130,11 @@ impl Toast {
 
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn note(mut self, key: impl Into<SharedString>) -> Self {
+        self.note = Some(key.into());
         self
     }
 
@@ -135,10 +162,37 @@ impl Toast {
         self
     }
 
+    /// Adds a button that opens the target's page.
+    pub fn open(mut self, key: impl Into<SharedString>, target: Target) -> Self {
+        let mut action = ToastAction::new(key, |_| {});
+        action.target = Some(target);
+        self.action = Some(action);
+        self
+    }
+
     /// Adds an Undo button. `run` puts back what the toast reports was removed, and has to cope
     /// with everything that may have changed since, since the toast stays up for seconds.
     pub fn undo(self, run: impl Fn(&mut App) + 'static) -> Self {
         self.action("toast-undo", run)
+    }
+
+    /// Shows how far the work has got, from 0 to 1, as a ring that fills in place of the spinner.
+    pub fn progress(mut self, done: f32) -> Self {
+        self.progress = Some(done);
+        self
+    }
+
+    /// Keeps the message to one line, for a toast that names something whose name may run long.
+    pub fn single_line(mut self) -> Self {
+        self.single_line = true;
+        self
+    }
+
+    /// Runs `run` when the listener dismisses the toast, which makes the cross and a swipe
+    /// undo what the toast reports, such as a download under way.
+    pub fn on_dismiss(mut self, run: impl Fn(&mut App) + 'static) -> Self {
+        self.dismissed = Some(Rc::new(run));
+        self
     }
 
     /// Keeps the toast up until the user or the code dismisses it.
@@ -153,12 +207,22 @@ impl Toast {
         self.linger.map(|linger| linger.saturating_sub(ran))
     }
 
+    /// Whether the toast can act on or lead into the account it was shown for. A loading toast
+    /// counts because whatever settles it may add an Undo.
+    fn bound(&self) -> bool {
+        self.action.is_some()
+            || self.cancel.is_some()
+            || self.target.is_some()
+            || self.outcome == Outcome::Loading
+    }
+
     fn same(&self, other: &Self) -> bool {
         self.outcome == other.outcome
             && self.key == other.key
             && self.name == other.name
             && self.count == other.count
             && self.detail == other.detail
+            && self.note == other.note
     }
 }
 
@@ -253,6 +317,37 @@ impl Toasts {
         });
     }
 
+    /// Moves the progress toast `id` shows to `done`, from 0 to 1, leaving its clock and the rest
+    /// of what it says alone. Nothing happens when the toast is already gone.
+    pub fn progress(id: usize, done: f32, cx: &mut App) {
+        let toasts = Self::entity(cx);
+        toasts.update(cx, |this, cx| {
+            let Some(toast) = this.shown.iter_mut().find(|shown| shown.id == id) else {
+                return;
+            };
+            if toast.progress != Some(done) {
+                toast.progress = Some(done);
+                cx.notify();
+            }
+        });
+    }
+
+    /// Dismisses toast `id` for the listener, by its cross or a swipe, then runs what the toast
+    /// set with [`Toast::on_dismiss`]. It runs outside the stack's update, so it may post toasts.
+    pub fn discard(id: usize, cx: &mut App) {
+        let toasts = Self::entity(cx);
+        let run = toasts
+            .read(cx)
+            .shown
+            .iter()
+            .find(|shown| shown.id == id)
+            .and_then(|shown| shown.dismissed.clone());
+        toasts.update(cx, |this, cx| this.dismiss(id, cx));
+        if let Some(run) = run {
+            run(cx);
+        }
+    }
+
     /// Dismisses toast `id` from outside the stack.
     pub fn close(id: usize, cx: &mut App) {
         let toasts = Self::entity(cx);
@@ -265,6 +360,23 @@ impl Toasts {
         toasts.update(cx, |this, cx| {
             this.shown.clear();
             this.clocks.clear();
+            cx.notify();
+        });
+    }
+
+    /// Dismisses every toast bound to the account being signed out of. Plain messages stay, so
+    /// one that explains the sign-out itself is still read.
+    pub fn clear_account(cx: &mut App) {
+        let toasts = Self::entity(cx);
+        toasts.update(cx, |this, cx| {
+            let clocks = &mut this.clocks;
+            this.shown.retain(|toast| {
+                let bound = toast.bound();
+                if bound {
+                    clocks.remove(&toast.id);
+                }
+                !bound
+            });
             cx.notify();
         });
     }
