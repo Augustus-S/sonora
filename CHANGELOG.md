@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.44.2] - 2026-10-25
+
 ### Fixed
 
 - Playing YouTube Music videos and looking up lyrics no longer fills your YouTube search history
@@ -2322,7 +2324,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/sonorahq/sonora/compare/v0.44.1...HEAD
+[unreleased]: https://github.com/sonorahq/sonora/compare/v0.44.2...HEAD
+[0.44.2]: https://github.com/sonorahq/sonora/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/sonorahq/sonora/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/sonorahq/sonora/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/sonorahq/sonora/compare/v0.42.2...v0.43.0
