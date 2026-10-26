@@ -123,8 +123,8 @@ impl AppNotice {
             false => t!("update-available", version = version.as_str()),
         };
         let detail = (!failed).then(|| match installable {
-            true => t!("update-detail", running = env!("CARGO_PKG_VERSION")),
-            false => t!("update-detail-notes", running = env!("CARGO_PKG_VERSION")),
+            true => t!("update-detail", running = state::VERSION),
+            false => t!("update-detail-notes", running = state::VERSION),
         });
 
         let close = self.updates.clone();

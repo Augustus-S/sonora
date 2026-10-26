@@ -10,7 +10,6 @@ use ui::{ActiveTheme as _, Avatar, Switch, Text};
 use super::rows::outward;
 use super::{Group, SettingsView, Slot, group_heading};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How large the app icon stands, in covers.
 const MARK_TILE: f32 = 0.5;
 /// The app icon as this platform shows it, registered by the binary's asset source.
@@ -76,7 +75,7 @@ impl SettingsView {
     pub(super) fn version_row(&self) -> AnyElement {
         self.row(
             t!("settings-version"),
-            div().child(VERSION).into_any_element(),
+            div().child(state::VERSION).into_any_element(),
         )
     }
 
