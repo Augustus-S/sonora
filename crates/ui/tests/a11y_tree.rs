@@ -1,9 +1,10 @@
-//! Headless reproduction for sonorahq/sonora#1101 (NVDA hears silence).
+//! Headless regression suite keeping sonorahq/sonora#1101 fixed (NVDA heard silence).
 //!
 //! A node reaches the AccessKit tree only when its element carries BOTH an id
 //! and a role (`Element::a11y_role()` returns `Some`). Each test renders one
 //! primitive inside a headless window and snapshots the built element, which is
-//! exactly what the frame builder inspects before pushing a node.
+//! exactly what the frame builder inspects before pushing a node. Add a case
+//! here with every new primitive so CI fails when a role or name goes missing.
 //!
 //! A full `TreeUpdate` dump is not possible here: `TestWindow::a11y_init` is a
 //! no-op, so the active flag never flips and `debug_a11y_tree_json` stays

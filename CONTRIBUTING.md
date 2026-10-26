@@ -35,6 +35,15 @@ English must be present for every key. Other locales can lag behind, since a mis
 It's okay to machine-translate a language you don't speak. Run `scripts/i18n-coverage.py` afterwards to refresh
 the table in the README.
 
+## Accessibility
+
+Sonora must stay usable with screen readers. Every interactive element needs a stable id, an
+AccessKit role, and an accessible name resolved from Fluent in `render`; icon-only buttons take
+their name from their tooltip, and list rows expose position and size of set. Run
+`cargo test -p ui --test a11y_tree` and extend it when you add a primitive: it runs in CI on
+every pull request, so a missing role or name fails the build. Roles on composed views have no
+headless coverage yet, so new screens need a manual pass with a screen reader before merge.
+
 ## AI
 
 Use whatever tools you like, but you must understand, review and test what you submit. PR descriptions,
