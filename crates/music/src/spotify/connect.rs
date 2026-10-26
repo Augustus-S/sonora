@@ -1081,7 +1081,8 @@ impl Worker {
             }
             Wire::SetQueue(queue) => {
                 let previous = listed(&queue.prev_tracks, queue.prev_tracks.len());
-                let upcoming = listed(&queue.next_tracks, CARRIED);
+                // an edit that added songs runs past the window it was shown, and all of it counts
+                let upcoming = listed(&queue.next_tracks, queue.next_tracks.len());
                 // Acknowledge the edit with its new queue while the host resolves missing metadata.
                 if let Some(now) = self.now.as_mut() {
                     let now = Arc::make_mut(now);

@@ -12,6 +12,7 @@ use music::connect::{
 use music::{Contributor, MusicApi, Track};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::queue::Reach;
 use crate::{
     AppSettings, ConnectName, Io, Library, Origin, Outcome, Playback, Queue, QueueKind,
     QueuePosition, QueueSections, Session, SessionEvent, Toasts, Whence,
@@ -508,13 +509,17 @@ impl Devices {
     /// Applies already-delivered events together without delaying commands or scheduling a timer.
     fn on_events(&mut self, events: impl Iterator<Item = Event>, cx: &mut Context<Self>) {
         let mut changed = false;
+        let mut listed = false;
         let mut playlists = HashSet::new();
         for event in events {
             match event {
                 Event::Roster(roster) => self.set_roster(roster, cx),
                 Event::Command(command) => self.run(command, cx),
                 Event::Liked { track, liked } => self.liked(track, liked, cx),
-                Event::LibraryChanged => changed = true,
+                Event::LibraryChanged => {
+                    changed = true;
+                    listed = true;
+                }
                 Event::PlaylistChanged(id) => {
                     changed = true;
                     playlists.insert(id);
@@ -565,8 +570,9 @@ impl Devices {
             }
         }
         if changed {
-            self.library
-                .update(cx, |library, cx| library.changed_elsewhere(playlists, cx));
+            self.library.update(cx, |library, cx| {
+                library.changed_elsewhere(playlists, listed, cx)
+            });
         }
     }
 
@@ -821,6 +827,18 @@ impl Devices {
         let Some(state) = self.snapshot(cx) else {
             return;
         };
+        // the edit was made on the last report, and one made on an older queue would undo what
+        // changed here since, so it gives way to the report of what this queue holds now
+        if !self
+            .sent
+            .as_deref()
+            .is_some_and(|sent| same_queue(sent, &state))
+        {
+            log::debug!("connect: dropping a queue edit made on an older report");
+            self.sent = None;
+            self.publish(cx);
+            return;
+        }
         self.start(
             Start {
                 state: Arc::new(Snapshot {
@@ -836,64 +854,80 @@ impl Devices {
     }
 
     /// Applies a resolved remote queue window without restarting playback.
-    fn apply_window(&mut self, (past, current, next): RemoteWindow, cx: &mut Context<Self>) {
+    fn apply_window(
+        &mut self,
+        (past, current, next): RemoteWindow,
+        reach: Reach,
+        cx: &mut Context<Self>,
+    ) {
         self.queue.update(cx, |queue, cx| {
-            queue.replace_remote(past, current, next, cx)
+            queue.replace_remote(past, current, next, reach, cx)
         });
     }
 
-    /// Plays what another device handed over, from where it left off.
+    /// Plays what another device handed over from where it left off, or applies its edit to the
+    /// queue, once what it names has loaded. Nothing is applied if the listener changed the queue
+    /// here while it loaded: a handover gives way to any change, and an edit to one that moved the
+    /// songs the report showed. Songs already in the queue are not read from the provider again.
     fn start(&mut self, start: Start, cx: &mut Context<Self>) {
         let Some(client) = self.session.read(cx).client() else {
             return;
         };
         let state = start.state.clone();
         let restart = start.restart;
-        self.change(
-            load(client, start, self.listed.clone()),
-            move |this, (tracks, index, origin, window), cx| {
-                if restart {
-                    this.claimed = true;
-                    let queue = this.queue.clone();
-                    this.here(cx, |playback, cx| {
-                        if let Some(shuffle) = state.shuffle {
-                            queue.update(cx, |queue, cx| queue.set_shuffle(shuffle, cx));
-                        }
-                        if let Some(repeat) = state.repeat {
-                            playback.set_repeat(repeat, cx);
-                        }
-                        playback.start_at(tracks, index, origin, state.live_position(), cx);
-                        if !state.playing {
-                            playback.pause(cx);
-                        }
-                    });
-                }
-                if let Some(window) = window {
-                    this.apply_window(window, cx);
-                }
+        let reach = match restart {
+            true => Reach::Handed,
+            false => Reach::Reported {
+                past: PREVIOUS,
+                upcoming: UPCOMING,
             },
-            cx,
-        );
-    }
-
-    /// Applies the latest transfer or edit after loading, unless the local queue changed meanwhile.
-    fn change<T: Send + 'static>(
-        &mut self,
-        load: impl Future<Output = Result<T>> + Send + 'static,
-        apply: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
+        };
         let revision = self.queue.read(cx).revision();
+        let shown = self.snapshot(cx);
+        let queue = self.queue.read(cx);
+        let mut known = self.listed.clone();
+        known.extend(
+            queue
+                .tracks()
+                .filter_map(|track| Some((track.id.clone()?, track.clone()))),
+        );
         self.changing = Some(self.io.load(
-            load,
+            load(client, start, known),
             move |this, loaded, cx| {
                 this.changing = None;
-                if this.queue.read(cx).revision() != revision {
+                let moved = match restart {
+                    true => this.queue.read(cx).revision() != revision,
+                    false => match (this.snapshot(cx), &shown) {
+                        (Some(now), Some(shown)) => !same_queue(&now, shown),
+                        _ => true,
+                    },
+                };
+                if moved {
                     this.publish(cx);
                     return;
                 }
                 match loaded {
-                    Ok(loaded) => apply(this, loaded, cx),
+                    Ok((tracks, index, origin, window)) => {
+                        if restart {
+                            this.claimed = true;
+                            let queue = this.queue.clone();
+                            this.here(cx, |playback, cx| {
+                                if let Some(shuffle) = state.shuffle {
+                                    queue.update(cx, |queue, cx| queue.set_shuffle(shuffle, cx));
+                                }
+                                if let Some(repeat) = state.repeat {
+                                    playback.set_repeat(repeat, cx);
+                                }
+                                playback.start_at(tracks, index, origin, state.live_position(), cx);
+                                if !state.playing {
+                                    playback.pause(cx);
+                                }
+                            });
+                        }
+                        if let Some(window) = window {
+                            this.apply_window(window, reach, cx);
+                        }
+                    }
                     Err(error) => {
                         log::warn!("connect: cannot apply playback change: {error:#}");
                         this.sent = None;
@@ -1192,4 +1226,9 @@ async fn resolve_queue(
         }
     }
     ids.iter().map(|id| known.get(id).cloned()).collect()
+}
+
+/// Whether two reports show the same queue around the same song, whatever their clocks say.
+fn same_queue(a: &Snapshot, b: &Snapshot) -> bool {
+    a.track == b.track && a.previous == b.previous && a.upcoming == b.upcoming
 }

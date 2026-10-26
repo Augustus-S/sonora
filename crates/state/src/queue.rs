@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -95,6 +95,17 @@ impl QueuePlacement {
             Self::Gap(_) => None,
         }
     }
+}
+
+/// How much of this app's queue a queue window from another device stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// An edit to the queue this app reported, which showed the last `past` and the first
+    /// `upcoming` provider songs. Whatever the report did not show was never seen, so it stays.
+    Reported { past: usize, upcoming: usize },
+    /// Another device's own queue taking over, which carries only the start of what it plays.
+    /// What the collection loaded for it holds beyond that window stays after it.
+    Handed,
 }
 
 /// Why a song is in play order, independent of where it currently sits.
@@ -392,12 +403,13 @@ fn source_of(entries: impl IntoIterator<Item = Entry>) -> Vec<Entry> {
         .collect()
 }
 
-/// The entries `upcoming` holds that `source` does not name.
+/// The entries `upcoming` holds that are not occurrences from `source`, such as a song added by
+/// hand that the collection also has.
 fn unknown(upcoming: &mut VecDeque<Entry>, source: &[Entry]) -> Vec<Entry> {
-    let known: HashSet<&str> = source.iter().filter_map(Entry::id).collect();
+    let known: HashSet<&str> = source.iter().map(|entry| entry.uid.as_str()).collect();
     upcoming
         .drain(..)
-        .filter(|entry| !entry.id().is_some_and(|id| known.contains(id)))
+        .filter(|entry| !known.contains(entry.uid.as_str()))
         .collect()
 }
 
@@ -534,9 +546,9 @@ impl Queue {
             let origin = stub.from.and_then(|index| origins.get(index).cloned());
             Entry::new(hydrate(stub), origin, kind)
         };
-        self.past = resume.past.into_iter().map(&entry).collect();
-        self.current = resume.current.map(&entry);
-        self.upcoming = resume.upcoming.into_iter().map(&entry).collect();
+        self.past = resume.past.into_iter().map(entry).collect();
+        self.current = resume.current.map(entry);
+        self.upcoming = resume.upcoming.into_iter().map(entry).collect();
         for entry in self.upcoming.iter_mut().take(resume.manual) {
             entry.kind = QueueKind::Queued;
         }
@@ -615,9 +627,23 @@ impl Queue {
         self.past.iter().filter_map(connect_entry)
     }
 
-    /// The same upcoming play order reported to other clients, excluding only local files.
+    /// The upcoming play order reported to other clients. Local files and suggestions stay out,
+    /// since the suggestions are this app's own and change whenever the radio refills.
     pub(crate) fn connect_upcoming(&self) -> impl Iterator<Item = QueuedTrack> + '_ {
-        self.upcoming.iter().filter_map(connect_entry)
+        self.upcoming
+            .iter()
+            .filter(|entry| entry.kind != QueueKind::Suggested)
+            .filter_map(connect_entry)
+    }
+
+    /// Every track the queue holds, for reading a remote queue without asking the provider
+    /// again for what is already here.
+    pub(crate) fn tracks(&self) -> impl Iterator<Item = &Track> {
+        self.past
+            .iter()
+            .chain(self.current.as_ref())
+            .chain(self.upcoming.iter())
+            .map(|entry| entry.track.as_ref())
     }
 
     /// The underlying collection, retained while a hand-queued track is playing.
@@ -637,6 +663,14 @@ impl Queue {
     /// The full upcoming play order, including recommendations.
     pub fn upcoming(&self) -> impl ExactSizeIterator<Item = &Track> {
         self.upcoming.iter().map(|entry| entry.track.as_ref())
+    }
+
+    /// How many songs are left to play before the recommendations.
+    pub fn ahead(&self) -> usize {
+        self.upcoming
+            .iter()
+            .filter(|entry| entry.kind != QueueKind::Suggested)
+            .count()
     }
 
     pub fn similar(&self) -> impl Iterator<Item = &Track> {
@@ -840,15 +874,61 @@ impl Queue {
     }
 
     /// Applies a remote queue window while keeping the current entry and playback position.
+    /// `reach` says how much of this queue the window stands for, so what lies beyond it stays,
+    /// and so do the suggestions, which are never reported.
     pub(crate) fn replace_remote(
         &mut self,
         past: Vec<(Track, bool)>,
         current: bool,
         upcoming: Vec<(Track, bool)>,
+        reach: Reach,
         cx: &mut Context<Self>,
     ) {
         let origin = self.origin().or_else(|| self.context_origin()).cloned();
-        let mut known: Vec<_> = self.past.drain(..).chain(self.upcoming.drain(..)).collect();
+        let old_past = std::mem::take(&mut self.past);
+        let (suggested, old_upcoming): (Vec<_>, Vec<_>) = self
+            .upcoming
+            .drain(..)
+            .partition(|entry| entry.kind == QueueKind::Suggested);
+        let (earlier, left_past, mut known, left_upcoming, beyond) = match reach {
+            Reach::Reported {
+                past: shown_past,
+                upcoming: shown_upcoming,
+            } => {
+                let mut seen_past = old_past;
+                let earlier = seen_past
+                    .drain(..seen_start(&seen_past, shown_past))
+                    .collect();
+                let mut seen_upcoming = old_upcoming;
+                let beyond = seen_upcoming.split_off(seen_end(&seen_upcoming, shown_upcoming));
+                // what the report left out, such as a local file, stays where it was
+                let (left_past, seen_past): (Vec<_>, Vec<_>) =
+                    seen_past.into_iter().partition(|entry| !reported(entry));
+                let (left_upcoming, seen_upcoming): (Vec<_>, Vec<_>) = seen_upcoming
+                    .into_iter()
+                    .partition(|entry| !reported(entry));
+                let known: Vec<_> = seen_past.into_iter().chain(seen_upcoming).collect();
+                (earlier, left_past, known, left_upcoming, beyond)
+            }
+            // the collection loaded for a handover may hold the window's history ahead, as it
+            // does when it was shuffled, so both halves are looked for across all of it
+            Reach::Handed => {
+                let split = old_past.len();
+                let pool: Vec<_> = old_past.into_iter().chain(old_upcoming).collect();
+                let named = named(&pool, past.iter().chain(&upcoming).map(|(track, _)| track));
+                let mut known = Vec::new();
+                let mut earlier = Vec::new();
+                let mut beyond = Vec::new();
+                for (index, (entry, named)) in pool.into_iter().zip(named).enumerate() {
+                    match (named, index < split) {
+                        (true, _) => known.push(entry),
+                        (false, true) => earlier.push(entry),
+                        (false, false) => beyond.push(entry),
+                    }
+                }
+                (earlier, Vec::new(), known, Vec::new(), beyond)
+            }
+        };
         let mut identity =
             |track: &Track| match known.iter().position(|entry| entry.track.id == track.id) {
                 Some(index) => known.remove(index).uid,
@@ -871,8 +951,18 @@ impl Queue {
                 )
             })
             .collect();
-        self.upcoming = entries.split_off(past_len).into();
-        self.past = entries;
+        let window: Vec<_> = entries.split_off(past_len);
+        self.past = earlier
+            .into_iter()
+            .chain(left_past)
+            .chain(entries)
+            .collect();
+        self.upcoming = window
+            .into_iter()
+            .chain(left_upcoming)
+            .chain(beyond)
+            .chain(suggested)
+            .collect();
         if let Some(entry) = self.current.as_mut() {
             entry.kind = match current {
                 true => QueueKind::Queued,
@@ -900,18 +990,32 @@ impl Queue {
         placement: QueuePlacement,
         cx: &mut Context<Self>,
     ) {
-        let at = match placement {
-            QueuePlacement::Next => 0,
-            QueuePlacement::End => self
-                .upcoming
-                .iter()
-                .rposition(|entry| entry.kind == QueueKind::Queued)
-                .map_or(0, |at| at + 1),
-            QueuePlacement::Last | QueuePlacement::Gap(usize::MAX) => self.context_end(),
-            QueuePlacement::Gap(gap) => gap.min(self.upcoming.len()),
+        let (at, kind) = match placement {
+            QueuePlacement::Next => (0, QueueKind::Queued),
+            QueuePlacement::End => (self.manual_end(), QueueKind::Queued),
+            // what plays once the collection has run out is not part of the hand-queued run
+            QueuePlacement::Last => (self.context_end(), QueueKind::Context),
+            QueuePlacement::Gap(gap) => {
+                // a song dropped among the suggestions lands at the end of the queue instead
+                let at = gap.min(self.context_end());
+                let kind = match joins_manual(self.upcoming.iter(), at) {
+                    true => QueueKind::Queued,
+                    false => QueueKind::Context,
+                };
+                (at, kind)
+            }
         };
-        self.insert_entries(at, tagged(tracks, origin, QueueKind::Queued));
+        self.insert_entries(at, tagged(tracks, origin, kind));
         self.changed(cx);
+    }
+
+    /// The gap right after the hand-queued run, where Add to queue puts a song. Hand-queued
+    /// songs only ever sit in that run, which songs replayed from the history may precede.
+    fn manual_end(&self) -> usize {
+        self.upcoming
+            .iter()
+            .rposition(|entry| entry.kind == QueueKind::Queued)
+            .map_or(0, |at| at + 1)
     }
 
     /// Adds the next stretch of the station the queue was started from, both to the source and
@@ -944,12 +1048,46 @@ impl Queue {
             .map_or(0, |at| at + 1)
     }
 
-    /// Moves a song to `gap` without changing why it was queued.
+    /// Moves a song to `gap`. Landing inside or right after the hand-queued run joins it and
+    /// leaving that run leaves it, and a suggestion dragged ahead of the queue's end becomes part
+    /// of the queue, so the next radio refill keeps it.
     pub fn move_upcoming_to_gap(&mut self, from: usize, gap: usize, cx: &mut Context<Self>) {
+        // only a suggestion moves among the suggestions, anything else stops at the queue's end
+        let gap = match self.upcoming.get(from).map(|entry| entry.kind) {
+            Some(QueueKind::Suggested) | None => gap,
+            Some(_) => gap.min(self.context_end()),
+        };
         let to = gap_target(from, gap, self.upcoming.len());
-        if move_item(&mut self.upcoming, from, to) {
-            self.changed(cx);
+        if !move_item(&mut self.upcoming, from, to) {
+            return;
         }
+        let others = self
+            .upcoming
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| *at != to)
+            .map(|(_, entry)| entry);
+        let joins = joins_manual(others, to);
+        let in_body = self
+            .upcoming
+            .iter()
+            .skip(to + 1)
+            .any(|entry| entry.kind != QueueKind::Suggested);
+        if let Some(entry) = self.upcoming.get_mut(to) {
+            entry.kind = match (joins, entry.kind) {
+                (true, _) => QueueKind::Queued,
+                (false, QueueKind::Queued) => QueueKind::Context,
+                (false, QueueKind::Suggested) if in_body => QueueKind::Context,
+                (false, kind) => kind,
+            };
+            // a hand-queued song is no longer the collection's, or a reshuffle would bring it
+            // back from the collection a second time
+            if entry.kind == QueueKind::Queued {
+                let uid = entry.uid.clone();
+                self.source.retain(|kept| kept.uid != uid);
+            }
+        }
+        self.changed(cx);
     }
 
     /// Removes an upcoming song or suggestion, retaining its position for Undo.
@@ -1055,11 +1193,16 @@ impl Queue {
         self.current().cloned()
     }
 
+    /// Starts the queue over from its first song, for repeat all. What was queued by hand joins
+    /// the collection it played in, so the next loop has no stale hand-queued run.
     pub fn rewind(&mut self, cx: &mut Context<Self>) -> Option<Track> {
         self.drop_suggested();
         let mut entries = std::mem::take(&mut self.past);
         entries.extend(self.current.take());
         entries.extend(self.upcoming.drain(..));
+        for entry in &mut entries {
+            entry.kind = QueueKind::Context;
+        }
         self.fill(entries, 0, cx)
     }
 
@@ -1092,6 +1235,73 @@ impl Queue {
         self.changed(cx);
         self.current().cloned()
     }
+}
+
+/// Whether a song put at `at` joins the hand-queued run in `upcoming`: inside it or right after
+/// it, or at the very top when there is no run.
+fn joins_manual<'a>(upcoming: impl Iterator<Item = &'a Entry>, at: usize) -> bool {
+    let run = upcoming
+        .enumerate()
+        .filter(|(_, entry)| entry.kind == QueueKind::Queued)
+        .fold(None, |run, (index, _)| match run {
+            None => Some((index, index)),
+            Some((first, _)) => Some((first, index)),
+        });
+    match run {
+        Some((first, last)) => (first..=last + 1).contains(&at),
+        None => at == 0,
+    }
+}
+
+/// Whether a report to other devices carries `entry`, which it does for a provider song.
+fn reported(entry: &Entry) -> bool {
+    entry.id().is_some_and(|id| !music::is_local_id(id))
+}
+
+/// Where the last `shown` reported songs of `past` begin, the part of the history a report
+/// carried.
+fn seen_start(past: &[Entry], shown: usize) -> usize {
+    let mut left = shown;
+    for (index, entry) in past.iter().enumerate().rev() {
+        if left == 0 {
+            return index + 1;
+        }
+        left -= usize::from(reported(entry));
+    }
+    0
+}
+
+/// Where the first `shown` reported songs of `upcoming` end, the part of the queue a report
+/// carried.
+fn seen_end(upcoming: &[Entry], shown: usize) -> usize {
+    let mut left = shown;
+    for (index, entry) in upcoming.iter().enumerate() {
+        if left == 0 {
+            return index;
+        }
+        left -= usize::from(reported(entry));
+    }
+    upcoming.len()
+}
+
+/// Which of `entries` a remote window names, in their order. A song the window names twice
+/// takes two occurrences.
+fn named<'a>(entries: &[Entry], window: impl Iterator<Item = &'a Track>) -> Vec<bool> {
+    let mut wanted: HashMap<&str, usize> = HashMap::new();
+    for id in window.filter_map(|track| track.id.as_deref()) {
+        *wanted.entry(id).or_default() += 1;
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let Some(count) = entry.id().and_then(|id| wanted.get_mut(id)) else {
+                return false;
+            };
+            let named = *count > 0;
+            *count = count.saturating_sub(1);
+            named
+        })
+        .collect()
 }
 
 /// Makes a fresh identity for a newly queued occurrence, never for a change of position.
