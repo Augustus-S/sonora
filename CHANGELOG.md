@@ -23,6 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Album covers in the fullscreen player are sharper with YouTube Music, Subsonic, Spotify and
   Deezer.
 - The layout previews under Settings, Player bar line up the cover, title and controls.
+- Refreshing your local library picks up songs added, moved or deleted since Sonora started.
 
 ## [0.44.2] - 2026-10-25
 
