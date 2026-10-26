@@ -84,8 +84,17 @@ jobs:
           key: ${{ matrix.target }}
           cache-targets: false
           cache-on-failure: true
+      # A nightly compiles its label in as the version the app shows. Other builds leave the
+      # variable unset, since an empty one would still count as set.
       - name: build
-        run: cargo build --release --locked --package sonora --target ${{ matrix.target }}
+        shell: bash
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [ -n "$NIGHTLY" ]; then export SONORA_VERSION="$NIGHTLY"; fi
+          cargo build --release --locked --package sonora --target "$TARGET"
 
       - name: sccache stats
         if: always()
