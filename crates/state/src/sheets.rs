@@ -13,7 +13,8 @@ const PASSING: bool = cfg!(debug_assertions);
 const CAPACITY: usize = 500;
 
 /// Everything the services said about one track. A service in `answered` replied, even if it had
-/// nothing, so it is not asked again. One that failed is left out and gets asked next time.
+/// nothing, so a lookup asks it again only while nothing usable is stored. One that failed is
+/// left out and gets asked next time.
 #[derive(Serialize, Deserialize)]
 struct Kept {
     stored: u64,
