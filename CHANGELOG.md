@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Quick picks on Home no longer shows your account name above its title.
+
 ## [0.45.0] - 2026-10-27
 
 ### Added
