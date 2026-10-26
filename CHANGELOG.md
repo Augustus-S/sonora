@@ -22,6 +22,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   them. A new playlist no longer drops out of Add to playlist after you sign in again.
 - Album covers in the fullscreen player are sharper with YouTube Music, Subsonic, Spotify and
   Deezer.
+- The layout previews under Settings, Player bar line up the cover, title and controls.
 
 ## [0.44.2] - 2026-10-25
 
