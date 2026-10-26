@@ -20,6 +20,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Typing Arabic or Hebrew in the search box puts the caret where it belongs.
 - YouTube Music libraries with more than about two dozen playlists or albums now show all of
   them. A new playlist no longer drops out of Add to playlist after you sign in again.
+- Album covers in the fullscreen player are sharper with YouTube Music, Subsonic, Spotify and
+  Deezer.
 
 ## [0.44.2] - 2026-10-25
 
