@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Apple Music Home now shows recently added library albums and playlists when available.
+
 ### Changed
 
 - When Spotify refuses to play on your account, a Why? button opens the FAQ explaining it.
