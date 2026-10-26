@@ -5,6 +5,7 @@ use std::{collections::HashMap, ops::Range};
 
 use gpui::prelude::*;
 
+use gpui::accesskit::Role;
 use gpui::{
     Animation, AnimationExt as _, App, Bounds, Context, Div, DragMoveEvent, Entity, FontWeight,
     MouseDownEvent, MouseUpEvent, Pixels, Point, Render, ScrollHandle, ScrollStrategy,
@@ -835,6 +836,7 @@ impl Aside {
         position: QueuePosition,
         queue_revision: u64,
         look: RowLook,
+        total: usize,
         cx: &Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let RowLook {
@@ -991,6 +993,9 @@ impl Aside {
 
         div()
             .id(("queue-track-container", index))
+            .role(Role::ListItem)
+            .aria_position_in_set(index + 1)
+            .aria_size_of_set(total)
             .relative()
             .min_w_0()
             .child(card)
@@ -1623,6 +1628,10 @@ impl Aside {
                         .is_some_and(|previous| lines[previous].voice != line.voice);
                     let verse_line = div()
                         .id(("verse", index))
+                        .role(Role::Button)
+                        .aria_label(SharedString::from(line.text.clone()))
+                        .aria_position_in_set(index + 1)
+                        .aria_size_of_set(lines.len())
                         .w_full()
                         .max_w(reach)
                         .px_2()
@@ -2116,7 +2125,8 @@ impl Aside {
                                 queued,
                                 remote,
                             };
-                            Self::row(found, index, position, revision, look, cx).into_any_element()
+                            Self::row(found, index, position, revision, look, sections.len(), cx)
+                                .into_any_element()
                         }
                         (Some(Slot::Track(_)), None) => div().into_any_element(),
                     })
@@ -2128,7 +2138,7 @@ impl Aside {
                         queued: matches!(position, QueuePosition::Upcoming(at) if at < manual),
                         remote,
                     };
-                    let row = Self::row(found, index, position, revision, look, cx);
+                    let row = Self::row(found, index, position, revision, look, sections.len(), cx);
                     prefetch(row.into_any_element(), window, cx);
                 }
                 rows
@@ -2178,6 +2188,11 @@ impl Render for Aside {
 
         div()
             .id("aside")
+            .role(Role::Complementary)
+            .aria_label(match self.tab {
+                SideTab::Queue => t!("queue-title"),
+                SideTab::Lyrics => t!("lyrics-title"),
+            })
             .flex()
             .flex_col()
             .size_full()
@@ -2259,6 +2274,8 @@ fn source_link(name: SharedString, to: Destination, cx: &App) -> impl IntoElemen
 
     div()
         .id("queue-source")
+        .role(Role::Link)
+        .aria_label(name.clone())
         .min_w_0()
         .flex_shrink(1.)
         .truncate()

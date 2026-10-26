@@ -1,3 +1,4 @@
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, Hsla, Pixels, Point, Render, ScrollHandle, SharedString,
@@ -761,7 +762,13 @@ impl DetailView {
 impl Render for DetailView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(failure) = self.failure(cx) {
-            return div().relative().size_full().child(failure);
+            return div()
+                .id("detail-failure")
+                .role(Role::Alert)
+                .relative()
+                .size_full()
+                .child(failure)
+                .into_any_element();
         }
 
         self.table.claim(cx);
@@ -813,6 +820,7 @@ impl Render for DetailView {
                     .child(div().px(inset).pt_10().children(rails)),
             )
             .when_some(context_menu, |this, menu| this.child(menu))
+            .into_any_element()
     }
 }
 

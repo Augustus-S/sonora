@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     Context, DispatchPhase, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -547,6 +548,7 @@ impl Render for ToastStack {
             .child(
                 div()
                     .id("toast-stack")
+                    .role(Role::Log)
                     .relative()
                     .occlude()
                     .w(theme.font_size * WIDTH)

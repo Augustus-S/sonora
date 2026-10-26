@@ -10,6 +10,7 @@ use crate::shared::confirm::{Confirm, Kind};
 use crate::shared::menus::{ItemMenu, new_playlist_menu};
 use crate::shared::playlist_editor::{Edit, PlaylistEditor};
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Entity, FontWeight, MouseButton, Pixels, Point, Render, ScrollHandle,
@@ -995,7 +996,7 @@ impl LibraryView {
 
                                 div()
                                     .px(inset)
-                                    .children(label.map(|label| head(label, cx)))
+                                    .children(label.map(|label| head(*display, label, cx)))
                                     .into_any_element()
                             }
                             DeckRow::Cards(cards) => {
@@ -1396,8 +1397,11 @@ fn deck_row(rows: &[DeckRow], key: DeckKey) -> Option<usize> {
     })
 }
 
-fn head(label: SharedString, cx: &App) -> AnyElement {
-    heading(label, cx)
+fn head(display: usize, label: SharedString, cx: &App) -> AnyElement {
+    heading(label.clone(), cx)
+        .id(("library-group", display))
+        .role(Role::Heading)
+        .aria_label(label)
         .w_full()
         .pt_2()
         .line_height(relative(LEADING))

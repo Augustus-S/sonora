@@ -306,6 +306,17 @@ impl Render for Input {
         });
 
         div()
+            // The focus handle doubles as the element id, since every field
+            // owns one and it stays stable for the life of the field.
+            .id(&self.focus_handle)
+            .role(gpui::accesskit::Role::TextInput)
+            .when(!self.hint.is_empty(), |this| {
+                this.aria_label(self.placeholder())
+            })
+            .when_some(
+                (!self.masked && !self.content.is_empty()).then(|| self.content.clone()),
+                |this, value| this.aria_value(value),
+            )
             .flex()
             .flex_1()
             .items_center()

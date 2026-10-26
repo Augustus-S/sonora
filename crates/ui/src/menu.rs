@@ -775,6 +775,7 @@ impl RenderOnce for Menu {
             let press_action = action.clone();
             let press = press.map(|press| releasing(press, &row_searches));
             let submenu_state = submenu.as_ref().map(|submenu| submenu.state.clone());
+            let expanded = submenu.as_ref().map(|submenu| submenu.state.is_open());
             let has_artwork = artwork.is_some();
             let leading = leading.filter(|_| !has_artwork && icon.is_none());
             let detailed = detail.is_some();
@@ -793,6 +794,13 @@ impl RenderOnce for Menu {
                 .px_3()
                 .when_else(detailed, |this| this.py_2(), |this| this.py_1())
                 .rounded(tucked)
+                .role(gpui::accesskit::Role::MenuItem)
+                .aria_label(label.clone())
+                .when(selected, |this| this.aria_selected(true))
+                .when(checked, |this| {
+                    this.aria_toggled(gpui::accesskit::Toggled::True)
+                })
+                .when_some(expanded, |this, open| this.aria_expanded(open))
                 .when_else(
                     disabled,
                     |this| this.text_color(theme.muted_foreground).cursor_default(),
@@ -864,6 +872,9 @@ impl RenderOnce for Menu {
                     this.on_hover(move |hovered, window, cx| {
                         state.near(Near::Item, *hovered, window.window_handle(), cx)
                     })
+                })
+                .when_some(tooltip.clone(), |this, key| {
+                    this.aria_description(i18n::lookup(&key, None))
                 })
                 .when_some(tooltip, |this, key| this.tip(key, Perch::Follow))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1071,6 +1082,7 @@ impl RenderOnce for Menu {
                 }
             })
             .id("menu-panel")
+            .role(gpui::accesskit::Role::Menu)
             .flex()
             .flex_col()
             .p_1()

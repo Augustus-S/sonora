@@ -414,6 +414,8 @@ impl RenderOnce for Card {
                                     .rounded(corner)
                                     .cursor_pointer()
                                     .bg(theme.overlay)
+                                    .role(gpui::accesskit::Role::Button)
+                                    .aria_label(i18n::lookup(hint, None))
                                     .tip(hint, Perch::Pointer)
                                     .child(
                                         svg()
@@ -444,6 +446,7 @@ impl RenderOnce for Card {
             }
         };
 
+        let name = title.clone();
         let title = div()
             .id("card-title")
             .min_w_0()
@@ -485,6 +488,13 @@ impl RenderOnce for Card {
         });
 
         let mut card = base
+            // A card that opens something reads as one button named for its
+            // title, while a still card is a group so the title stays reachable.
+            .role(match press.is_some() {
+                true => gpui::accesskit::Role::Button,
+                false => gpui::accesskit::Role::Group,
+            })
+            .aria_label(name)
             .group(CARD_GROUP)
             .flex()
             .when_else(

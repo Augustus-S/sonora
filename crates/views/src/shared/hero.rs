@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Div, ElementId, Entity, FontWeight, MouseButton, MouseDownEvent, Pixels,
@@ -437,7 +438,7 @@ impl RenderOnce for PageHero {
         }
 
         div()
-            .id(self.id)
+            .id(self.id.clone())
             .when_some(self.pin, |hero, pin| hero.pin(pin))
             .flex()
             .flex_none()
@@ -482,6 +483,9 @@ impl RenderOnce for PageHero {
                             .font_weight(FontWeight::BOLD)
                             .child(
                                 div()
+                                    .id((self.id, "title"))
+                                    .role(Role::Heading)
+                                    .aria_label(self.title.clone())
                                     .min_w_0()
                                     .truncate()
                                     .tails()

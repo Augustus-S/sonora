@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::time::Duration;
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, FocusHandle, Pixels, Render, ScrollHandle,
@@ -1008,7 +1009,13 @@ impl SettingsView {
             cards,
             rows,
         } = group;
-        let heading = title.map(|key| group_heading(i18n::lookup(key, None), icon, cx));
+        let heading = title.map(|key| {
+            let label = i18n::lookup(key, None);
+            group_heading(label.clone(), icon, cx)
+                .id(SharedString::from(format!("settings-group-{key}")))
+                .role(Role::Heading)
+                .aria_label(label)
+        });
         let carded = cards.is_some();
         let cards = cards.map(|slot| {
             let cards = self.cards(slot, window, cx);
