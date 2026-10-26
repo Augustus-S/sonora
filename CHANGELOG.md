@@ -25,6 +25,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The layout previews under Settings, Player bar line up the cover, title and controls.
 - Refreshing your local library picks up songs added, moved or deleted since Sonora started.
 - Dragging the volume slider uses less CPU and GPU.
+- Romanized unsynced lyrics show each line's romanization under that line.
 
 ## [0.44.2] - 2026-10-25
 

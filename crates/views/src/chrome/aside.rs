@@ -1670,6 +1670,10 @@ impl Aside {
             (None, LyricsState::Ready) => {
                 match self.lyrics.read(cx).current().map(|hit| &hit.lyrics) {
                     Some(music::Lyrics::Plain { text, romanized }) => {
+                        let romanized = selected_romanization(romanized, romanization_scripts);
+                        let romanized_lines = romanized
+                            .as_deref()
+                            .map_or_else(Vec::new, |text| text.lines().collect::<Vec<_>>());
                         // gpui wraps text by assuming each glyph sits right of the one before it,
                         // which right-to-left text breaks, so such lyrics are wrapped here
                         let rows = has_right_to_left(text).then(|| {
@@ -1701,19 +1705,38 @@ impl Aside {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.muted_foreground)
                                 .when(sung.mirrored, |this| this.text_right())
-                                .map(|this| match &rows {
-                                    Some(rows) => this
-                                        .children(rows.iter().map(|rows| {
-                                            fixed_lyrics_lane(rows, Voice::Lead, sung)
-                                        })),
-                                    None => this.child(SharedString::from(text.clone())),
+                                .map(|this| match (&rows, romanized.is_some()) {
+                                    (None, false) => this.child(SharedString::from(text.clone())),
+                                    _ => this.children(text.lines().enumerate().map(
+                                        |(index, line)| {
+                                            let spoken = match &rows {
+                                                Some(rows) => fixed_lyrics_lane(
+                                                    &rows[index],
+                                                    Voice::Lead,
+                                                    sung,
+                                                ),
+                                                None => {
+                                                    div().child(SharedString::from(line.to_owned()))
+                                                }
+                                            };
+                                            div().flex().flex_col().child(spoken).when_some(
+                                                romanized_lines
+                                                    .get(index)
+                                                    .filter(|line| !line.is_empty()),
+                                                |this, line| {
+                                                    this.child(
+                                                        romanized_lyrics_lane(
+                                                            (*line).to_owned(),
+                                                            lane_size,
+                                                            &theme,
+                                                        )
+                                                        .font_weight(FontWeight::NORMAL),
+                                                    )
+                                                },
+                                            )
+                                        },
+                                    )),
                                 })
-                                .when_some(
-                                    selected_romanization(romanized, romanization_scripts),
-                                    |this, text| {
-                                        this.child(romanized_lyrics_lane(text, lane_size, &theme))
-                                    },
-                                )
                                 .into_any_element(),
                         ]
                     }
