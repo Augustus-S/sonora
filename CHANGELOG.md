@@ -36,6 +36,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshing your local library picks up songs added, moved or deleted since Sonora started.
 - Dragging the volume slider uses less CPU and GPU.
 - Romanized unsynced lyrics show each line's romanization under that line.
+- Moving playback to or from another Spotify device keeps the queue, history, shuffle and repeat.
+- Editing the queue from another Spotify device no longer restarts the song.
+- Going back through the queue keeps replayed songs apart from the ones you queued.
+- Spotify library, playlist and pin changes made elsewhere show up without a restart.
+- Song-change notifications on Linux name the song instead of showing a blank label.
 
 ## [0.44.2] - 2026-10-25
 

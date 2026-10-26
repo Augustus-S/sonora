@@ -8,7 +8,7 @@ use music::{Lyrics as Sheet, LyricsHit, LyricsProvider, LyricsQuery, Track, Trac
 use tokio::task::JoinSet;
 
 use crate::sheets::{Sheets, Unsaved};
-use crate::{AppSettings, Io, Playback, Queue, Session, join};
+use crate::{AppSettings, Io, Playback, Queue, QueuePosition, Session, join};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LyricsState {
@@ -45,7 +45,6 @@ pub struct Lyrics {
     /// up again, from what is held, so the source now ranked first is the one shown.
     priority: Vec<String>,
     playback: Entity<Playback>,
-    queue: Entity<Queue>,
     session: Entity<Session>,
     settings: Entity<AppSettings>,
     io: Io,
@@ -67,8 +66,11 @@ impl Lyrics {
         io: Io,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.observe(&playback, |this, _, cx| this.follow(cx))
-            .detach();
+        cx.observe(&playback, |this, _, cx| {
+            this.follow(cx);
+            this.prefetch(cx);
+        })
+        .detach();
         cx.observe(&queue, |this, _, cx| this.prefetch(cx)).detach();
         cx.observe(&settings, |this, settings, cx| {
             let settings = settings.read(cx);
@@ -108,7 +110,6 @@ impl Lyrics {
             enabled_providers,
             priority,
             playback,
-            queue,
             session,
             settings,
             io,
@@ -155,9 +156,7 @@ impl Lyrics {
             return None;
         };
         let playback = self.playback.read(cx);
-        let position = playback
-            .steered(cx)
-            .map_or_else(|| playback.position(), |steered| steered.position);
+        let position = playback.shown_time(cx).0;
         music::lyrics::active(lines, position)
     }
 
@@ -338,7 +337,8 @@ impl Lyrics {
         if self.task.is_some() {
             return;
         }
-        let Some(track) = self.queue.read(cx).upcoming().next() else {
+        let queue = self.playback.read(cx).shown_queue(cx);
+        let Some(track) = queue.track(QueuePosition::Upcoming(0), cx) else {
             return;
         };
         let Some(id) = track.id.as_deref() else {
@@ -347,7 +347,7 @@ impl Lyrics {
         if self.ahead_of.as_deref() == Some(id) || self.recalls(id) {
             return;
         }
-        let (track, id) = (track.clone(), id.to_owned());
+        let id = id.to_owned();
         self.ahead_of = Some(id.clone());
         self.ahead = Some(self.fetch(id, track, cx));
     }

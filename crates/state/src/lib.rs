@@ -45,7 +45,7 @@ mod window_shape;
 pub use artist::{ArtistDetail, ArtistDetailEvent};
 pub use cover::Cover;
 pub use detail::{Collection, Detail, Header};
-pub use devices::{Devices, Steered, Upcoming};
+pub use devices::Devices;
 pub use downloads::{Downloads, DownloadsChanged, Progress, downloaded};
 pub use drm::{CdmState, Drm};
 pub use equalizer::{DeviceRule, Equalizer, RuleDevice, Sound};
@@ -58,13 +58,17 @@ pub use library::{
 pub use links::{Links, Opened};
 pub use logging::log_file;
 pub use lyrics::{Lyrics, LyricsState};
+pub use music::connect::{Elsewhere, Repeat};
 pub use network::{Network, Reconnected};
 pub use outputs::Outputs;
 pub use overload::OutputLevel;
 pub use pins::{PinSort, Pins};
-pub use playback::{Origin, Playback, PlaybackState, Repeat, Sleep, Unreachable, Whence};
+pub use playback::{Origin, Playback, PlaybackState, Sleep, Unreachable, Whence};
 pub use profile::Profile;
-pub use queue::{Named, Queue, Resume, Stub};
+pub use queue::{
+    Queue, QueueKind, QueuePlacement, QueuePosition, QueueSections, QueueSlot, QueueView, Resume,
+    Stub,
+};
 pub use remote::{Remote, attach as attach_remote};
 pub use requirements::{Requirement, Requirements};
 pub use scan::Scan;
@@ -91,7 +95,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gpui::{App, AppContext as _, Entity, Global};
+use gpui::{App, AppContext as _, Context, Entity, Global, Task};
 use music::{LyricsProvider, MusicProvider};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
@@ -140,6 +144,20 @@ impl Io {
         F::Output: Send + 'static,
     {
         self.0.spawn(future)
+    }
+
+    /// Loads on tokio and applies the result on the entity's thread. The caller retains the task.
+    pub fn load<E: 'static, T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T>> + Send + 'static,
+        apply: impl FnOnce(&mut E, Result<T>, &mut Context<E>) + 'static,
+        cx: &mut Context<E>,
+    ) -> Task<()> {
+        let io = self.clone();
+        cx.spawn(async move |this, cx| {
+            let loaded = join(io.spawn(work)).await;
+            this.update(cx, |this, cx| apply(this, loaded, cx)).ok();
+        })
     }
 
     pub fn spawn_blocking<F, R>(&self, func: F) -> JoinHandle<R>
