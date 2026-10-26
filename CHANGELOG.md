@@ -7,6 +7,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Apple Music Home now shows recently added library albums and playlists when available.
+
+### Changed
+
+- When Spotify refuses to play on your account, a Why? button opens the FAQ explaining it.
+
+### Fixed
+
+- Sonora now works with screen readers such as NVDA: buttons, lists, dialogs and settings
+  announce their names and states instead of staying silent.
+
+### Fixed
+
+- Arabic, Hebrew and other right-to-left text reads in the right order on Windows.
+- Right-to-left lyrics, descriptions and bios wrap between words and keep their reading order.
+- Arabic and Hebrew lyrics sit against the right edge, and the karaoke highlight sweeps from there.
+- The tails of letters such as ر and ز are no longer cut off at the bottom of titles.
+- Typing Arabic or Hebrew in the search box puts the caret where it belongs.
+- YouTube Music libraries with more than about two dozen playlists or albums now show all of
+  them. A new playlist no longer drops out of Add to playlist after you sign in again.
+- Album covers in the fullscreen player are sharper with YouTube Music, Subsonic, Spotify and
+  Deezer.
+- The layout previews under Settings, Player bar line up the cover, title and controls.
+- Unsynced lyrics are brighter and a little larger, so they are easier to read.
+- Refreshing your local library picks up songs added, moved or deleted since Sonora started.
+- Dragging the volume slider uses less CPU and GPU.
+- Romanized unsynced lyrics show each line's romanization under that line.
+
 ## [0.44.2] - 2026-10-25
 
 ### Fixed

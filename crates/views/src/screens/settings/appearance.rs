@@ -1,3 +1,4 @@
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Context, Div, Hsla, Pixels, SharedString, Window, div, px, relative, svg,
@@ -358,27 +359,32 @@ impl SettingsView {
             .items_center()
             .gap_2()
             .child(
-                div().w(theme.metrics.cover).child(
-                    Scrubber::new(&self.opacity, value)
-                        .colors(theme.progress_bar, theme.muted, theme.foreground)
-                        .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
-                            let transparency = (1. - *fraction) * MAX_TRANSPARENCY;
-                            let transparent = transparency > 0.;
-                            this.settings.update(cx, |settings, cx| {
-                                settings.set_transparent(transparent, cx);
-                                settings.set_transparency(transparency, cx);
-                            });
-                            Theme::set(
-                                Look {
-                                    transparent,
-                                    transparency,
-                                    ..look
-                                },
-                                &overrides,
-                                cx,
-                            );
-                        })),
-                ),
+                div()
+                    .id("settings-opacity-slider")
+                    .role(Role::Group)
+                    .aria_label(t!("settings-opacity"))
+                    .w(theme.metrics.cover)
+                    .child(
+                        Scrubber::new(&self.opacity, value)
+                            .colors(theme.progress_bar, theme.muted, theme.foreground)
+                            .on_move(cx.listener(move |this, fraction: &f32, _, cx| {
+                                let transparency = (1. - *fraction) * MAX_TRANSPARENCY;
+                                let transparent = transparency > 0.;
+                                this.settings.update(cx, |settings, cx| {
+                                    settings.set_transparent(transparent, cx);
+                                    settings.set_transparency(transparency, cx);
+                                });
+                                Theme::set(
+                                    Look {
+                                        transparent,
+                                        transparency,
+                                        ..look
+                                    },
+                                    &overrides,
+                                    cx,
+                                );
+                            })),
+                    ),
             )
             .child(
                 div()
