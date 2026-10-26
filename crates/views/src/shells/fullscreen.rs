@@ -913,6 +913,10 @@ impl FullscreenView {
                             .when(frosted, Button::frosted)
                             .small()
                             .icon(volume_icon(level))
+                            .tooltip_above(match level <= 0.001 {
+                                true => "player-unmute",
+                                false => "player-mute",
+                            })
                             .tint(match self.volume_open() {
                                 true => theme.foreground,
                                 false => theme.muted_foreground,

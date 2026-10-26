@@ -367,6 +367,12 @@ impl RenderOnce for Button {
         // A node reaches the tree only with a role, and an icon-only button has
         // no label of its own, so its tooltip key doubles as the accessible
         // name the same way the hover text does.
+        // A nameless button still takes a role, so it lands in the tree with
+        // nothing to announce. Fail loudly in dev instead of going silent.
+        debug_assert!(
+            label.is_some() || tooltip.is_some(),
+            "button without label or tooltip is invisible to screen readers"
+        );
         let accessible = label
             .clone()
             .or_else(|| tooltip.as_ref().map(|(key, _)| i18n::lookup(key, None)));
