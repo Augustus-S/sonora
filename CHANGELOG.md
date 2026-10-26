@@ -24,6 +24,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Deezer.
 - The layout previews under Settings, Player bar line up the cover, title and controls.
 - Refreshing your local library picks up songs added, moved or deleted since Sonora started.
+- Dragging the volume slider uses less CPU and GPU.
 
 ## [0.44.2] - 2026-10-25
 
