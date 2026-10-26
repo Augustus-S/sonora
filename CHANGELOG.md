@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Nightly builds for every platform, plus `sonora-nightly-bin` on the AUR and a Nix flake ref.
 - Apple Music Home now shows recently added library albums and playlists when available.
 
 ### Changed
