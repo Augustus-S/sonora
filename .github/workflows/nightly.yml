@@ -59,6 +59,9 @@ jobs:
     if: needs.gate.outputs.aur == 'true'
     runs-on: ubuntu-latest
     container: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: system dependencies
         run: pacman -Syu --noconfirm --needed git openssh
@@ -104,8 +107,11 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts 2> /dev/null
-          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+          # The AUR's published ed25519 host key. ssh reads its known_hosts from the passwd home,
+          # which in a job container is not $HOME, so the file is named explicitly.
+          echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" \
+            > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
 
           # The AUR creates the package on the first push to a name nobody holds yet.
           git clone -q ssh://aur@aur.archlinux.org/sonora-nightly-bin.git aur-repo
