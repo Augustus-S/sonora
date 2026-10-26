@@ -70,13 +70,6 @@ Stream from your favorite services and play local files — all in one **native*
 
 ## Installation
 
-> [!NOTE]
-> Want the newest build? Every night `main` is built into the
-> [nightly prerelease](https://github.com/sonorahq/sonora/releases/tag/nightly), with an installer,
-> AppImage and binaries for every platform. On Arch install `sonora-nightly-bin`, and with Nix run
-> `nix run github:sonorahq/sonora/nightly`. Nightlies skip the testing a release gets, so expect
-> rough edges.
-
 ### macOS
 
 Install with [Brew](https://brew.sh/):
@@ -149,9 +142,6 @@ inputs.sonora.packages.${system}.sonora-bin  (prebuilt, x86_64-linux, aarch64-li
 inputs.sonora.packages.${system}.sonora-src  (always built from source)
 ```
 
-Point the input at `github:sonorahq/sonora/nightly` to follow the nightly build instead. At that
-ref `default` and `sonora` resolve to `sonora-nightly`, the prebuilt nightly binary.
-
 The prebuilt package downloads the latest tagged release. `sonora-src` compiles whatever
 revision of the flake you point it at, so pin the input to a tag such as
 `github:sonorahq/sonora/v0.43.0` to build a release. Building from source on macOS needs Xcode
@@ -183,6 +173,17 @@ on Windows on ARM.
 #### Portable
 
 Download the latest `windows-msvc.exe` for your architecture from [Releases](https://github.com/sonorahq/sonora/releases/latest).
+
+### Nightly
+
+[Nightly builds](https://github.com/sonorahq/sonora/releases/tag/nightly) are available.
+
+```sh
+yay -S sonora-nightly-bin
+nix run github:sonorahq/sonora/nightly
+```
+
+Either `pipewire-alsa` or `pulseaudio-alsa` is required.
 
 ## Community
 
