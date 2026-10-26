@@ -1,0 +1,123 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # A scheduled run builds only when main has moved past the commit the current nightly was built
+  # from. A manual run always builds. Either way the build is main, never another branch.
+  gate:
+    if: github.repository == 'sonorahq/sonora' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.decide.outputs.number }}
+      aur: ${{ steps.decide.outputs.aur }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          HAS_AUR_KEY: ${{ secrets.AUR_SSH_KEY != '' }}
+        run: |
+          set -euo pipefail
+          # The nightly tag sits one commit above the main it built, the one that adds nix/nightly.json.
+          built="$(gh api "repos/$GITHUB_REPOSITORY/commits/nightly" --jq '.parents[0].sha' 2> /dev/null || true)"
+          if [ "$EVENT" = schedule ] && [ "$built" = "$GITHUB_SHA" ]; then
+            echo "::notice::main is still at ${GITHUB_SHA:0:7}, which the current nightly was built from"
+            exit 0
+          fi
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          echo "number=$version-nightly.$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "aur=$HAS_AUR_KEY" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: gate
+    if: needs.gate.outputs.number != ''
+    uses: ./.github/workflows/release.yml
+    permissions:
+      contents: write
+    with:
+      nightly: ${{ needs.gate.outputs.number }}
+
+  # sonora-nightly-bin is rendered from aur/sonora-nightly-bin/PKGBUILD every night, so the AUR
+  # repository only ever holds what this job pushed. It needs AUR_SSH_KEY, a private key whose
+  # public half is registered on the AUR account that maintains the package.
+  aur:
+    needs: [gate, build]
+    if: needs.gate.outputs.aur == 'true'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: system dependencies
+        run: pacman -Syu --noconfirm --needed git openssh
+
+      - uses: actions/checkout@v5
+
+      - name: render the PKGBUILD
+        env:
+          NUMBER: ${{ needs.gate.outputs.number }}
+        run: |
+          set -euo pipefail
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          curl -fsSL "$base/releases/download/nightly/SHA256SUMS" > sums
+          sum() { awk -v file="$1" '$2 == file { print $1 }' sums; }
+          source="$(curl -fsSL "$base/archive/$GITHUB_SHA.tar.gz" | sha256sum | cut -d ' ' -f 1)"
+          x86_64="$(sum sonora-nightly-x86_64-unknown-linux-gnu)"
+          aarch64="$(sum sonora-nightly-aarch64-unknown-linux-gnu)"
+          test -n "$x86_64"
+          test -n "$aarch64"
+
+          mkdir package
+          sed \
+            -e "s/@PKGVER@/${NUMBER//-/.}/" \
+            -e "s/@COMMIT@/$GITHUB_SHA/" \
+            -e "s/@SHA256_SOURCE@/$source/" \
+            -e "s/@SHA256_X86_64@/$x86_64/" \
+            -e "s/@SHA256_AARCH64@/$aarch64/" \
+            aur/sonora-nightly-bin/PKGBUILD > package/PKGBUILD
+          if grep -n '@[A-Z0-9_]*@' package/PKGBUILD; then exit 1; fi
+
+          # makepkg refuses to run as root, even only to print the metadata.
+          useradd -m builder
+          chown -R builder package
+          su builder -c 'cd package && makepkg --printsrcinfo > .SRCINFO'
+          cat package/.SRCINFO
+
+      - name: push to the AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts 2> /dev/null
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+
+          # The AUR creates the package on the first push to a name nobody holds yet.
+          git clone -q ssh://aur@aur.archlinux.org/sonora-nightly-bin.git aur-repo
+          cp package/PKGBUILD package/.SRCINFO aur-repo/
+          cd aur-repo
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "::notice::the AUR package is already at $NUMBER"
+            exit 0
+          fi
+          git \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "upgpkg: sonora-nightly-bin ${NUMBER//-/.}-1"
+          git push origin HEAD:master
