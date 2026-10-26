@@ -1530,7 +1530,7 @@ impl Playback {
     /// or not radio suggestions are on; a fetch that fails drops the continuation and hands the
     /// end of the queue back to `advance` through `stranded`.
     fn continue_station(&mut self, cx: &mut Context<Self>) {
-        if self.topping.is_some() || self.queue.read(cx).upcoming().len() >= RADIO_LOOKAHEAD {
+        if self.topping.is_some() || self.queue.read(cx).ahead() >= RADIO_LOOKAHEAD {
             return;
         }
         let Some(station) = self.station.clone() else {
