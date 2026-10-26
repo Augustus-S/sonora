@@ -123,12 +123,6 @@ chmod +x sonora-*.AppImage
 ./sonora-*.AppImage
 ```
 
-An `aarch64` build is published beside it. The AppImage carries no Vulkan driver and no ALSA
-bridge, so both still come from your system. It does not update itself, but it carries its update
-information, so [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) or an
-AppImage manager such as [AppManager](https://github.com/kem-a/AppManager) can fetch a new release
-for you.
-
 ### Nix
 
 ```nix
