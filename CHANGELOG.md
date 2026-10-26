@@ -23,6 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Album covers in the fullscreen player are sharper with YouTube Music, Subsonic, Spotify and
   Deezer.
 - The layout previews under Settings, Player bar line up the cover, title and controls.
+- Unsynced lyrics are brighter and a little larger, so they are easier to read.
 - Refreshing your local library picks up songs added, moved or deleted since Sonora started.
 - Dragging the volume slider uses less CPU and GPU.
 - Romanized unsynced lyrics show each line's romanization under that line.

@@ -49,6 +49,8 @@ const AHEAD: f32 = 0.6;
 const REVEAL: f32 = 0.6;
 const ACTIVE_VERSE_GROWTH: Pixels = px(2.);
 const FULLSCREEN_VERSE_GROWTH: Pixels = px(3.);
+/// How much larger than the lane text unsynced lyrics are set, while staying below a synced verse.
+const PLAIN_LYRICS_GROWTH: f32 = 1.15;
 const LYRICS_HORIZONTAL_INSET_REM: f32 = 1.5;
 // The largest window fullscreen lyrics keep their own size in. A larger one grows them by its
 // share of this one, so a verse keeps its size relative to the window.
@@ -1674,6 +1676,7 @@ impl Aside {
                         let romanized_lines = romanized
                             .as_deref()
                             .map_or_else(Vec::new, |text| text.lines().collect::<Vec<_>>());
+                        let plain_size = (lane_size * PLAIN_LYRICS_GROWTH).round();
                         // gpui wraps text by assuming each glyph sits right of the one before it,
                         // which right-to-left text breaks, so such lyrics are wrapped here
                         let rows = has_right_to_left(text).then(|| {
@@ -1681,7 +1684,7 @@ impl Aside {
                                 .map(|line| {
                                     lyrics_wrap_rows(
                                         &lyrics_parts(line, None),
-                                        lane_size,
+                                        plain_size,
                                         wrap_width,
                                         window,
                                     )
@@ -1701,9 +1704,9 @@ impl Aside {
                                 .flex()
                                 .flex_col()
                                 .gap_1()
-                                .text_size(lane_size)
+                                .text_size(plain_size)
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.muted_foreground)
+                                .text_color(theme.foreground)
                                 .when(sung.mirrored, |this| this.text_right())
                                 .map(|this| match (&rows, romanized.is_some()) {
                                     (None, false) => this.child(SharedString::from(text.clone())),
