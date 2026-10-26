@@ -984,6 +984,8 @@ impl<S: TableSource> TableState<S> {
                     let dragged = self.moving.is_some_and(|(from, _)| from == ix);
                     div()
                         .id(("head", ix))
+                        .role(gpui::accesskit::Role::ColumnHeader)
+                        .aria_label(header.clone())
                         .relative()
                         .flex()
                         .flex_none()
@@ -1092,6 +1094,11 @@ impl<S: TableSource> TableState<S> {
 
                 div()
                     .id(("row", display))
+                    .role(gpui::accesskit::Role::Row)
+                    .aria_selected(selected)
+                    .aria_row_index(display)
+                    .aria_position_in_set(display + 1)
+                    .aria_size_of_set(count)
                     .group(ROW_GROUP)
                     .absolute()
                     .top(head + row_height * display as f32)

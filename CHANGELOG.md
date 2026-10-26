@@ -7,14 +7,60 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Apple Music Home now shows recently added library albums and playlists when available.
+
+### Changed
+
+- When Spotify refuses to play on your account, a Why? button opens the FAQ explaining it.
+
 ### Fixed
 
-- Spotify Connect syncs queue history in both directions and preserves song identities, queue
-  order, shuffle and repeat across transfers. Queue edits no longer restart playback, and
-  queue displays and controls follow the active device.
-- Going back through the queue keeps replayed songs separate from manual additions.
-- Spotify library, playlist and pin changes refresh automatically from live notifications.
-- Linux song-change OSDs show the current song instead of a blank label.
+- Sonora now works with screen readers such as NVDA: buttons, lists, dialogs and settings
+  announce their names and states instead of staying silent.
+
+### Fixed
+
+- Arabic, Hebrew and other right-to-left text reads in the right order on Windows.
+- Right-to-left lyrics, descriptions and bios wrap between words and keep their reading order.
+- Arabic and Hebrew lyrics sit against the right edge, and the karaoke highlight sweeps from there.
+- The tails of letters such as ر and ز are no longer cut off at the bottom of titles.
+- Typing Arabic or Hebrew in the search box puts the caret where it belongs.
+- YouTube Music libraries with more than about two dozen playlists or albums now show all of
+  them. A new playlist no longer drops out of Add to playlist after you sign in again.
+- Album covers in the fullscreen player are sharper with YouTube Music, Subsonic, Spotify and
+  Deezer.
+- The layout previews under Settings, Player bar line up the cover, title and controls.
+- Unsynced lyrics are brighter and a little larger, so they are easier to read.
+- Refreshing your local library picks up songs added, moved or deleted since Sonora started.
+- Dragging the volume slider uses less CPU and GPU.
+- Romanized unsynced lyrics show each line's romanization under that line.
+- Moving playback to or from another Spotify device keeps the queue, history, shuffle and repeat.
+- Editing the queue from another Spotify device no longer restarts the song.
+- Going back through the queue keeps replayed songs apart from the ones you queued.
+- Spotify library, playlist and pin changes made elsewhere show up without a restart.
+- Song-change notifications on Linux name the song instead of showing a blank label.
+
+## [0.44.2] - 2026-10-25
+
+### Fixed
+
+- Playing YouTube Music videos and looking up lyrics no longer fills your YouTube search history
+  with song names. Only what you search for yourself shows up there.
+- The fullscreen visualizer keeps moving after a setting such as gapless playback restarts the
+  audio, instead of freezing until Sonora is restarted.
+- An album or playlist page shows Pause only when you are playing from that album or playlist,
+  not whenever the current song happens to be on it. Pressing Play there starts it.
+- YouTube Music tracks on an album with a numeric title, such as 17, show their real length
+  instead of the album title read as seconds.
+- Music sounds right again on 5.1 and 7.1 speakers. The left channel no longer plays from the
+  centre speaker with the front left silent, because Sonora now plays in stereo and lets your
+  system spread it across the speakers.
+- Sign-ins no longer disappear when a cleaner app or the system empties the cache folder.
+  Sonora now keeps them with its other data and moves existing ones there on the next launch.
+- Switching your sound output, such as picking another default device from the Windows taskbar,
+  no longer stops playback until Sonora is restarted.
 
 ## [0.44.1] - 2026-10-22
 
@@ -2313,7 +2359,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/sonorahq/sonora/compare/v0.44.1...HEAD
+[unreleased]: https://github.com/sonorahq/sonora/compare/v0.44.2...HEAD
+[0.44.2]: https://github.com/sonorahq/sonora/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/sonorahq/sonora/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/sonorahq/sonora/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/sonorahq/sonora/compare/v0.42.2...v0.43.0

@@ -24,8 +24,9 @@ pub(crate) use title_bar::{Busy, TitleBar, TitleBarEvent, TitleBarOptions};
 pub use toasts::ToastStack;
 pub(crate) use toolbar::{Searchable, Toolbar, Tooled};
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
-use gpui::{App, Div, Entity, Global, Pixels, Window, div};
+use gpui::{App, Div, Entity, Global, Pixels, SharedString, Window, div};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use state::AppSettings;
 use ui::{ActiveTheme as _, MIN_CONTENT, Room, eyebrow};
@@ -45,8 +46,11 @@ pub(crate) fn window_radius(settings: &AppSettings, cx: &App, window: &Window) -
     }
 }
 
-pub(crate) fn section_label(key: &'static str, cx: &App) -> Div {
+pub(crate) fn section_label(key: &'static str, cx: &App) -> gpui::Stateful<Div> {
     div()
+        .id(SharedString::from(format!("queue-section-{key}")))
+        .role(Role::Heading)
+        .aria_label(i18n::lookup(key, None))
         .flex()
         .flex_none()
         .items_end()

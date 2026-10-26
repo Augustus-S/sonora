@@ -249,7 +249,8 @@ impl Lyrics {
     }
 
     /// One key per track. The stored answer covers every service that has replied, whichever
-    /// are enabled now, and the selection is applied when it is shown.
+    /// are enabled now, and the selection is applied when it is shown. Services that replied
+    /// empty are asked again while the stored answer holds nothing usable.
     fn key(&self, id: &str, cx: &Context<Self>) -> String {
         match self.session.read(cx).slug_for(id) {
             Some(slug) => format!("{slug}:{id}:lyrics"),
@@ -352,8 +353,9 @@ impl Lyrics {
     }
 
     /// Looks a track up: in memory, then in the cache database, then with the providers. Only
-    /// the services that have not answered for this track yet are asked, and a file's own lyrics
-    /// are read again on every play. What the cache holds is shown alongside the new answers.
+    /// the services that have not answered for this track are asked, unless nothing usable is
+    /// stored, and a file's own lyrics are read again on every play. What the cache holds is
+    /// shown alongside the new answers.
     fn fetch(&mut self, id: String, track: Track, cx: &mut Context<Self>) -> Task<()> {
         let settings = self.settings.read(cx);
         let priority = settings.lyrics_provider_priority();
@@ -383,9 +385,13 @@ impl Lyrics {
                 this.update(cx, |this, _| this.hold(id, held)).ok();
             }
             let cached = cached.unwrap_or_default();
+            // Services that replied empty are asked again while nothing usable is stored:
+            // catalogues grow, and the one source that had anything may since have been
+            // switched off, leaving a stored answer with no enabled hits.
+            let stored = cached.hits.iter().any(|hit| enabled.contains(&hit.source));
             let providers: Vec<Arc<dyn LyricsProvider>> = asked
                 .into_iter()
-                .filter(|provider| !cached.covers(provider))
+                .filter(|provider| !stored || !cached.covers(provider))
                 .collect();
             if providers.is_empty() {
                 this.update(cx, |this, cx| {
@@ -685,8 +691,10 @@ struct Found {
 }
 
 impl Found {
-    /// Whether `provider` has nothing left to say. A file's own lyrics are never covered, since
-    /// they are read again on every play.
+    /// Whether `provider` has nothing left to say. A service that replied is covered, but one
+    /// that replied empty is asked again while the stored answer holds nothing usable from
+    /// an enabled source. A file's own lyrics are never covered, since they are read again
+    /// on every play.
     fn covers(&self, provider: &Arc<dyn LyricsProvider>) -> bool {
         provider.name() != LOCAL && self.answered.contains(&provider.name())
     }
