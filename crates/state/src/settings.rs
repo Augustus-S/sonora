@@ -40,6 +40,7 @@ use self::equalizer::Profile;
 use crate::equalizer::DeviceRule;
 use crate::pins::PinSort;
 use crate::queue::{Resume, gap_target};
+use crate::updates::{Channel, updates_itself};
 use crate::{Outcome, Repeat, Sonora, Toasts};
 
 /// How Sonora is named on the device list of the provider's apps. `Both` is the app's name with
@@ -413,6 +414,9 @@ struct Values {
     romanization_scripts: RomanizationScripts,
     adaptive_menu: bool,
     check_updates: bool,
+    /// The release channel chosen in settings, by its id. Empty follows the running build's own
+    /// channel, and a copy a package manager installed ignores it.
+    update_channel: String,
     close_to_tray: bool,
     tray_icon: bool,
     stay_awake: bool,
@@ -609,7 +613,8 @@ impl Default for Values {
             fullscreen_lyrics_scale: DEFAULT_LYRICS_SCALE,
             romanization_scripts: RomanizationScripts::default(),
             adaptive_menu: false,
-            check_updates: cfg!(target_os = "windows"),
+            check_updates: cfg!(target_os = "windows") || updates_itself(),
+            update_channel: String::new(),
             close_to_tray: true,
             tray_icon: true,
             stay_awake: true,
@@ -1114,6 +1119,10 @@ impl AppSettings {
         self.values.adaptive_menu
     }
 
+    pub fn update_channel(&self) -> Channel {
+        Channel::from_id(&self.values.update_channel)
+    }
+
     pub fn check_updates(&self) -> bool {
         self.values.check_updates
     }
@@ -1613,6 +1622,11 @@ impl AppSettings {
 
     pub fn set_adaptive_menu(&mut self, adaptive_menu: bool, cx: &mut Context<Self>) {
         self.values.adaptive_menu = adaptive_menu;
+        self.schedule_save(cx);
+    }
+
+    pub fn set_update_channel(&mut self, channel: Channel, cx: &mut Context<Self>) {
+        self.values.update_channel = channel.id().to_owned();
         self.schedule_save(cx);
     }
 
