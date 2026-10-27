@@ -11,12 +11,15 @@ const INSTALLER: &str = match cfg!(target_arch = "aarch64") {
     true => "Sonora-Setup-arm64.exe",
     false => "Sonora-Setup.exe",
 };
-/// Where Homebrew keeps a cask it installed, on Apple silicon and on Intel. Either one existing
-/// means Homebrew owns /Applications/Sonora.app, though not a copy installed anywhere else.
+/// Where Homebrew keeps the stable and the nightly cask, on Apple silicon and on Intel. Any of
+/// them existing means Homebrew owns /Applications/Sonora.app, though not a copy installed
+/// anywhere else.
 #[cfg(target_os = "macos")]
-const CASKROOMS: [&str; 2] = [
+const CASKROOMS: [&str; 4] = [
     "/opt/homebrew/Caskroom/sonora",
+    "/opt/homebrew/Caskroom/sonora-nightly",
     "/usr/local/Caskroom/sonora",
+    "/usr/local/Caskroom/sonora-nightly",
 ];
 
 /// How this copy of Sonora was installed, which decides whether it may replace itself.
