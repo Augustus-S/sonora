@@ -84,6 +84,8 @@ After installing (thanks Apple):
 xattr -dr com.apple.quarantine /Applications/Sonora.app
 ```
 
+Or install the [disk image](https://github.com/sonorahq/sonora/releases/latest), which updates itself.
+
 ### Linux
 
 #### Arch
