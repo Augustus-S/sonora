@@ -20,9 +20,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Sonora now works with screen readers such as NVDA: buttons, lists, dialogs and settings
   announce their names and states instead of staying silent.
-
-### Fixed
-
 - Arabic, Hebrew and other right-to-left text reads in the right order on Windows.
 - Right-to-left lyrics, descriptions and bios wrap between words and keep their reading order.
 - Arabic and Hebrew lyrics sit against the right edge, and the karaoke highlight sweeps from there.
