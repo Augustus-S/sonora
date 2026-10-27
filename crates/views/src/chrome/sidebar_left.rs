@@ -516,8 +516,8 @@ impl SidebarLeft {
                 false => theme.muted_foreground,
             })
             .meta(caption(pin.kind.key(), marked, cx))
-            .when(active, |card| card.bg(accent))
-            .when(aimed, |card| card.bg(accent).tint(theme.foreground))
+            .when(active && !aimed, |card| card.bg(accent))
+            .chosen(aimed)
             .hover(move |style| style.bg(accent))
             .press(move |_, _, cx| navigate(destination.clone(), cx))
             .menu(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -567,16 +567,6 @@ impl SidebarLeft {
             .min_w_0()
             .child(card)
             .when_some(edge, |this, edge| this.child(drop_marker(edge, cx)))
-            .when(aimed, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .rounded(theme.radius)
-                        .border_1()
-                        .border_color(theme.primary),
-                )
-            })
             .into_any_element()
     }
 
