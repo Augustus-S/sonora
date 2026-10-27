@@ -62,8 +62,11 @@ jobs:
     needs: gate
     if: needs.gate.outputs.number != ''
     uses: ./.github/workflows/release.yml
+    # GitHub refuses to start a reusable workflow when any of its jobs asks for more than the caller
+    # grants. release.yml's refresh-nightly wants actions: write, though it never runs here.
     permissions:
       contents: write
+      actions: write
     with:
       nightly: ${{ needs.gate.outputs.number }}
 
