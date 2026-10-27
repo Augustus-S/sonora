@@ -6,6 +6,7 @@ mod output_picker;
 mod player_bar;
 mod sidebar_left;
 mod sidebar_right;
+mod theme_invite;
 mod title_bar;
 mod toasts;
 mod toolbar;
@@ -18,6 +19,7 @@ pub(crate) use output_picker::OutputPicker;
 pub(crate) use player_bar::PlayerBar;
 pub(crate) use sidebar_left::SidebarLeft;
 pub(crate) use sidebar_right::SidebarRight;
+pub(crate) use theme_invite::ThemeInvite;
 #[cfg(target_os = "macos")]
 pub use title_bar::traffic_lights;
 pub(crate) use title_bar::{Busy, TitleBar, TitleBarEvent, TitleBarOptions};
