@@ -48,7 +48,7 @@ headless coverage yet, so new screens need a manual pass with a screen reader be
 
 Use whatever tools you like, but you must understand, review and test what you submit. PR descriptions,
 issues and replies in discussions must be your own words. A generated summary of a small change is fine,
-and so is AI proofreading or translation of text you wrote. Pull requests that ignore this may be closed
+and so is AI proofreading or translation of text you wrote. Contributions that ignore this may be closed
 without comment.
 
 ## License
