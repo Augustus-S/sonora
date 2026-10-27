@@ -21,6 +21,7 @@ jobs:
     outputs:
       number: ${{ steps.decide.outputs.number }}
       aur: ${{ steps.decide.outputs.aur }}
+      tap: ${{ steps.decide.outputs.tap }}
     steps:
       - uses: actions/checkout@v5
 
@@ -30,6 +31,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT: ${{ github.event_name }}
           HAS_AUR_KEY: ${{ secrets.AUR_SSH_KEY != '' }}
+          HAS_TAP_KEY: ${{ secrets.TAP_DEPLOY_KEY != '' }}
         run: |
           set -euo pipefail
           # The nightly tag sits one commit above the main it built, the one that adds nix/nightly.json.
@@ -39,8 +41,11 @@ jobs:
             exit 0
           fi
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
-          echo "number=$version-nightly.$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
-          echo "aur=$HAS_AUR_KEY" >> "$GITHUB_OUTPUT"
+          {
+            echo "number=$version-nightly.$(date -u +%Y%m%d)"
+            echo "aur=$HAS_AUR_KEY"
+            echo "tap=$HAS_TAP_KEY"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: gate
@@ -127,3 +132,46 @@ jobs:
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "upgpkg: sonora-nightly-bin ${NUMBER//-/.}-1"
           git push origin HEAD:master
+
+  # sonora-nightly in nolight132/homebrew-tap follows the nightly disk image, whose name never
+  # changes, so only its version and checksum move. It needs TAP_DEPLOY_KEY, a deploy key with
+  # write access to the tap.
+  tap:
+    needs: [gate, build]
+    if: needs.gate.outputs.tap == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: point the cask at the nightly
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+        run: |
+          set -euo pipefail
+          sum="$(curl -fsSL "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/nightly/SHA256SUMS" \
+            | awk '$2 == "sonora-nightly-macos.dmg" { print $1 }')"
+          test -n "$sum"
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap
+          chmod 600 ~/.ssh/tap
+          # GitHub's published ed25519 host key.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" \
+            > ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+
+          git clone -q git@github.com:nolight132/homebrew-tap.git tap
+          cd tap
+          sed -i \
+            -e "s/^  version \".*\"$/  version \"$NUMBER\"/" \
+            -e "s/^  sha256 \".*\"$/  sha256 \"$sum\"/" \
+            Casks/sonora-nightly.rb
+          if git diff --quiet; then
+            echo "::notice::the cask is already at $NUMBER"
+            exit 0
+          fi
+          git diff
+          git \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -am "chore(sonora-nightly): update to $NUMBER"
+          git push origin HEAD:main
