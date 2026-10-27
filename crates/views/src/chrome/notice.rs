@@ -13,7 +13,7 @@ use state::{AppSettings, Requirement, Requirements, Sonora, UpdateState, Updates
 use ui::{ActiveTheme as _, Button, SMALL_INSET, Text};
 
 const ICON: Pixels = px(18.);
-const REACH: Pixels = px(340.);
+const REACH: Pixels = px(400.);
 /// Where the README says what to install alongside Sonora.
 const INSTALL: &str = "https://github.com/sonorahq/sonora#linux";
 
@@ -199,10 +199,10 @@ impl Render for AppNotice {
     }
 }
 
-/// Draws one card: icon, title and a close button on top, then the detail with its link, and
-/// the never-again button followed by the card's own actions at the bottom. The detail is inset
-/// as far as a small button's label, so it lines up with the buttons under it. The card takes
-/// every click and hover over it, so nothing under it reacts.
+/// Draws one card: icon, a one-line title and a close button on top, then the detail, and a row
+/// at the bottom spreading the never-again button, the link and the card's own actions across
+/// its width. The detail is inset as far as a small button's label, so it lines up with the
+/// buttons under it. The card takes every click and hover over it, so nothing under it reacts.
 fn card_element(card: Card, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let Card {
@@ -255,6 +255,7 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
                             div()
                                 .min_w_0()
                                 .font_weight(FontWeight::SEMIBOLD)
+                                .truncate()
                                 .child(title),
                         ),
                 )
@@ -276,12 +277,12 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
                     .child(detail),
             )
         })
-        .when_some(link, |this, link| this.child(div().flex().child(link)))
         .child(
             div()
                 .flex()
                 .flex_wrap()
                 .items_center()
+                .justify_between()
                 .gap_2()
                 .child(
                     Button::new(SharedString::from(format!("{id}-never")))
@@ -291,6 +292,7 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
                         .label(never)
                         .on_click(silence),
                 )
+                .children(link)
                 .children(actions),
         )
         .into_any_element()
