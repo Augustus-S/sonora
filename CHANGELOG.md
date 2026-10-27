@@ -14,6 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Sonora installed from the disk image or as an AppImage updates itself with one button.
 - `sonora --version` prints the version.
 - Apple Music Home now shows recently added library albums and playlists when available.
+- The song details of a local file now show its release year, genres, label, language and composer
+  from the file's tags.
 
 ### Changed
 
