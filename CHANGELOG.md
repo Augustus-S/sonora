@@ -10,6 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Nightly builds for every platform, plus `sonora-nightly-bin` on the AUR and a Nix flake ref.
+- Choose between stable and nightly updates in Settings when Sonora updates itself.
+- Sonora installed from the disk image or as an AppImage updates itself with one button.
+- `sonora --version` prints the version.
 - Apple Music Home now shows recently added library albums and playlists when available.
 
 ### Changed
