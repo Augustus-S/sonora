@@ -173,6 +173,7 @@ Download the latest `windows-msvc.exe` for your architecture from [Releases](htt
 [Nightly builds](https://github.com/sonorahq/sonora/releases/tag/nightly) are available.
 
 ```sh
+brew install --cask nolight132/tap/sonora-nightly
 yay -S sonora-nightly-bin
 nix run github:sonorahq/sonora/nightly
 ```
