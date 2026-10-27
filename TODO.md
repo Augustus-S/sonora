@@ -123,6 +123,13 @@ Every item below was reviewed in this round; deferred does not mean implemented 
 - **A03:** `library_song` requires a catalog identifier and documents that uploads without one cannot play through this path. Listing such entries alone would not provide cloud playback. Next round requires an authorized sample library and a verified upload/matched-item playback route; no invented catalog IDs or unsupported stream URLs.
 - **A04:** Existing player/provider abstractions describe local playback, not an authorized Cast receiver session. Neither an account-backed receiver handshake nor compatible DRM playback has been established. Next round starts with receiver/account feasibility, not a discovery UI advertised as playback support.
 
+### PR #1069 — Merge conflict resolution
+
+- Merged upstream `main` at `95f0f9d0` into `fix/linux-webkit-sign-in` without rebasing or force-pushing. The only conflict was `CHANGELOG.md`; retained all upstream release entries and placed the two sign-in entries under the existing Unreleased categories.
+- Kept the renderer workaround, NVIDIA handling and explicit environment override unchanged. The logging merge preserves both upstream `state::VERSION` and the `webview=debug` disk filter.
+- In the merged worktree, `cargo +stable fmt --all -- --check`, `cargo +stable check --locked --package sonora`, `cargo +stable clippy --locked --package webview --all-targets -- -D warnings`, and the staged diff check passed. Built the locked webview test binary separately; its four existing tests passed under an 8-second timeout with 1-second kill grace. Build checks used the existing user-local sysroot and empty `RUSTFLAGS`; no GUI or sign-in window was launched.
+- Pushed merge commit `54ef090d` to the original PR branch. GitHub reports `MERGEABLE`; CI is still running, so this is not a claim that all upstream checks passed. PRs #1070 and #1071 are already merged and were not changed.
+
 ### Publication plan
 
 - Keep the complete audit and deferred-work record on the round branch. Publish focused webview and volume branches without unrelated audit material in their upstream diffs.
