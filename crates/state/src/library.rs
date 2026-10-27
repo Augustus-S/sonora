@@ -2331,7 +2331,8 @@ impl Library {
             .then_some(playlist.track_count)
     }
 
-    fn is_editable(&self, id: &str) -> bool {
+    /// Whether the listener may change the playlist `id`: one they own or collaborate on.
+    pub fn is_editable(&self, id: &str) -> bool {
         self.playlist(id)
             .is_some_and(|playlist| playlist.owned || playlist.collaborative)
     }

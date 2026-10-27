@@ -533,6 +533,11 @@ impl SidebarLeft {
             .on_drag_move(
                 cx.listener(move |this, event: &DragMoveEvent<DraggedPin>, _, cx| {
                     let Some(gap) = drop_gap(event.bounds, event.event.position, index) else {
+                        // A fast move can skip the edges, so the row lets go of its aim itself.
+                        if this.drop_into.as_ref() == Some(&target) {
+                            this.drop_into = None;
+                            cx.notify();
+                        }
                         return;
                     };
                     let into = (drop_into(event.bounds, event.event.position)
@@ -640,15 +645,10 @@ impl SidebarLeft {
         song.kind == PinKind::Song
             && target.kind == PinKind::Playlist
             && Shelf::of(&song.id) == Shelf::of(&target.id)
-            && self
-                .library
-                .read(cx)
-                .playlist(&target.id)
-                .is_some_and(|playlist| playlist.owned || playlist.collaborative)
+            && self.library.read(cx).is_editable(&target.id)
     }
 
-    /// Adds a dropped song to a playlist. A song the playlist holds already asks first, the way
-    /// the Add to playlist menu does.
+    /// Adds a dropped song to a playlist, and asks first when the playlist holds the song already.
     fn add_into(&self, target: &Pin, song: &Pin, window: &mut Window, cx: &mut Context<Self>) {
         let library = self.library.read(cx);
         let Some(playlist) = library.playlist(&target.id).cloned() else {
