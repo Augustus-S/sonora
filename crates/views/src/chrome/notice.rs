@@ -10,7 +10,7 @@ use gpui::{
 use i18n::t;
 use music::SoundServer;
 use state::{AppSettings, Requirement, Requirements, Sonora, UpdateState, Updates};
-use ui::{ActiveTheme as _, Button, SMALL_INSET, Text};
+use ui::{ActiveTheme as _, Button, SMALL_INSET, Text, corners};
 
 const ICON: Pixels = px(18.);
 const REACH: Pixels = px(400.);
@@ -34,7 +34,7 @@ struct Card {
     close: Handler,
     never: SharedString,
     silence: Handler,
-    /// A link right under the detail, such as the release notes.
+    /// A link in the bottom row, such as the release notes.
     link: Option<Button>,
     /// What the card is about, in the bottom row after the never-again button.
     actions: Vec<Button>,
@@ -217,6 +217,10 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
         actions,
     } = card;
 
+    let outer = corners(theme.radius);
+    // Concentric corners: the buttons sit one padding inside the card.
+    let inner = (outer - theme.metrics.pad).max(Pixels::ZERO);
+
     div()
         .id(SharedString::from(format!("{id}-card")))
         .role(Role::Alert)
@@ -226,7 +230,7 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
         .flex_col()
         .gap_2()
         .p(theme.metrics.pad)
-        .rounded(theme.radius)
+        .rounded(outer)
         .border_1()
         .border_color(theme.border)
         .shadow_md()
@@ -264,6 +268,7 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
                         .ghost()
                         .small()
                         .icon("icons/x.svg")
+                        .rounded(inner)
                         .tooltip("common-dismiss")
                         .on_click(close),
                 ),
@@ -290,10 +295,11 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
                         .small()
                         .icon("icons/x.svg")
                         .label(never)
+                        .rounded(inner)
                         .on_click(silence),
                 )
-                .children(link)
-                .children(actions),
+                .children(link.map(|link| link.rounded(inner)))
+                .children(actions.into_iter().map(|action| action.rounded(inner))),
         )
         .into_any_element()
 }
