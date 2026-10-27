@@ -12,7 +12,7 @@ const INSTALLER: &str = match cfg!(target_arch = "aarch64") {
     false => "Sonora-Setup.exe",
 };
 /// Where Homebrew keeps a cask it installed, on Apple silicon and on Intel. Either one existing
-/// means Homebrew owns the bundle in /Applications.
+/// means Homebrew owns /Applications/Sonora.app, though not a copy installed anywhere else.
 #[cfg(target_os = "macos")]
 const CASKROOMS: [&str; 2] = [
     "/opt/homebrew/Caskroom/sonora",
@@ -103,12 +103,14 @@ fn detect() -> Install {
     let Some(bundle) = bundle else {
         return Install::Managed;
     };
-    let foreign = bundle.starts_with("/nix/store")
-        || bundle.starts_with("/Volumes")
-        || bundle.to_string_lossy().contains("/AppTranslocation/")
-        || CASKROOMS
+    let brewed = bundle.parent() == Some(Path::new("/Applications"))
+        && CASKROOMS
             .iter()
             .any(|caskroom| Path::new(caskroom).exists());
+    let foreign = brewed
+        || bundle.starts_with("/nix/store")
+        || bundle.starts_with("/Volumes")
+        || bundle.to_string_lossy().contains("/AppTranslocation/");
     match !foreign && bundle.parent().is_some_and(writable) {
         true => Install::Bundle(bundle),
         false => Install::Managed,
