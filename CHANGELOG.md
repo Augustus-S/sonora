@@ -19,6 +19,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Install themes people share on sonorahq.org/themes with one click. Sonora shows a preview of
   the theme and asks before it adds it to your themes folder and switches to it.
 - Explore community themes from Settings, Appearance, Theme.
+- Delete a theme you added with the trash button on its card in Settings, Appearance, Theme.
 
 ### Changed
 

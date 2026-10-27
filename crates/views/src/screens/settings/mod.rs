@@ -246,6 +246,8 @@ pub struct SettingsView {
     popovers: Popovers,
     /// The theme family whose variant menu opened last, which owns that menu's popover.
     theme_variants: Option<String>,
+    /// The user's theme family waiting for the user to confirm its deletion.
+    deleting_theme: Option<String>,
     server: Entity<Input>,
     username: Entity<Input>,
     password: Entity<Input>,
@@ -403,6 +405,7 @@ impl SettingsView {
             pending_cache: None,
             popovers,
             theme_variants: None,
+            deleting_theme: None,
             server: cx.new(|cx| Input::new("login-server-hint", cx)),
             username: cx.new(|cx| Input::new("login-username-hint", cx)),
             password: cx.new(|cx| Input::new("login-password-hint", cx).masked()),
@@ -1322,7 +1325,11 @@ impl Render for SettingsView {
         let sign_in_for = self.sign_in_for.filter(|_| !taken);
 
         // a dialog takes the key focus, since escape only reaches the page from inside it
-        let dialog = taken || sign_in_for.is_some() || self.scrobble_prompt.is_some();
+        let theme_delete = self.theme_delete_modal(cx);
+        let dialog = taken
+            || sign_in_for.is_some()
+            || self.scrobble_prompt.is_some()
+            || theme_delete.is_some();
         match (dialog, self.grabbed) {
             (true, false) => {
                 window.focus(&self.focus, cx);
@@ -1377,6 +1384,7 @@ impl Render for SettingsView {
         .when_some(sign_in_for, |this, (slug, provider)| {
             this.child(self.sign_in_prompt(slug, provider, cx).into_any_element())
         })
+        .when_some(theme_delete, |this, modal| this.child(modal))
     }
 }
 

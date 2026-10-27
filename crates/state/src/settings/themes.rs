@@ -430,6 +430,32 @@ pub(super) fn install(
     anyhow::bail!("cannot find a free name for theme {base}")
 }
 
+/// Deletes every file of the user's `family` from `directory`, then its folder once nothing else
+/// is left in it. A file already gone counts as deleted. Bundled families are refused.
+pub(super) fn remove(family: &ThemeFamily, directory: &Path) -> Result<()> {
+    anyhow::ensure!(!family.bundled, "cannot delete bundled theme {}", family.id);
+    for variant in &family.variants {
+        let path = directory.join(format!("{}.json", variant.id));
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("cannot delete {}", path.display()));
+            }
+        }
+    }
+    // only the variants of a folder carry a slash in their id, and a folder that still holds
+    // anything else stays
+    if family
+        .variants
+        .iter()
+        .any(|variant| variant.id.contains('/'))
+    {
+        fs::remove_dir(directory.join(&family.id)).ok();
+    }
+    Ok(())
+}
+
 /// Parses one theme file. The id it returns is `family`, which a caller inside a folder
 /// replaces with the full one. `origin` names the file in errors.
 fn parse(bytes: &[u8], origin: &str, family: &str) -> Result<ThemeVariant> {

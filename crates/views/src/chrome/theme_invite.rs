@@ -1,16 +1,19 @@
-//! The question before a theme from a `sonora://theme/` link is installed: a miniature of the
-//! window in its colours, its name and author, and Install or Cancel. `state::Links` holds the
-//! offer and does the installing; this only draws it.
+//! The question before a theme from a `sonora://theme/` link is installed, with the theme's
+//! name in the title, a miniature of the window in its colours, and Install or Cancel.
+//! `state::Links` holds the offer and does the installing. This only draws it.
 
 use gpui::prelude::*;
-use gpui::{Context, Entity, FocusHandle, FontWeight, Render, Window, div};
+use gpui::{Context, Entity, FocusHandle, Pixels, Render, Window, div, px};
 use i18n::t;
 use state::{Links, Sonora};
-use ui::{
-    ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, Look, Modal, Submit, Text, Theme, ThemeKind,
-};
+use ui::{ActiveTheme as _, Button, Dismiss, FORM_CONTEXT, Look, Modal, Submit, Theme, ThemeKind};
 
-use crate::shared::theme_miniature::{CARD, THUMB, sliced};
+use crate::shared::theme_miniature::{framed, sliced};
+
+/// The modal panel's border, which counts toward its width.
+const BORDER: Pixels = px(1.);
+/// How many times a theme card's size the preview is drawn.
+const PREVIEW: f32 = 2.;
 
 /// Asks whether to install the theme a link carried. It shows for as long as `Links` holds an
 /// offer, wherever the listener is in the app, and either answer hands the offer back.
@@ -86,42 +89,17 @@ impl Render for ThemeInvite {
         }
 
         let theme = *cx.theme();
-        let preview = div()
-            .flex()
-            .items_center()
-            .gap(theme.metrics.pad)
-            .child(
-                div()
-                    .flex_none()
-                    .w(CARD)
-                    .h(THUMB)
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(sliced(&[variant.palette()], theme.radius)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(theme.text(Text::Body))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(variant.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(theme.text(Text::Small))
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(t!("theme-install-author", author = &variant.author)),
-                    ),
-            );
+        let frame = framed(PREVIEW);
+        let preview = div().flex().justify_center().child(
+            div()
+                .flex_none()
+                .w(frame.width)
+                .h(frame.height)
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(theme.border)
+                .child(sliced(&[variant.palette()], theme.radius, PREVIEW)),
+        );
 
         div()
             .absolute()
@@ -141,6 +119,9 @@ impl Render for ThemeInvite {
                     "theme-install",
                     t!("theme-install-title", name = &variant.title),
                 )
+                // the modal pads its body by twice `pad` on each side, so the preview lines up with
+                // the title and the buttons
+                .w(frame.width + theme.metrics.pad * 4. + BORDER * 2.)
                 .detail(t!("theme-install-detail"))
                 .child(preview)
                 .action(

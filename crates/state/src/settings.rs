@@ -1442,6 +1442,37 @@ impl AppSettings {
         Ok(id)
     }
 
+    /// Deletes the user's theme family `id` from the themes folder and says whether it worked.
+    /// A selected theme in it falls back to Dark. A failure is logged and shown as a toast.
+    pub fn delete_theme_family(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(family) = self.families.iter().find(|family| family.id == id).cloned() else {
+            return false;
+        };
+        let directory = themes_path(&self.path);
+        if let Err(error) = themes::remove(&family, &directory) {
+            log::warn!("settings: cannot delete theme {id}: {error:#}");
+            Toasts::about(
+                Outcome::Failed,
+                "toast-theme-delete-failed",
+                family.name,
+                cx,
+            );
+            return false;
+        }
+        log::info!("settings: deleted theme {id}");
+        let loaded = themes::load(&directory, &self.themes);
+        self.families = themes::catalog(&loaded.themes);
+        self.themes = loaded.themes;
+        if family.variant(self.theme()).is_some() {
+            self.set_theme(ThemeKind::Dark.id(), cx);
+        }
+        if self.state.theme_variants.remove(id).is_some() {
+            self.schedule_state_save(cx);
+        }
+        cx.notify();
+        true
+    }
+
     /// Creates and returns the folder that holds custom themes.
     pub fn ensure_themes_directory(&self) -> PathBuf {
         let path = themes_path(&self.path);

@@ -8,7 +8,10 @@ use gpui::{
 };
 use i18n::t;
 use state::ThemeFamily;
-use ui::{ActiveTheme as _, Look, Menu, MenuItem, OptionCard, Picker, Rail, Theme, ThemeKind};
+use ui::{
+    ActiveTheme as _, Button, Look, Menu, MenuItem, Modal, OptionCard, Picker, Rail, Theme,
+    ThemeKind,
+};
 
 use super::SettingsView;
 use crate::shared::theme_miniature::{CARD, THUMB, sliced};
@@ -133,7 +136,7 @@ impl SettingsView {
                 OptionCard::new(kind.id())
                     .w(CARD)
                     .thumb_height(THUMB)
-                    .thumb(sliced(&palettes, radius))
+                    .thumb(sliced(&palettes, radius, 1.))
                     .label(kind.label())
                     .selected(chosen)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -167,12 +170,13 @@ impl SettingsView {
                     None => family.name.clone(),
                 };
                 let id = family.id.clone();
+                let doomed = family.id.clone();
 
                 let card =
                     OptionCard::new(SharedString::from(format!("theme-family:{}", family.id)))
                         .w(CARD)
                         .thumb_height(THUMB)
-                        .thumb(sliced(&palettes, radius))
+                        .thumb(sliced(&palettes, radius, 1.))
                         .label(label)
                         .selected(chosen)
                         .disabled(adaptive)
@@ -191,7 +195,16 @@ impl SettingsView {
                                 cx,
                             );
                             cx.notify();
-                        }));
+                        }))
+                        .when(!family.bundled, |card| {
+                            card.on_delete(
+                                "settings-theme-delete",
+                                cx.listener(move |this, _, _, cx| {
+                                    this.deleting_theme = Some(doomed.clone());
+                                    cx.notify();
+                                }),
+                            )
+                        });
                 match picked {
                     Some((picked, _)) => self.with_variants(card, &family, &picked, cx),
                     None => card,
@@ -199,6 +212,74 @@ impl SettingsView {
                 .into_any_element()
             }
         }
+    }
+
+    /// The question before the user's theme family is deleted, or `None` while none waits or
+    /// the family is already gone.
+    pub(super) fn theme_delete_modal(&self, cx: &mut Context<Self>) -> Option<Modal> {
+        let id = self.deleting_theme.as_deref()?;
+        let name = self
+            .settings
+            .read(cx)
+            .theme_families()
+            .iter()
+            .find(|family| family.id == id)?
+            .name
+            .clone();
+        let modal = Modal::new(
+            "theme-delete",
+            t!("settings-theme-delete-title", name = &name),
+        )
+        .detail(t!("settings-theme-delete-detail"))
+        .action(
+            Button::new("cancel-theme-delete")
+                .ghost()
+                .label(t!("common-cancel"))
+                .on_click(cx.listener(|this, _, _, cx| this.close_theme_delete(cx))),
+        )
+        .action(
+            Button::new("apply-theme-delete")
+                .destructive()
+                .label(t!("common-delete"))
+                .on_click(cx.listener(|this, _, _, cx| this.delete_theme(cx))),
+        )
+        .on_dismiss(cx.listener(|this, _, _, cx| this.close_theme_delete(cx)));
+        Some(modal)
+    }
+
+    pub(super) fn close_theme_delete(&mut self, cx: &mut Context<Self>) {
+        self.deleting_theme = None;
+        cx.notify();
+    }
+
+    /// Deletes the family the dialog asked about. When it was the theme in use the window fades
+    /// to Dark, the theme settings fall back to.
+    fn delete_theme(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.deleting_theme.take() else {
+            return;
+        };
+        let look = self.look(cx);
+        let fell_back = self.settings.update(cx, |settings, cx| {
+            let chosen = settings
+                .theme_variant()
+                .is_some_and(|(family, _)| family.id == id);
+            settings.delete_theme_family(&id, cx) && chosen
+        });
+        if fell_back {
+            let overrides = self.settings.read(cx).theme_overrides();
+            Theme::fade(
+                Look {
+                    kind: ThemeKind::Dark,
+                    ..look
+                },
+                &overrides,
+                cx,
+            );
+        }
+        if self.theme_variants.as_deref() == Some(id.as_str()) {
+            self.theme_variants = None;
+        }
+        cx.notify();
     }
 
     /// Gives a family's card the menu of its variants, `picked` checked, opened from its name.
