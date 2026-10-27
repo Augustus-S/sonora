@@ -310,7 +310,6 @@ view-list = 列表
 view-cards = 网格
 
 # toolbar
-tool-columns = 列
 tool-sort = 排序
 tool-filters = 筛选
 

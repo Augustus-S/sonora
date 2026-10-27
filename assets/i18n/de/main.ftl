@@ -310,7 +310,6 @@ view-list = Liste
 view-cards = Karten
 
 # toolbar
-tool-columns = Spalten
 tool-sort = Sortieren
 tool-filters = Filter
 

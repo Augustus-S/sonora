@@ -329,7 +329,6 @@ view-list = Список
 view-cards = Карточки
 
 # toolbar
-tool-columns = Колонки
 tool-sort = Сортировка
 tool-filters = Фильтры
 

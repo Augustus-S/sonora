@@ -310,7 +310,6 @@ view-list = Lista
 view-cards = Grade
 
 # toolbar
-tool-columns = Colunas
 tool-sort = Ordenar
 tool-filters = Filtros
 
