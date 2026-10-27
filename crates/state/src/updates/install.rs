@@ -154,8 +154,8 @@ fn setup(installer: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copies Sonora.app off the disk image beside the running bundle, then trades the two by
-/// renaming, so a failure part way leaves the old bundle where it was.
+/// Copies Sonora.app off the disk image beside the running bundle, deletes the image, then
+/// trades the two bundles by renaming, so a failure part way leaves the old one where it was.
 #[cfg(target_os = "macos")]
 fn swap_bundle(image: &Path, bundle: &Path) -> Result<()> {
     let mount = tempfile::tempdir().context("cannot make a mount point")?;
@@ -185,6 +185,7 @@ fn swap_bundle(image: &Path, bundle: &Path) -> Result<()> {
         log::warn!("updates: cannot eject the disk image: {error:#}");
     }
     copied?;
+    std::fs::remove_file(image).ok();
 
     let retired = bundle.with_file_name(".Sonora.app.old");
     remove(&retired)?;
@@ -207,6 +208,7 @@ fn swap_image(download: &Path, image: &Path) -> Result<()> {
 
     let staged = image.with_file_name(".sonora-update.AppImage");
     std::fs::copy(download, &staged).context("cannot copy the new AppImage beside the old")?;
+    std::fs::remove_file(download).ok();
     std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
         .context("cannot make the new AppImage executable")?;
     std::fs::rename(&staged, image).context("cannot put the new AppImage in place")?;
