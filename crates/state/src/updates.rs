@@ -15,7 +15,13 @@ const INSTALLER: &str = match cfg!(target_arch = "aarch64") {
 };
 const SUMS: &str = "SHA256SUMS";
 const UNINSTALLER: &str = "unins000.exe";
-const RUNNING: &str = env!("CARGO_PKG_VERSION");
+/// The version this build shows and reports. The nightly workflow sets `SONORA_VERSION` at
+/// compile time to a label such as `0.44.2-nightly.20261026`, and every other build falls back
+/// to the Cargo version.
+pub const VERSION: &str = match option_env!("SONORA_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 const INSTALLABLE: bool = cfg!(target_os = "windows");
 const AGENT: &str = concat!(
     "sonora/",
@@ -120,8 +126,10 @@ impl Updates {
         }));
     }
 
+    /// Asks GitHub for the latest release. A nightly never asks, since every release it could be
+    /// offered is a stable build that would take it off the nightly.
     fn look(&mut self, cx: &mut Context<Self>) {
-        if !self.settings.read(cx).check_updates() {
+        if nightly() || !self.settings.read(cx).check_updates() {
             return;
         }
         let http = self.http.clone();
@@ -173,7 +181,7 @@ async fn latest(http: &reqwest::Client) -> Result<Option<Release>> {
         .context("cannot read the github release")?;
 
     let version = published.tag_name.trim_start_matches('v').to_owned();
-    if !newer(&version, RUNNING) {
+    if !newer(&version, VERSION) {
         return Ok(None);
     }
     let asset = |wanted: &str| {
@@ -251,6 +259,10 @@ fn installed() -> bool {
         .ok()
         .and_then(|exe| Some(exe.parent()?.join(UNINSTALLER)))
         .is_some_and(|uninstaller| uninstaller.exists())
+}
+
+fn nightly() -> bool {
+    VERSION.contains("-nightly")
 }
 
 fn newer(offered: &str, running: &str) -> bool {

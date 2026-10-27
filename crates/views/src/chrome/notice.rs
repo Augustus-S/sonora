@@ -1,6 +1,7 @@
 //! The column of cards in the top left corner: one for every missing system requirement, then
 //! the update on offer. Every card can be closed and told never to show again.
 
+use gpui::accesskit::Role;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, FontWeight, Pixels, Render, SharedString, Window,
@@ -122,8 +123,8 @@ impl AppNotice {
             false => t!("update-available", version = version.as_str()),
         };
         let detail = (!failed).then(|| match installable {
-            true => t!("update-detail", running = env!("CARGO_PKG_VERSION")),
-            false => t!("update-detail-notes", running = env!("CARGO_PKG_VERSION")),
+            true => t!("update-detail", running = state::VERSION),
+            false => t!("update-detail-notes", running = state::VERSION),
         });
 
         let close = self.updates.clone();
@@ -180,10 +181,12 @@ impl Render for AppNotice {
             .collect();
         cards.extend(self.update(cx));
         if cards.is_empty() {
-            return div();
+            return div().into_any_element();
         }
 
         div()
+            .id("app-notices")
+            .role(Role::Group)
             .absolute()
             .top(theme.metrics.pad)
             .left(theme.metrics.pad)
@@ -192,6 +195,7 @@ impl Render for AppNotice {
             .flex_col()
             .gap_2()
             .children(cards.into_iter().map(|card| card_element(card, cx)))
+            .into_any_element()
     }
 }
 
@@ -214,6 +218,9 @@ fn card_element(card: Card, cx: &App) -> AnyElement {
     } = card;
 
     div()
+        .id(SharedString::from(format!("{id}-card")))
+        .role(Role::Alert)
+        .aria_label(title.clone())
         .occlude()
         .flex()
         .flex_col()
