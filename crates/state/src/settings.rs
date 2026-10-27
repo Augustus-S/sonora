@@ -9,7 +9,8 @@ mod equalizer;
 mod themes;
 
 pub use self::equalizer::equalizer_profile_label;
-pub use self::themes::{ThemeFamily, ThemeVariant};
+pub use self::themes::{ThemeFamily, ThemeOffer, ThemeVariant};
+pub(crate) use self::themes::{is_own_link, read_link as read_theme_link};
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -1419,6 +1420,57 @@ impl AppSettings {
         self.theme_variant()
             .map(|(_, variant)| variant.overrides.clone().merged(inline))
             .unwrap_or_else(|| inline.clone())
+    }
+
+    /// Writes the theme a link offered into the themes folder and selects it, turning the
+    /// adaptive theme off since only the neutral themes wear it. Returns the theme's id.
+    pub fn install_theme(&mut self, offer: &ThemeOffer, cx: &mut Context<Self>) -> Result<String> {
+        let directory = themes_path(&self.path);
+        let id = themes::install(offer, &directory, &self.themes)?;
+        let loaded = themes::load(&directory, &self.themes);
+        anyhow::ensure!(
+            loaded.themes.iter().any(|theme| theme.id == id),
+            "cannot load the installed theme {id}"
+        );
+        self.families = themes::catalog(&loaded.themes);
+        self.themes = loaded.themes;
+        if self.adaptive_theme() {
+            self.set_adaptive_theme(false, cx);
+        }
+        self.set_theme(id.clone(), cx);
+        cx.notify();
+        Ok(id)
+    }
+
+    /// Deletes the user's theme family `id` from the themes folder and says whether it worked.
+    /// A selected theme in it falls back to Dark. A failure is logged and shown as a toast.
+    pub fn delete_theme_family(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        let Some(family) = self.families.iter().find(|family| family.id == id).cloned() else {
+            return false;
+        };
+        let directory = themes_path(&self.path);
+        if let Err(error) = themes::remove(&family, &directory) {
+            log::warn!("settings: cannot delete theme {id}: {error:#}");
+            Toasts::about(
+                Outcome::Failed,
+                "toast-theme-delete-failed",
+                family.name,
+                cx,
+            );
+            return false;
+        }
+        log::info!("settings: deleted theme {id}");
+        let loaded = themes::load(&directory, &self.themes);
+        self.families = themes::catalog(&loaded.themes);
+        self.themes = loaded.themes;
+        if family.variant(self.theme()).is_some() {
+            self.set_theme(ThemeKind::Dark.id(), cx);
+        }
+        if self.state.theme_variants.remove(id).is_some() {
+            self.schedule_state_save(cx);
+        }
+        cx.notify();
+        true
     }
 
     /// Creates and returns the folder that holds custom themes.

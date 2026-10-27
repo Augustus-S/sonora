@@ -40,9 +40,11 @@ impl Contributor {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ArtistRef {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 }
 

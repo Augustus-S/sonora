@@ -310,7 +310,6 @@ view-list = Lista
 view-cards = Cuadrícula
 
 # toolbar
-tool-columns = Columnas
 tool-sort = Ordenar
 tool-filters = Filtros
 

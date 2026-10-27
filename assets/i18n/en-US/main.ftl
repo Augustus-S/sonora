@@ -310,7 +310,6 @@ view-list = List
 view-cards = Grid
 
 # toolbar
-tool-columns = Columns
 tool-sort = Sort
 tool-filters = Filters
 
@@ -601,6 +600,11 @@ settings-opacity = Opacity
 settings-opacity-detail = Adjust the app background opacity
 settings-opacity-value = { $percent }%
 settings-theme-folder = Open folder
+settings-theme-explore = Explore community themes
+settings-theme-explore-detail = Find themes other people made and install them in one click
+settings-theme-delete = Delete theme
+settings-theme-delete-title = Delete { $name }?
+settings-theme-delete-detail = This removes it from your themes folder. It cannot be undone.
 settings-theme-unavailable = This theme can be applied only when adaptive theme is disabled
 settings-adaptive = Adaptive theme
 settings-adaptive-detail = Tint the palette with the artwork of the playing album
@@ -1056,6 +1060,9 @@ theme-system = System
 theme-dark = Dark
 theme-light = Light
 theme-unavailable = { $name } (unavailable)
+theme-install-title = Install { $name }?
+theme-install-detail = This will add it to your themes folder.
+theme-install-confirm = Install
 
 # corners
 corners-square = Square
@@ -1283,6 +1290,9 @@ toast-undo = Undo
 toast-link-copied = Link copied
 toast-link-sign-in = Sign in to { $name } to open this link
 toast-link-unreadable = That link does not lead anywhere Sonora can open
+toast-theme-link-unreadable = That theme link is damaged or holds something other than a theme
+toast-theme-install-failed = Cannot install { $name }
+toast-theme-delete-failed = Cannot delete { $name }
 toast-code-copied = Code copied
 menu-copy-link-none = This has no link to share
 menu-copy-link-local = Local artists and playlists have no link
