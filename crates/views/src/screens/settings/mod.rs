@@ -67,6 +67,7 @@ enum Slot {
     Folders,
     Theme,
     Adaptive,
+    CommunityThemes,
     Icons,
     Corners,
     Typeface,
@@ -680,6 +681,10 @@ impl SettingsView {
             ),
             Slot::Theme => (t!("settings-theme"), t!("settings-theme-detail")),
             Slot::Adaptive => (t!("settings-adaptive"), t!("settings-adaptive-detail")),
+            Slot::CommunityThemes => (
+                t!("settings-theme-explore"),
+                t!("settings-theme-explore-detail"),
+            ),
             Slot::Ambient => (t!("settings-ambient"), t!("settings-ambient-detail")),
             Slot::AmbientMotion => (
                 t!("settings-ambient-motion"),
@@ -909,6 +914,7 @@ impl SettingsView {
             Slot::Folders => self.folders(cx),
             Slot::Theme | Slot::Icons | Slot::Corners => div().into_any_element(),
             Slot::Adaptive => self.adaptive_row(cx),
+            Slot::CommunityThemes => self.community_themes_row(cx),
             Slot::Ambient => self.ambient_row(cx),
             Slot::AmbientMotion => self.ambient_motion_row(cx),
             Slot::Visualizer => div().into_any_element(),

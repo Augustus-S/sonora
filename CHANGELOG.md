@@ -16,6 +16,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Apple Music Home now shows recently added library albums and playlists when available.
 - The song details of a local file now show its release year, genres, label, language and composer
   from the file's tags.
+- Install themes people share on sonorahq.org/themes with one click. Sonora shows a preview of
+  the theme and asks before it adds it to your themes folder and switches to it.
+- Explore community themes from Settings, Appearance, Theme.
 
 ### Changed
 
