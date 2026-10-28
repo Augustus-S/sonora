@@ -7,6 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Added
 
 - Drop a song onto a playlist you own or collaborate on in the sidebar to add it to that playlist.
@@ -15,6 +16,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Screen readers now name every switch and dropdown in Settings and the equalizer, and read the
   setting labels, the version and the team on the About page.
+=======
+### Changed
+
+- Quick picks on Home no longer shows your account name above its title.
+>>>>>>> pr-1129
 
 ## [0.45.0] - 2026-10-27
 
