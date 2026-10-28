@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Drop a song onto a playlist you own or collaborate on in the sidebar to add it to that playlist.
+
 ## [0.45.0] - 2026-10-27
 
 ### Added
