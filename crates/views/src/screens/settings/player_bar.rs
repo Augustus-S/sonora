@@ -48,6 +48,7 @@ impl SettingsView {
         Row::new(
             t!("settings-player-bar-transparent"),
             Switch::new("player-bar-transparent", on && blur)
+                .name(t!("settings-player-bar-transparent"))
                 .disabled(!blur)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings.update(cx, |settings, cx| {

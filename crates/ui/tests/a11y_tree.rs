@@ -41,8 +41,9 @@ fn snapshot(element_name: &str, element: &impl Element) -> String {
             let mut node = Node::new(role);
             element.write_a11y_info(&mut node);
             format!(
-                "{element_name}: role={role:?} id={id:?} name={:?} click={} focus={} toggled={:?} value={:?}",
+                "{element_name}: role={role:?} id={id:?} name={:?} description={:?} click={} focus={} toggled={:?} value={:?}",
                 node.label(),
+                node.description(),
                 node.supports_action(Action::Click),
                 node.supports_action(Action::Focus),
                 node.toggled(),
@@ -137,6 +138,31 @@ async fn icon_only_button_names_itself_from_tooltip(cx: &mut TestAppContext) {
     assert!(
         lines.iter().any(|line| line.contains("name=Some")),
         "icon-only button exposes no accessible name for its tooltip: {lines:?}"
+    );
+}
+
+#[gpui::test]
+async fn named_button_reads_its_label_as_description(cx: &mut TestAppContext) {
+    let lines = open_probe(cx, |window, cx| {
+        let element = Button::new("language-picker")
+            .label("English")
+            .name("Language")
+            .render(window, cx)
+            .into_element();
+        snapshot("named-button", &element)
+    });
+    let lines = rendered(&lines, "named-button");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("name=Some(\"Language\")")),
+        "named button is announced by its visible label instead of its name: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("description=Some(\"English\")")),
+        "named button drops its visible label, the current choice goes unheard: {lines:?}"
     );
 }
 
