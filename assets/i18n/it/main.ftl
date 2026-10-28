@@ -310,7 +310,6 @@ view-list = Elenco
 view-cards = Griglia
 
 # toolbar
-tool-columns = Colonne
 tool-sort = Ordina
 tool-filters = Filtri
 

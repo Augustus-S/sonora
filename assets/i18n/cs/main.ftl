@@ -333,7 +333,6 @@ view-list = Seznam
 view-cards = Mřížka
 
 # toolbar
-tool-columns = Sloupce
 tool-sort = Řazení
 tool-filters = Filtry
 

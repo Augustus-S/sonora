@@ -313,7 +313,6 @@ view-list = Liste
 view-cards = Cartes
 
 # toolbar
-tool-columns = Colonnes
 tool-sort = Trier
 tool-filters = Filtres
 

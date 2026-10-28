@@ -310,7 +310,6 @@ view-list = Listë
 view-cards = Rrjetë
 
 # toolbar
-tool-columns = Kolona
 tool-sort = Rendit
 tool-filters = Filtra
 

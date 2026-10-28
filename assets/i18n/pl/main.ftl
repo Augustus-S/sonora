@@ -329,7 +329,6 @@ view-list = Lista
 view-cards = Kafelki
 
 # toolbar
-tool-columns = Kolumny
 tool-sort = Sortowanie
 tool-filters = Filtry
 

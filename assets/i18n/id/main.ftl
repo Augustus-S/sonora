@@ -310,7 +310,6 @@ view-list = Daftar
 view-cards = Kisi
 
 # toolbar
-tool-columns = Kolom
 tool-sort = Urutkan
 tool-filters = Filter
 

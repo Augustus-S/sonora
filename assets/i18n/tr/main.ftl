@@ -289,7 +289,6 @@ view-list = Liste
 view-cards = Izgara
 
 # toolbar
-tool-columns = Sütunlar
 tool-sort = Sırala
 tool-filters = Süzgeçler
 

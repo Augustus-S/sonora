@@ -84,6 +84,8 @@ After installing (thanks Apple):
 xattr -dr com.apple.quarantine /Applications/Sonora.app
 ```
 
+Or install the [disk image](https://github.com/sonorahq/sonora/releases/latest), which updates itself.
+
 ### Linux
 
 #### Arch
@@ -173,6 +175,7 @@ Download the latest `windows-msvc.exe` for your architecture from [Releases](htt
 [Nightly builds](https://github.com/sonorahq/sonora/releases/tag/nightly) are available.
 
 ```sh
+brew install --cask nolight132/tap/sonora-nightly
 yay -S sonora-nightly-bin
 nix run github:sonorahq/sonora/nightly
 ```

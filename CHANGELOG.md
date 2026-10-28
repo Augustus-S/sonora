@@ -11,21 +11,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Linux sign-in diagnostics now record the loaded WebKitGTK version, display backend and
   automatic renderer workaround in the application log.
-- Apple Music Home now shows recently added library albums and playlists when available.
-
-### Changed
-
-- When Spotify refuses to play on your account, a Why? button opens the FAQ explaining it.
 
 ### Fixed
 
 - On Linux, sign-in windows use shared-memory rendering with WebKitGTK 2.54 and newer to
   avoid the runaway GPU-buffer allocations reported during Apple Music sign-in.
-- Sonora now works with screen readers such as NVDA: buttons, lists, dialogs and settings
-  announce their names and states instead of staying silent.
+
+## [0.45.0] - 2026-10-27
+
+### Added
+
+- Nightly builds for every platform, plus `sonora-nightly-bin` on the AUR and a Nix flake ref.
+- Choose between stable and nightly updates in Settings when Sonora updates itself.
+- Sonora installed from the disk image or as an AppImage updates itself with one button.
+- `sonora --version` prints the version.
+- Apple Music Home now shows recently added library albums and playlists when available.
+- The song details of a local file now show its release year, genres, label, language and composer
+  from the file's tags.
+- Install themes people share on sonorahq.org/themes with one click. Sonora shows a preview of
+  the theme and asks before it adds it to your themes folder and switches to it.
+- Explore community themes from Settings, Appearance, Theme.
+- Delete a theme you added with the trash button on its card in Settings, Appearance, Theme.
+
+### Changed
+
+- When Spotify refuses to play on your account, a Why? button opens the FAQ explaining it.
+- Right-click a list's column headers to show or hide columns. The Columns button is gone.
 
 ### Fixed
 
+- Sonora now works with screen readers such as NVDA: buttons, lists, dialogs and settings
+  announce their names and states instead of staying silent.
 - Arabic, Hebrew and other right-to-left text reads in the right order on Windows.
 - Right-to-left lyrics, descriptions and bios wrap between words and keep their reading order.
 - Arabic and Hebrew lyrics sit against the right edge, and the karaoke highlight sweeps from there.
@@ -40,6 +56,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshing your local library picks up songs added, moved or deleted since Sonora started.
 - Dragging the volume slider uses less CPU and GPU.
 - Romanized unsynced lyrics show each line's romanization under that line.
+- Moving playback to or from another Spotify device keeps the queue, history, shuffle and repeat.
+- Editing the queue from another Spotify device no longer restarts the song.
+- Going back through the queue keeps replayed songs apart from the ones you queued.
+- Spotify library, playlist and pin changes made elsewhere show up without a restart.
+- Song-change notifications on Linux name the song instead of showing a blank label.
+- A song with no lyrics found before is looked up again, so lyrics added to a service since then
+  show up.
 
 ## [0.44.2] - 2026-10-25
 
@@ -2358,7 +2381,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Initial release: a native Spotify client with playback, an interactive queue, the saved library,
 search, album, playlist, artist and song pages, context menus and adaptive theming.
 
-[unreleased]: https://github.com/sonorahq/sonora/compare/v0.44.2...HEAD
+[unreleased]: https://github.com/sonorahq/sonora/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/sonorahq/sonora/compare/v0.44.2...v0.45.0
 [0.44.2]: https://github.com/sonorahq/sonora/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/sonorahq/sonora/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/sonorahq/sonora/compare/v0.43.0...v0.44.0

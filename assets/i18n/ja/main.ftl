@@ -267,7 +267,6 @@ view-list = リスト
 view-cards = グリッド
 
 # toolbar
-tool-columns = 列
 tool-sort = 並べ替え
 tool-filters = フィルター
 
