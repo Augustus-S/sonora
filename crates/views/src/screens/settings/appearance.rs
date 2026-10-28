@@ -182,6 +182,7 @@ impl SettingsView {
         }
 
         let picker = Picker::new(TYPEFACES, &self.popovers, current)
+            .name(t!("settings-typeface"))
             .width(Picker::WIDE)
             .menu(self.typefaces.menu("typefaces-menu", Picker::WIDE))
             .items(items)
@@ -220,6 +221,7 @@ impl SettingsView {
         self.row(
             t!("settings-blur"),
             Switch::new("blur", look.blur)
+                .name(t!("settings-blur"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let blur = !look.blur;
                     this.settings
@@ -241,6 +243,7 @@ impl SettingsView {
         self.row(
             t!("settings-blur-window"),
             Switch::new("blur-window", look.blur_window && !opaque)
+                .name(t!("settings-blur-window"))
                 .disabled(opaque)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let blur_window = !look.blur_window;
@@ -422,6 +425,7 @@ impl SettingsView {
         self.row(
             t!("settings-adaptive"),
             Switch::new("adaptive-theme", on)
+                .name(t!("settings-adaptive"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let adaptive = !on;
                     let reset = adaptive && !neutral;
