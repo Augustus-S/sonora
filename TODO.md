@@ -130,6 +130,11 @@ Every item below was reviewed in this round; deferred does not mean implemented 
 - In the merged worktree, `cargo +stable fmt --all -- --check`, `cargo +stable check --locked --package sonora`, `cargo +stable clippy --locked --package webview --all-targets -- -D warnings`, and the staged diff check passed. Built the locked webview test binary separately; its four existing tests passed under an 8-second timeout with 1-second kill grace. Build checks used the existing user-local sysroot and empty `RUSTFLAGS`; no GUI or sign-in window was launched.
 - Pushed merge commit `54ef090d` to the original PR branch. GitHub reports `MERGEABLE`; CI is still running, so this is not a claim that all upstream checks passed. PRs #1070 and #1071 are already merged and were not changed.
 
+### PR #1069 — Conflict after the 0.45.0 release
+
+- Merged `main` at `505124bc` into the existing topic branch and pushed merge commit `80cd0382`, without rewriting history. Only `CHANGELOG.md` conflicted. Moved both unmerged sign-in entries to Unreleased rather than retaining them under the newly published 0.45.0 section; preserved all upstream release notes.
+- The two Rust files are unchanged from the previous resolution. Formatting, staged diff checks, locked `sonora` compilation checks, strict webview all-target Clippy and all four existing webview tests passed with the same local build environment. Tests ran under an 8-second timeout with 1-second kill grace; no application or login window was launched.
+
 ### Publication plan
 
 - Keep the complete audit and deferred-work record on the round branch. Publish focused webview and volume branches without unrelated audit material in their upstream diffs.
