@@ -575,12 +575,14 @@ impl EqualizerView {
                     .gap_x_2()
                     .gap_y_3()
                     .child(picker)
-                    .child(Switch::new("equalizer-enabled", on).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.equalizer
-                                .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
-                        },
-                    )))
+                    .child(
+                        Switch::new("equalizer-enabled", on)
+                            .name(t!("settings-equalizer"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.equalizer
+                                    .update(cx, |equalizer, cx| equalizer.set_enabled(!on, cx))
+                            })),
+                    )
                     .child(history)
                     .children(manage),
             )
@@ -706,6 +708,7 @@ impl EqualizerView {
                 false => t!("equalizer-preamp-manual"),
             },
         )
+        .name(t!("equalizer-preamp"))
         .width(Picker::NARROW)
         .items(
             [

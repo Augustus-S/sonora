@@ -75,6 +75,7 @@ impl SettingsView {
         self.row(
             t!("settings-normalisation"),
             Switch::new("normalisation", on)
+                .name(t!("settings-normalisation"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
                         .update(cx, |playback, cx| playback.set_normalisation(!on, cx));
@@ -89,6 +90,7 @@ impl SettingsView {
         self.row(
             t!("settings-gapless"),
             Switch::new("gapless", on)
+                .name(t!("settings-gapless"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
                         .update(cx, |playback, cx| playback.set_gapless(!on, cx));
@@ -103,6 +105,7 @@ impl SettingsView {
         self.row(
             t!("settings-keep-tracks"),
             Switch::new("keep-tracks", on)
+                .name(t!("settings-keep-tracks"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.playback
                         .update(cx, |playback, cx| playback.set_keep_tracks(!on, cx));
@@ -232,7 +235,12 @@ impl SettingsView {
             }),
         );
 
-        self.row(t!("settings-stream-format"), formats.into_any_element())
+        self.row(
+            t!("settings-stream-format"),
+            formats
+                .name(t!("settings-stream-format"))
+                .into_any_element(),
+        )
     }
 
     pub(super) fn stream_bitrate_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -273,7 +281,12 @@ impl SettingsView {
                 }),
         );
 
-        self.row(t!("settings-stream-bitrate"), picker.into_any_element())
+        self.row(
+            t!("settings-stream-bitrate"),
+            picker
+                .name(t!("settings-stream-bitrate"))
+                .into_any_element(),
+        )
     }
 
     pub(super) fn stay_awake_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -282,6 +295,7 @@ impl SettingsView {
         self.row(
             t!("settings-stay-awake"),
             Switch::new("stay-awake", on)
+                .name(t!("settings-stay-awake"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings
                         .update(cx, |settings, cx| settings.set_stay_awake(!on, cx));
