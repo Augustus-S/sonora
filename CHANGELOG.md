@@ -19,6 +19,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Screen readers now name every switch and dropdown in Settings and the equalizer, and read the
   setting labels, the version and the team on the About page.
+- The translucent player bar no longer looks much darker than the rest of a see-through window.
 
 ## [0.45.0] - 2026-10-27
 
