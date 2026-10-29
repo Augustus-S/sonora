@@ -53,7 +53,7 @@ Status: `pending` = not implemented; `investigate` = evidence required; `deferre
 - [ ] Record concrete evidence and the smallest chosen change under the relevant ID.
 - [ ] Run targeted formatting/build/static checks and applicable bounded runtime checks; record failures and skipped checks explicitly.
 - [ ] Review performance effects, compatibility and diff; remove any temporary test code.
-- [ ] Update this document and add user-observable changes to `CHANGELOG.md`.
+- [ ] Update this document with behavior and verification. Per the user's revised publication preference, omit changelog edits from this round's future topic PRs.
 - [ ] Commit the coherent change with a conventional, lowercase, single-line message.
 - [ ] If authenticated, prepare the corresponding topic PR without unrelated changes.
 
@@ -134,6 +134,12 @@ Every item below was reviewed in this round; deferred does not mean implemented 
 
 - Merged `main` at `505124bc` into the existing topic branch and pushed merge commit `80cd0382`, without rewriting history. Only `CHANGELOG.md` conflicted. Moved both unmerged sign-in entries to Unreleased rather than retaining them under the newly published 0.45.0 section; preserved all upstream release notes.
 - The two Rust files are unchanged from the previous resolution. Formatting, staged diff checks, locked `sonora` compilation checks, strict webview all-target Clippy and all four existing webview tests passed with the same local build environment. Tests ran under an 8-second timeout with 1-second kill grace; no application or login window was launched.
+
+### PR #1069 — Remove the recurring changelog conflict
+
+- At the user's request, merged `main` at `b525b2a7` and restored `CHANGELOG.md` exactly from that upstream commit. Merge commit `3f55438b` is pushed to the original topic branch without force. The PR now changes only `crates/webview/src/linux.rs` and `crates/sonora/src/logging.rs`; no upstream release notes were removed.
+- The Rust changes remain unchanged. Formatting, staged diff checks, locked `sonora` compilation checks, strict webview all-target Clippy and all four existing webview tests passed with the existing local build environment. No application or login window was launched.
+- Removing the changelog diff prevents this PR from conflicting solely because upstream edits its changelog again; it does not guarantee that future upstream source changes will merge cleanly. Keep subsequent round records here rather than adding changelog edits to topic PRs.
 
 ### Publication plan
 
