@@ -9,13 +9,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Linux sign-in diagnostics now record the loaded WebKitGTK version, display backend and
-  automatic renderer workaround in the application log.
+- Drop a song onto a playlist you own or collaborate on in the sidebar to add it to that playlist.
+
+### Changed
+
+- Quick picks on Home no longer shows your account name above its title.
 
 ### Fixed
 
-- On Linux, sign-in windows use shared-memory rendering with WebKitGTK 2.54 and newer to
-  avoid the runaway GPU-buffer allocations reported during Apple Music sign-in.
+- Screen readers now name every switch and dropdown in Settings and the equalizer, and read the
+  setting labels, the version and the team on the About page.
+- The translucent player bar no longer looks much darker than the rest of a see-through window.
+- Covers saved for the system media controls no longer fill Sonora's cache folder without limit,
+  and playlist mosaics no longer leave old copies behind.
 
 ## [0.45.0] - 2026-10-27
 
@@ -54,6 +60,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The layout previews under Settings, Player bar line up the cover, title and controls.
 - Unsynced lyrics are brighter and a little larger, so they are easier to read.
 - Refreshing your local library picks up songs added, moved or deleted since Sonora started.
+- On macOS, fullscreen no longer has a grey bar across the top when the window corners are set to
+  Rounded or Round.
 - Dragging the volume slider uses less CPU and GPU.
 - Romanized unsynced lyrics show each line's romanization under that line.
 - Moving playback to or from another Spotify device keeps the queue, history, shuffle and repeat.
